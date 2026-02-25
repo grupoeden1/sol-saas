@@ -24,6 +24,14 @@ export async function POST(req: Request) {
       return new Response('User not found', { status: 404 });
     }
 
+    // Verificar saldo de créditos antes de qualquer chamada externa (AC1 - Story 2.4)
+    if (user.credits === 0) {
+      return new Response(JSON.stringify({ error: 'insufficient_credits' }), {
+        status: 402,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+
     // Parse body
     const body = await req.json();
     const { conversationId, message } = body;
@@ -57,7 +65,7 @@ export async function POST(req: Request) {
       conversation = await prisma.conversation.create({
         data: {
           userId: user.id,
-          title: message.substring(0, 60), // Título temporário, pode ser melhorado
+          title: message.substring(0, 60),
         },
       });
     }
@@ -90,7 +98,7 @@ export async function POST(req: Request) {
     const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
       { role: 'system', content: SYSTEM_PROMPT },
       ...previousMessages
-        .filter((m) => m.id !== userMessage.id) // Excluir a mensagem atual que já será adicionada
+        .filter((m) => m.id !== userMessage.id)
         .map((m) => ({
           role: m.role as 'user' | 'assistant',
           content: m.content,
@@ -145,7 +153,6 @@ export async function POST(req: Request) {
             error,
           });
 
-          // Enviar mensagem de erro amigável
           const errorMessage = getErrorMessage(error);
           controller.enqueue(
             encoder.encode(`data: ${JSON.stringify({ error: errorMessage })}\n\n`)
@@ -155,11 +162,14 @@ export async function POST(req: Request) {
       },
     });
 
+    // Incluir saldo atual no header para atualização em tempo real do badge (AC3 - Story 2.4)
+    // Nota: deducção real de créditos é implementada na Story 3.2
     return new Response(readable, {
       headers: {
         'Content-Type': 'text/event-stream',
         'Cache-Control': 'no-cache',
-        Connection: 'keep-alive',
+        'Connection': 'keep-alive',
+        'X-Credits-Remaining': String(user.credits),
       },
     });
   } catch (error) {

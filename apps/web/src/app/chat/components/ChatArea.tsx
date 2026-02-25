@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useEffect, useRef } from 'react';
 import MessageBubble from './MessageBubble';
 
@@ -13,16 +14,17 @@ interface Message {
 interface ChatAreaProps {
   messages: Message[];
   loading: boolean;
+  showNoCredits: boolean;
 }
 
-export default function ChatArea({ messages, loading }: ChatAreaProps) {
+export default function ChatArea({ messages, loading, showNoCredits }: ChatAreaProps) {
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+  }, [messages, showNoCredits]);
 
-  if (messages.length === 0 && !loading) {
+  if (messages.length === 0 && !loading && !showNoCredits) {
     return (
       <div className="flex-1 flex items-center justify-center p-8">
         <div className="text-center max-w-md">
@@ -57,6 +59,27 @@ export default function ChatArea({ messages, loading }: ChatAreaProps) {
                 <span className="w-2 h-2 bg-solar-500 rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></span>
                 <span className="w-2 h-2 bg-solar-500 rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></span>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showNoCredits && (
+        <div className="flex justify-center mb-4">
+          <div className="max-w-lg w-full">
+            <div className="rounded-lg p-4 bg-red-500/10 border border-red-500/30 flex items-center justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <span className="text-xl">⚠️</span>
+                <p className="text-sm text-red-300 font-medium">
+                  Você ficou sem créditos.
+                </p>
+              </div>
+              <Link
+                href="/credits/buy"
+                className="shrink-0 px-4 py-1.5 bg-solar-500/20 border border-solar-500/50 text-solar-300 rounded-lg text-sm font-semibold hover:bg-solar-500/30 transition-colors"
+              >
+                Comprar créditos →
+              </Link>
             </div>
           </div>
         </div>

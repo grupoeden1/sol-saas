@@ -1,6 +1,9 @@
 'use client';
 
-export default function CreditsBadge({ credits }: { credits: number }) {
+import { useCredits } from './CreditsProvider';
+
+export default function CreditsBadge() {
+  const { credits } = useCredits();
   const isLow = credits === 0;
 
   return (

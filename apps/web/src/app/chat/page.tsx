@@ -1,5 +1,6 @@
 'use client';
 
+import { useCredits } from '@/components/layout/CreditsProvider';
 import { useState, useEffect } from 'react';
 import ChatArea from './components/ChatArea';
 import ChatInput from './components/ChatInput';
@@ -19,11 +20,21 @@ interface Conversation {
 }
 
 export default function ChatPage() {
+  const { credits, updateCredits } = useCredits();
+
   const [messages, setMessages] = useState<Message[]>([]);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [currentConversationId, setCurrentConversationId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [isLoadingConversations, setIsLoadingConversations] = useState(true);
+  // noCredits: inicia com base no saldo do contexto; atualiza conforme respostas da API
+  const [noCredits, setNoCredits] = useState(credits === 0);
+  const [showNoCreditsAlert, setShowNoCreditsAlert] = useState(false);
+
+  // Sincronizar noCredits quando o contexto de créditos mudar (ex: navegação entre páginas)
+  useEffect(() => {
+    setNoCredits(credits === 0);
+  }, [credits]);
 
   // Load conversations on mount
   useEffect(() => {
@@ -80,11 +91,15 @@ export default function ChatPage() {
   }, [currentConversationId]);
 
   const handleSendMessage = async (content: string) => {
-    if (!content.trim() || loading) return;
+    if (!content.trim() || loading || noCredits) return;
 
-    // Add user message to UI immediately
+    // Ocultar alerta anterior se houver
+    setShowNoCreditsAlert(false);
+
+    // Adicionar mensagem do usuário à UI imediatamente
+    const userMessageId = `temp-user-${Date.now()}`;
     const userMessage: Message = {
-      id: `temp-user-${Date.now()}`,
+      id: userMessageId,
       role: 'user',
       content,
       createdAt: new Date(),
@@ -103,8 +118,28 @@ export default function ChatPage() {
         }),
       });
 
+      // AC1/AC2: tratar 402 - créditos insuficientes
+      if (res.status === 402) {
+        // Remover a mensagem do usuário (não foi persistida no banco)
+        setMessages((prev) => prev.filter((msg) => msg.id !== userMessageId));
+        setNoCredits(true);
+        setShowNoCreditsAlert(true);
+        setLoading(false);
+        return;
+      }
+
       if (!res.ok) {
         throw new Error(`HTTP error! status: ${res.status}`);
+      }
+
+      // AC3: ler saldo atualizado do header e propagar para o badge em tempo real
+      const creditsRemaining = res.headers.get('X-Credits-Remaining');
+      if (creditsRemaining !== null) {
+        const parsed = parseInt(creditsRemaining, 10);
+        if (!isNaN(parsed)) {
+          updateCredits(parsed);
+          setNoCredits(parsed === 0);
+        }
       }
 
       const reader = res.body?.getReader();
@@ -116,7 +151,7 @@ export default function ChatPage() {
       let aiMessage = '';
       const aiMessageId = `temp-ai-${Date.now()}`;
 
-      // Add empty AI message that will be populated via streaming
+      // Adicionar mensagem vazia do assistente que será preenchida via streaming
       setMessages((prev) => [
         ...prev,
         {
@@ -141,7 +176,6 @@ export default function ChatPage() {
               const data = JSON.parse(dataStr);
 
               if (data.error) {
-                // Handle error
                 setMessages((prev) =>
                   prev.map((msg) =>
                     msg.id === aiMessageId
@@ -154,10 +188,8 @@ export default function ChatPage() {
               }
 
               if (data.done) {
-                // Stream complete, update conversation ID if new
                 if (data.conversationId && !currentConversationId) {
                   setCurrentConversationId(data.conversationId);
-                  // Reload conversations list
                   const convRes = await fetch('/api/conversations');
                   if (convRes.ok) {
                     const convData = await convRes.json();
@@ -175,7 +207,6 @@ export default function ChatPage() {
 
               if (data.token) {
                 aiMessage += data.token;
-                // Update AI message progressively
                 setMessages((prev) =>
                   prev.map((msg) =>
                     msg.id === aiMessageId ? { ...msg, content: aiMessage } : msg
@@ -206,10 +237,12 @@ export default function ChatPage() {
   const handleNewConversation = () => {
     setCurrentConversationId(null);
     setMessages([]);
+    setShowNoCreditsAlert(false);
   };
 
   const handleSelectConversation = (conversationId: string) => {
     setCurrentConversationId(conversationId);
+    setShowNoCreditsAlert(false);
   };
 
   return (
@@ -223,8 +256,8 @@ export default function ChatPage() {
       />
 
       <div className="flex-1 flex flex-col">
-        <ChatArea messages={messages} loading={loading} />
-        <ChatInput onSend={handleSendMessage} disabled={loading} />
+        <ChatArea messages={messages} loading={loading} showNoCredits={showNoCreditsAlert} />
+        <ChatInput onSend={handleSendMessage} disabled={loading} noCredits={noCredits} />
       </div>
     </div>
   );
