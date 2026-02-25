@@ -27,23 +27,26 @@ export default function ChatPage() {
 
   // Load conversations on mount
   useEffect(() => {
-    // TODO: Fetch from API in Story 2.3
-    // Mock data for now
-    setTimeout(() => {
-      setConversations([
-        {
-          id: '1',
-          title: 'Primeira conversa com SOL',
-          createdAt: new Date(Date.now() - 86400000),
-        },
-        {
-          id: '2',
-          title: 'Criação de oferta de curso online',
-          createdAt: new Date(Date.now() - 3600000),
-        },
-      ]);
-      setIsLoadingConversations(false);
-    }, 500);
+    const fetchConversations = async () => {
+      try {
+        const res = await fetch('/api/conversations');
+        if (res.ok) {
+          const data = await res.json();
+          setConversations(
+            data.map((conv: { id: string; title: string; createdAt: string }) => ({
+              ...conv,
+              createdAt: new Date(conv.createdAt),
+            }))
+          );
+        }
+      } catch (error) {
+        console.error('Failed to load conversations:', error);
+      } finally {
+        setIsLoadingConversations(false);
+      }
+    };
+
+    fetchConversations();
   }, []);
 
   // Load messages when conversation changes
@@ -53,54 +56,151 @@ export default function ChatPage() {
       return;
     }
 
-    setLoading(true);
-    // TODO: Fetch messages from API in Story 2.3
-    // Mock data for now
-    setTimeout(() => {
-      setMessages([
-        {
-          id: '1',
-          role: 'user',
-          content: 'Olá! Preciso de ajuda para criar uma oferta.',
-          createdAt: new Date(Date.now() - 3600000),
-        },
-        {
-          id: '2',
-          role: 'assistant',
-          content: 'Olá! ☀️ Claro, vou te ajudar a criar uma oferta diferenciada. Primeiro, me conte um pouco sobre o que você pretende oferecer. É um curso, mentoria, produto digital?',
-          createdAt: new Date(Date.now() - 3500000),
-        },
-      ]);
-      setLoading(false);
-    }, 300);
+    const fetchMessages = async () => {
+      setLoading(true);
+      try {
+        const res = await fetch(`/api/conversations/${currentConversationId}/messages`);
+        if (res.ok) {
+          const data = await res.json();
+          setMessages(
+            data.map((msg: { id: string; role: string; content: string; createdAt: string }) => ({
+              ...msg,
+              createdAt: new Date(msg.createdAt),
+            }))
+          );
+        }
+      } catch (error) {
+        console.error('Failed to load messages:', error);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchMessages();
   }, [currentConversationId]);
 
   const handleSendMessage = async (content: string) => {
-    if (!content.trim()) return;
+    if (!content.trim() || loading) return;
 
-    // TODO: Implement in Story 2.3
-    // For now, just add to local state
-    const newMessage: Message = {
-      id: String(Date.now()),
+    // Add user message to UI immediately
+    const userMessage: Message = {
+      id: `temp-user-${Date.now()}`,
       role: 'user',
       content,
       createdAt: new Date(),
     };
 
-    setMessages((prev) => [...prev, newMessage]);
+    setMessages((prev) => [...prev, userMessage]);
     setLoading(true);
 
-    // Mock AI response
-    setTimeout(() => {
-      const aiMessage: Message = {
-        id: String(Date.now() + 1),
-        role: 'assistant',
-        content: 'Esta é uma resposta simulada. A integração com OpenAI será implementada na Story 2.3.',
-        createdAt: new Date(),
-      };
-      setMessages((prev) => [...prev, aiMessage]);
+    try {
+      const res = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          conversationId: currentConversationId,
+          message: content,
+        }),
+      });
+
+      if (!res.ok) {
+        throw new Error(`HTTP error! status: ${res.status}`);
+      }
+
+      const reader = res.body?.getReader();
+      if (!reader) {
+        throw new Error('No reader available');
+      }
+
+      const decoder = new TextDecoder();
+      let aiMessage = '';
+      const aiMessageId = `temp-ai-${Date.now()}`;
+
+      // Add empty AI message that will be populated via streaming
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: aiMessageId,
+          role: 'assistant',
+          content: '',
+          createdAt: new Date(),
+        },
+      ]);
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        const chunk = decoder.decode(value);
+        const lines = chunk.split('\n');
+
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            const dataStr = line.slice(6);
+            try {
+              const data = JSON.parse(dataStr);
+
+              if (data.error) {
+                // Handle error
+                setMessages((prev) =>
+                  prev.map((msg) =>
+                    msg.id === aiMessageId
+                      ? { ...msg, content: `❌ ${data.error}` }
+                      : msg
+                  )
+                );
+                setLoading(false);
+                return;
+              }
+
+              if (data.done) {
+                // Stream complete, update conversation ID if new
+                if (data.conversationId && !currentConversationId) {
+                  setCurrentConversationId(data.conversationId);
+                  // Reload conversations list
+                  const convRes = await fetch('/api/conversations');
+                  if (convRes.ok) {
+                    const convData = await convRes.json();
+                    setConversations(
+                      convData.map((conv: { id: string; title: string; createdAt: string }) => ({
+                        ...conv,
+                        createdAt: new Date(conv.createdAt),
+                      }))
+                    );
+                  }
+                }
+                setLoading(false);
+                break;
+              }
+
+              if (data.token) {
+                aiMessage += data.token;
+                // Update AI message progressively
+                setMessages((prev) =>
+                  prev.map((msg) =>
+                    msg.id === aiMessageId ? { ...msg, content: aiMessage } : msg
+                  )
+                );
+              }
+            } catch (e) {
+              console.error('Failed to parse SSE data:', e);
+            }
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Failed to send message:', error);
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: `error-${Date.now()}`,
+          role: 'assistant',
+          content: '❌ Erro ao enviar mensagem. Por favor, tente novamente.',
+          createdAt: new Date(),
+        },
+      ]);
       setLoading(false);
-    }, 1000);
+    }
   };
 
   const handleNewConversation = () => {
