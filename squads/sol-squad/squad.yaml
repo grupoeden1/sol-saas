@@ -1,0 +1,22 @@
+name: sol-squad
+version: 1.0.0
+description: Squad especializado na construção do Sol — SaaS de criação de ofertas com IA conversacional orquestrada por Kestra.
+
+author: Antigravity Squad Creator
+license: MIT
+slashPrefix: sol
+
+aios:
+  minVersion: "2.1.0"
+  type: squad
+
+components:
+  agents:
+    - agents/pm.md
+    - agents/architect.md
+    - agents/ai-engineer.md
+    - agents/fullstack-dev.md
+    - agents/prompt-engineer.md
+    - agents/ui-ux-designer.md
+    - agents/devops.md
+    - agents/qa.md
