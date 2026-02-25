@@ -1,30 +1,27 @@
 {
-  "name": "sol",
+  "name": "sol-saas",
   "version": "0.1.0",
+  "packageManager": "pnpm@10.13.1",
   "private": true,
-  "description": "Sol — SaaS de Criação de Ofertas com IA Conversacional",
   "workspaces": [
     "apps/*",
     "packages/*"
   ],
   "scripts": {
-    "dev": "turbo dev",
-    "build": "turbo build",
-    "lint": "turbo lint",
-    "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md}\"",
-    "db:generate": "npm -w @sol/db run generate",
-    "db:push": "npm -w @sol/db run push",
-    "db:migrate": "npm -w @sol/db run migrate",
-    "db:studio": "npm -w @sol/db run studio",
-    "infra:up": "docker compose up -d",
-    "infra:down": "docker compose down"
+    "dev": "turbo run dev",
+    "build": "turbo run build",
+    "lint": "turbo run lint",
+    "typecheck": "turbo run typecheck",
+    "test": "turbo run test",
+    "db:migrate": "cd packages/db && npx prisma migrate dev",
+    "db:studio": "cd packages/db && npx prisma studio",
+    "db:push": "cd packages/db && npx prisma db push"
   },
   "devDependencies": {
-    "turbo": "^2.4.0",
-    "prettier": "^3.4.0"
+    "turbo": "^2.0.0"
   },
   "engines": {
-    "node": ">=20.0.0"
-  },
-  "packageManager": "npm@11.7.0"
+    "node": ">=20.0.0",
+    "npm": ">=10.0.0"
+  }
 }

@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(bash scripts/test-setup.sh)",
+      "Bash(node -e \"console.log(require(''crypto'').randomBytes(32).toString(''base64''))\")",
+      "Bash(cp .env.example .env)",
+      "Bash(docker compose up -d)",
+      "Bash(npm install)",
+      "Bash(pnpm install)",
+      "Bash(pnpm approve-builds @prisma/client @prisma/engines prisma)",
+      "Bash(pnpm run db:migrate)",
+      "Bash(pnpm run dev)",
+      "Bash(npx prisma db execute --file prisma/migrations/20260225045419_init/migration.sql --schema prisma/schema.prisma)",
+      "Bash(pnpm run typecheck)",
+      "Bash(pnpm run db:seed)",
+      "Bash(pnpm list next-auth)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

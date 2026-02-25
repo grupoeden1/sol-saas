@@ -1,0 +1,86 @@
+name: story-execution
+version: "1.0"
+description: "Workflow padrão de execução de stories — SM draft → Dev build → QA review"
+author: "@aios-master"
+created: "2026-02-25"
+
+# Como usar:
+# @aios-master *workflow story-execution --story=1.3
+# ou
+# @aios-master *run-workflow story-execution --story=1.3
+
+input:
+  story_id:
+    description: "ID da story a executar (ex: 1.3, 2.1)"
+    required: true
+  epic_id:
+    description: "ID do epic (ex: 1, 2, 3)"
+    required: false
+    default: "auto"
+
+steps:
+  - id: draft
+    name: "Criar Story Document"
+    agent: "@sm"
+    command: "*draft"
+    prompt: |
+      Criar a User Story {{story_id}} com base em:
+      - docs/prd.md (fonte de verdade de produto)
+      - docs/architecture.md (fonte de verdade técnica)
+      - docs/framework/coding-standards.md
+      - docs/framework/source-tree.md
+      
+      Salvar em: docs/stories/epic-{{epic_id}}/story-{{story_id}}.md
+      
+      Atenção obrigatória:
+      - Schema correto é o de docs/architecture.md (ignorar modelos CreditBalance e Subscription do source-tree.md)
+      - TypeScript strict, zero any
+      - ACs devem ser testáveis e mensuráveis
+    output:
+      file: "docs/stories/epic-{{epic_id}}/story-{{story_id}}.md"
+    on_complete: next
+
+  - id: develop
+    name: "Implementar Story"
+    agent: "@dev"
+    command: "*develop"
+    depends_on: draft
+    prompt: |
+      Implementar Story {{story_id}} conforme:
+      docs/stories/epic-{{epic_id}}/story-{{story_id}}.md
+      
+      Regras obrigatórias:
+      - Não reescrever o que já funciona
+      - TypeScript strict — zero any, zero as unknown
+      - Commits em português com conventional commits (feat:, fix:, chore:)
+      - Toda lógica de negócio em app/api/, nunca em componentes
+      - Variáveis sensíveis sempre em .env, nunca hardcodadas
+      - Ao final rodar: pnpm run typecheck + pnpm run lint
+    on_complete: next
+    on_error: stop
+
+  - id: qa_review
+    name: "Revisar Qualidade"
+    agent: "@qa"
+    command: "*review"
+    depends_on: develop
+    prompt: |
+      Revisar Story {{story_id}} implementada.
+      Story doc: docs/stories/epic-{{epic_id}}/story-{{story_id}}.md
+      
+      Verificar obrigatoriamente:
+      - Todos os ACs do documento foram atendidos
+      - TypeScript strict sem erros
+      - Segurança (sem secrets expostos, auth verificada em rotas protegidas)
+      - Testes passando
+      
+      Emitir gate decision: APPROVED / NEEDS_FIX
+    on_complete: finish
+    on_needs_fix:
+      agent: "@dev"
+      command: "*fix-qa-issues"
+      then: qa_review  # re-review após fix
+
+finish:
+  message: "✅ Story {{story_id}} completa — draft, implementação e QA aprovados."
+  next_action: "Executar próxima story: @aios-master *workflow story-execution --story={{next_story}}"

@@ -1,0 +1,29 @@
+# Dependencies
+node_modules/
+npm-debug.log
+yarn-error.log
+
+# Build artifacts
+.next/
+out/
+dist/
+build/
+
+# Testing
+coverage/
+
+# Environment
+.env
+.env*.local
+
+# Git
+.git/
+.gitignore
+
+# Documentation
+docs/
+README.md
+
+# Misc
+.DS_Store
+*.log

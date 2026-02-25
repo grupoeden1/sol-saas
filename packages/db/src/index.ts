@@ -1,16 +1,21 @@
-export { PrismaClient } from "@prisma/client";
-export type {
-  User,
-  Offer,
-  OfferStep,
-  ChatMessage,
-  Subscription,
-} from "@prisma/client";
-export {
-  Plan,
-  OfferStatus,
-  StepType,
-  StepStatus,
-  MessageRole,
-  SubscriptionStatus,
-} from "@prisma/client";
+import { PrismaClient } from '@prisma/client'
+
+// Singleton pattern para Prisma Client
+// Previne múltiplas instâncias em desenvolvimento (hot reload)
+
+const globalForPrisma = globalThis as unknown as {
+  prisma: PrismaClient | undefined
+}
+
+export const prisma =
+  globalForPrisma.prisma ??
+  new PrismaClient({
+    log: process.env.NODE_ENV === 'development' ? ['query', 'error', 'warn'] : ['error'],
+  })
+
+if (process.env.NODE_ENV !== 'production') {
+  globalForPrisma.prisma = prisma
+}
+
+export * from '@prisma/client'
+export * from './conversations'

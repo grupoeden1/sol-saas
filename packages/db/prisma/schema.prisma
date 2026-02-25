@@ -1,172 +1,85 @@
-// ==========================================
-// Sol — Prisma Schema
-// Multi-tenant SaaS for AI-powered offer creation
-// ==========================================
+// Schema Prisma para SOL SaaS
 
 generator client {
-  provider        = "prisma-client-js"
-  previewFeatures = ["postgresqlExtensions"]
+  provider = "prisma-client-js"
 }
 
 datasource db {
-  provider   = "postgresql"
-  url        = env("DATABASE_URL")
-  extensions = [vector]
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
 }
-
-// ==========================================
-// Auth & Users
-// ==========================================
 
 model User {
-  id        String   @id @default(cuid())
-  email     String   @unique
-  name      String?
-  avatarUrl String?  @map("avatar_url")
-  plan      Plan     @default(FREE)
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
+  id            String    @id @default(cuid())
+  email         String    @unique
+  passwordHash  String
+  credits       Int       @default(0)
+  
+  sessions      Session[]
+  conversations Conversation[]
+  transactions  CreditTransaction[]
+  
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
 
-  // Relations
-  offers       Offer[]
-  subscription Subscription?
-
-  @@map("users")
+  @@index([email])
 }
 
-enum Plan {
-  FREE
-  PRO
-  UNLIMITED
-  MENTORES
-}
-
-// ==========================================
-// Subscriptions & Billing
-// ==========================================
-
-model Subscription {
-  id                 String             @id @default(cuid())
-  userId             String             @unique @map("user_id")
-  stripeCustomerId   String?            @map("stripe_customer_id")
-  stripeSubId        String?            @map("stripe_sub_id")
-  status             SubscriptionStatus @default(ACTIVE)
-  currentPeriodStart DateTime?          @map("current_period_start")
-  currentPeriodEnd   DateTime?          @map("current_period_end")
-  offersUsedThisMonth Int               @default(0) @map("offers_used_this_month")
-  createdAt          DateTime           @default(now()) @map("created_at")
-  updatedAt          DateTime           @updatedAt @map("updated_at")
-
-  // Relations
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@map("subscriptions")
-}
-
-enum SubscriptionStatus {
-  ACTIVE
-  PAST_DUE
-  CANCELED
-  TRIALING
-}
-
-// ==========================================
-// Offers (Projects)
-// ==========================================
-
-model Offer {
-  id          String      @id @default(cuid())
-  userId      String      @map("user_id")
-  title       String
-  niche       String?
-  description String?
-  status      OfferStatus @default(DRAFT)
-  currentStep StepType    @default(ONBOARDING)
-  createdAt   DateTime    @default(now()) @map("created_at")
-  updatedAt   DateTime    @updatedAt @map("updated_at")
-
-  // Relations
-  user     User          @relation(fields: [userId], references: [id], onDelete: Cascade)
-  steps    OfferStep[]
-  messages ChatMessage[]
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
-  @@map("offers")
 }
 
-enum OfferStatus {
-  DRAFT
-  IN_PROGRESS
-  COMPLETED
-  ARCHIVED
+model Conversation {
+  id        String    @id @default(cuid())
+  userId    String
+  title     String    @db.VarChar(60)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  messages  Message[]
+  
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
 }
 
-enum StepType {
-  ONBOARDING
-  AVATAR
-  MECANISMO_UNICO
-  PRODUTO
-  ENTREGAVEL
-  VSL
-  COPY
-  ANUNCIOS
-  RESUMO
-}
+model Message {
+  id             String       @id @default(cuid())
+  conversationId String
+  role           MessageRole
+  content        String       @db.Text
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  
+  createdAt      DateTime     @default(now())
 
-// ==========================================
-// Offer Steps (versioned outputs per step)
-// ==========================================
-
-model OfferStep {
-  id        String   @id @default(cuid())
-  offerId   String   @map("offer_id")
-  stepType  StepType @map("step_type")
-  version   Int      @default(1)
-  input     Json?    // User input for this step
-  output    Json?    // AI-generated output
-  status    StepStatus @default(PENDING)
-  kestraExecId String? @map("kestra_exec_id") // Kestra execution ID for tracking
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
-
-  // Relations
-  offer Offer @relation(fields: [offerId], references: [id], onDelete: Cascade)
-
-  @@unique([offerId, stepType, version])
-  @@index([offerId, stepType])
-  @@map("offer_steps")
-}
-
-enum StepStatus {
-  PENDING
-  GENERATING
-  COMPLETED
-  REFINING
-  ERROR
-}
-
-// ==========================================
-// Chat Messages
-// ==========================================
-
-model ChatMessage {
-  id        String      @id @default(cuid())
-  offerId   String      @map("offer_id")
-  stepType  StepType    @map("step_type")
-  role      MessageRole
-  content   String
-  metadata  Json?       // Token usage, model used, etc.
-  createdAt DateTime    @default(now()) @map("created_at")
-
-  // Relations
-  offer Offer @relation(fields: [offerId], references: [id], onDelete: Cascade)
-
-  @@index([offerId, stepType])
-  @@map("chat_messages")
+  @@index([conversationId])
 }
 
 enum MessageRole {
-  USER
-  ASSISTANT
-  SYSTEM
+  user
+  assistant
+}
+
+model CreditTransaction {
+  id              String          @id @default(cuid())
+  userId          String
+  amount          Int             
+  type            TransactionType
+  description     String
+  stripePaymentId String?         @unique
+  user            User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  createdAt       DateTime        @default(now())
+
+  @@index([userId])
+  @@index([stripePaymentId])
+}
+
+enum TransactionType {
+  purchase
+  consumption
 }
