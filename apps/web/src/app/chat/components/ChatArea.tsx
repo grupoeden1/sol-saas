@@ -3,7 +3,6 @@
 import Link from 'next/link';
 import { useEffect, useRef } from 'react';
 import MessageBubble from './MessageBubble';
-import ThinkingAnimation from './ThinkingAnimation';
 
 interface Message {
   id: string;
@@ -41,13 +40,19 @@ export default function ChatArea({ messages, loading, showNoCredits }: ChatAreaP
     );
   }
 
+  // Find the last assistant message to attach loading state
+  const lastAssistantIndex = [...messages].reverse().findIndex(m => m.role === 'assistant');
+  const loadingMessageIndex = lastAssistantIndex >= 0 ? messages.length - 1 - lastAssistantIndex : -1;
+
   return (
     <div className="flex-1 overflow-y-auto p-6 bg-background">
-      {messages.map((message) => (
-        <MessageBubble key={message.id} message={message} />
+      {messages.map((message, index) => (
+        <MessageBubble
+          key={message.id}
+          message={message}
+          isLoading={loading && index === loadingMessageIndex}
+        />
       ))}
-
-      {loading && <ThinkingAnimation />}
 
       {showNoCredits && (
         <div className="flex justify-center mb-4">

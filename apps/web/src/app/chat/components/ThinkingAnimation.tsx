@@ -24,6 +24,7 @@ export default function ThinkingAnimation() {
                   animationData={animationData}
                   loop
                   autoplay
+                  initialSegment={[0, 100]}
                   style={{ width: 40, height: 40 }}
                 />
               ) : (
@@ -34,9 +35,14 @@ export default function ThinkingAnimation() {
             </div>
             <div className="flex flex-col gap-1">
               <span className="text-sm font-semibold text-solar-300">SOL</span>
-              <span className="text-xs text-foreground-muted animate-pulse">
-                Pensando...
-              </span>
+              <div className="flex items-center gap-1.5">
+                <span className="text-xs text-foreground-muted">Pensando</span>
+                <span className="flex gap-1">
+                  <span className="w-1.5 h-1.5 bg-solar-500 rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></span>
+                  <span className="w-1.5 h-1.5 bg-solar-500 rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></span>
+                  <span className="w-1.5 h-1.5 bg-solar-500 rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></span>
+                </span>
+              </div>
             </div>
           </div>
         </div>
