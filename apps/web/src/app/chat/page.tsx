@@ -201,6 +201,11 @@ export default function ChatPage() {
                     );
                   }
                 }
+                // AC3/AC5 Story 3.2: atualizar saldo pós-dedução do evento done
+                if (typeof data.creditsRemaining === 'number') {
+                  updateCredits(data.creditsRemaining);
+                  setNoCredits(data.creditsRemaining === 0);
+                }
                 setLoading(false);
                 break;
               }

@@ -1,7 +1,13 @@
 import { auth } from '@/lib/auth';
 import { SYSTEM_PROMPT, detectFinalOutputIntent } from '@/lib/prompts';
-import { prisma } from '@sol/db';
+import { prisma, deductCredits } from '@sol/db';
 import OpenAI from 'openai';
+import { z } from 'zod';
+
+const chatSchema = z.object({
+  conversationId: z.string().optional(),
+  message: z.string().min(1).max(2000),
+});
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
@@ -32,18 +38,15 @@ export async function POST(req: Request) {
       });
     }
 
-    // Parse body
+    // Parse e validar body com Zod
     const body = await req.json();
-    const { conversationId, message } = body;
+    const parsed = chatSchema.safeParse(body);
 
-    // Validar mensagem
-    if (!message || typeof message !== 'string' || message.trim().length === 0) {
-      return new Response('Message is required', { status: 400 });
+    if (!parsed.success) {
+      return new Response(parsed.error.issues[0]?.message ?? 'Invalid input', { status: 400 });
     }
 
-    if (message.length > 2000) {
-      return new Response('Message too long (max 2000 characters)', { status: 400 });
-    }
+    const { conversationId, message } = parsed.data;
 
     // Criar ou validar conversa
     let conversation;
@@ -139,10 +142,21 @@ export async function POST(req: Request) {
             },
           });
 
-          // Enviar evento de conclusão
+          // Deduzir 1 crédito após stream bem-sucedido (Story 3.2)
+          let creditsRemaining = user.credits;
+          try {
+            creditsRemaining = await deductCredits(user.id, 1);
+          } catch (deductError) {
+            // Race condition: saldo chegou a zero entre o check inicial e a dedução.
+            // A resposta já foi entregue ao aluno — apenas loga.
+            console.error('[Chat API] Credit deduction failed (response already delivered):', deductError);
+            creditsRemaining = 0;
+          }
+
+          // Enviar evento de conclusão com saldo pós-dedução
           controller.enqueue(
             encoder.encode(
-              `data: ${JSON.stringify({ done: true, conversationId: conversation.id })}\n\n`
+              `data: ${JSON.stringify({ done: true, conversationId: conversation.id, creditsRemaining })}\n\n`
             )
           );
           controller.close();

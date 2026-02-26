@@ -1,0 +1,357 @@
+workflow:
+  id: code-review-and-fix
+  name: Code Review & Fix Cycle
+  version: "1.0"
+  description: >-
+    Ciclo de revisão completa e correção automática do código implementado em cada story.
+    Orquestra QA → Architect → Dev → QA em sequência para garantir qualidade, conformidade
+    arquitetural e resolução de issues antes de avançar para a próxima story.
+    Reutilizável para qualquer story do projeto SOL.
+  type: generic
+  project_types:
+    - greenfield
+    - brownfield
+    - feature-development
+    - bug-fix
+    - enhancement
+
+  metadata:
+    elicit: true
+    confirmation_required: true
+
+  execution_modes:
+    - mode: yolo
+      description: Execução autônoma — QA audita, Architect valida, Dev corrige, QA revalida sem prompts
+      prompts: 0-1
+    - mode: interactive
+      description: Checkpoints entre cada fase para decisão humana
+      prompts: 3-5
+      default: true
+    - mode: preflight
+      description: Análise completa upfront antes de iniciar o ciclo de review
+      prompts: 5-8
+
+  context:
+    project_docs:
+      tech_stack: "docs/framework/tech-stack.md"
+      coding_standards: "docs/framework/coding-standards.md"
+      source_tree: "docs/framework/source-tree.md"
+    story_file: "${story_path}"
+    description: >-
+      Estes documentos definem o stack tecnológico (Next.js 14, Prisma, Stripe, etc.),
+      os padrões de código (TypeScript strict, nomenclatura, API Routes pattern) e
+      a árvore de arquivos do projeto. Todos os agentes DEVEM consultar estes docs
+      como referência durante sua execução.
+
+  inputs:
+    - campo: story_path
+      tipo: string
+      origem: User Input
+      obrigatório: true
+      descricao: Caminho da story sendo revisada (ex. docs/stories/epic-3/story-3.4-stripe-webhook.md)
+      validacao: Must be a valid .md file path
+
+    - campo: story_id
+      tipo: string
+      origem: User Input
+      obrigatório: true
+      descricao: Identificador da story (ex. 3.4)
+
+    - campo: scope
+      tipo: string
+      origem: User Input
+      obrigatório: false
+      descricao: Escopo da revisão — "full" (padrão) ou "hotfix" (apenas arquivos alterados)
+      default: "full"
+
+  phases:
+    - phase_1: QA Audit
+    - phase_2: Architecture Validation
+    - phase_3: Dev Fix
+    - phase_4: QA Re-validation
+
+  sequence:
+    # ─── PHASE 1 — QA: Auditoria Completa ─────────────────────────────────────
+    - step: qa_audit
+      id: audit
+      phase: 1
+      agent: qa
+      action: Auditoria completa do código da story
+      notes: |
+        QA Agent (@qa) executa revisão abrangente da story implementada:
+
+        Contexto obrigatório — carregar antes de iniciar:
+        - Story file: ${story_path}
+        - Tech stack: docs/framework/tech-stack.md
+        - Coding standards: docs/framework/coding-standards.md
+        - Source tree: docs/framework/source-tree.md
+
+        Checklist de auditoria:
+        - [ ] 1. Acceptance criteria — todos os ACs da story foram implementados
+        - [ ] 2. Code review — padrões TypeScript strict, nomenclatura, estrutura
+        - [ ] 3. Segurança — OWASP top 10, secrets handling, input validation
+        - [ ] 4. Error handling — todos os failure paths tratados com HTTP codes corretos
+        - [ ] 5. Tipagem — sem `any`, sem `@ts-ignore`, tipos explícitos
+        - [ ] 6. Regressões — mudanças em arquivos existentes não quebraram funcionalidade
+        - [ ] 7. Testes — cobertura mínima para core use case
+        - [ ] 8. Logs — pontos de observabilidade suficientes para debugging
+
+        Classificação de issues:
+        - BLOCKER: deve ser corrigido antes de Done (segurança, AC não atendido, crash)
+        - MAJOR: deve ser corrigido neste ciclo (padrão violado, error handling falho)
+        - MINOR: pode ser corrigido em follow-up (style, naming, doc)
+
+        Output esperado:
+        - qa_audit_report.md com tabela de issues (severity, file, line, description, fix suggestion)
+        - Veredicto: PASS (0 blockers, 0 majors) | NEEDS_FIX (blockers ou majors encontrados)
+
+        Comandos sugeridos:
+        - *review (story review completo)
+        - *code-review (review automatizado)
+        - *security-check (scan de vulnerabilidades)
+      outputs:
+        - qa_audit_report
+        - issues_list
+        - verdict
+      next: architecture_review
+
+    # ─── PHASE 2 — Architect: Validação Arquitetural ──────────────────────────
+    - step: architecture_review
+      id: architecture_review
+      phase: 2
+      agent: architect
+      action: Validar conformidade arquitetural
+      requires: audit
+      notes: |
+        Architect Agent (@architect) valida que a implementação respeita a arquitetura do SOL:
+
+        Contexto obrigatório:
+        - Story file: ${story_path}
+        - QA audit report (output da fase anterior)
+        - Tech stack: docs/framework/tech-stack.md
+        - Coding standards: docs/framework/coding-standards.md
+        - Source tree: docs/framework/source-tree.md
+
+        Checklist arquitetural:
+        - [ ] 1. Localização de arquivos — respeita source-tree.md (API Routes em app/api/, lib em lib/, etc.)
+        - [ ] 2. Separação de responsabilidades — lógica de negócio no backend, não em componentes React
+        - [ ] 3. Padrão de API Routes — segue o template definido em coding-standards.md
+        - [ ] 4. Prisma — singleton, transactions para multi-table, migrations (nunca SQL manual)
+        - [ ] 5. Zero coupling — pacotes independentes (apps/web não importa diretamente de node_modules de packages/db)
+        - [ ] 6. Config externalizada — valores mutáveis em .env, não hardcoded
+        - [ ] 7. Zero lock-in — sem dependência de plataforma específica (Vercel, Supabase, etc.)
+        - [ ] 8. TypeScript strict — sem any, tipos explícitos em interfaces públicas
+        - [ ] 9. Imports — path aliases corretos (@/, @sol/db), sem imports relativos profundos
+        - [ ] 10. Capability preservation — nenhuma funcionalidade anterior perdida
+
+        Output esperado:
+        - architecture_review.md com conformance matrix
+        - Issues arquiteturais adicionais (se houver)
+        - Veredicto: CONFORMANT | NON_CONFORMANT
+
+        Comandos sugeridos:
+        - *analyze-project-structure (análise estrutural)
+        - *execute-checklist (checklist arquitetural)
+      outputs:
+        - architecture_review
+        - architecture_issues
+        - conformance_verdict
+      next: fix
+      on_failure: fix
+
+    # ─── PHASE 3 — Dev: Correção de Issues ────────────────────────────────────
+    - step: dev_fix
+      id: fix
+      phase: 3
+      agent: dev
+      action: Corrigir todos os issues apontados pelo QA e Architect
+      requires: architecture_review
+      notes: |
+        Dev Agent (@dev) corrige todos os issues encontrados nas fases 1 e 2:
+
+        Contexto obrigatório:
+        - Story file: ${story_path}
+        - QA audit report (output fase 1)
+        - Architecture review (output fase 2)
+        - Coding standards: docs/framework/coding-standards.md
+
+        Prioridade de correção:
+        1. BLOCKERs primeiro (segurança, ACs, crashes)
+        2. MAJORs em seguida (padrões, error handling)
+        3. MINORs se tempo permitir
+        4. Issues arquiteturais (NON_CONFORMANT items)
+
+        Regras de correção:
+        - Corrigir apenas o que foi apontado — sem refactor oportunístico
+        - Manter commits atômicos por issue corrigido
+        - Rodar typecheck (pnpm typecheck) após cada correção
+        - Se um fix introduzir novo problema, documentar e resolver antes de avançar
+
+        Output esperado:
+        - Lista de issues corrigidos com referência ao report original
+        - Resultado do typecheck (pass/fail)
+        - Arquivos modificados
+
+        Decisão:
+        - Se QA verdict = PASS e Architect verdict = CONFORMANT → pular esta fase (next: revalidation)
+        - Se há issues → corrigir e avançar para revalidation
+
+        Comandos sugeridos:
+        - *apply-qa-fixes (aplicar fixes do QA)
+        - *fix-qa-issues (corrigir issues do QA_FIX_REQUEST)
+        - *run-tests (executar testes)
+      outputs:
+        - fixed_issues_list
+        - typecheck_result
+        - modified_files
+      next: revalidation
+
+    # ─── PHASE 4 — QA: Revalidação ────────────────────────────────────────────
+    - step: qa_revalidation
+      id: revalidation
+      phase: 4
+      agent: qa
+      action: Validar que todas as correções foram aplicadas corretamente
+      requires: fix
+      notes: |
+        QA Agent (@qa) revalida especificamente os issues corrigidos:
+
+        Contexto obrigatório:
+        - QA audit report original (output fase 1)
+        - Architecture review (output fase 2)
+        - Fixed issues list (output fase 3)
+        - Story file: ${story_path}
+
+        Checklist de revalidação:
+        - [ ] 1. Cada BLOCKER marcado como corrigido — verificar no código
+        - [ ] 2. Cada MAJOR marcado como corrigido — verificar no código
+        - [ ] 3. TypeScript compila sem erros (pnpm typecheck)
+        - [ ] 4. Nenhuma regressão introduzida pelas correções
+        - [ ] 5. Issues arquiteturais resolvidos (conformance)
+
+        Veredicto final:
+        - APPROVED → Story pode avançar (status → Done)
+        - REJECTED → Retorna para fase 3 (Dev Fix) com novo feedback
+
+        Máximo de iterações: 3 ciclos fix → revalidation
+        Se após 3 iterações ainda REJECTED → escalar para decisão humana
+
+        Comandos sugeridos:
+        - *review (review focado nos fixes)
+        - *gate (decisão de quality gate)
+      outputs:
+        - revalidation_report
+        - final_verdict
+        - story_final_status
+      next: complete
+      on_failure: fix
+
+  # ─── WORKFLOW END ──────────────────────────────────────────────────────────
+  workflow_end:
+    id: complete
+    action: review_cycle_complete
+    notes: |
+      Ciclo de Code Review & Fix concluído!
+
+      Resumo do ciclo:
+      ✅ QA Audit executado (fase 1)
+      ✅ Architecture Review executado (fase 2)
+      ✅ Dev Fix aplicados (fase 3, se necessário)
+      ✅ QA Revalidação aprovada (fase 4)
+
+      Story ${story_id} pronta para avançar.
+      Próximos passos:
+      - Commit final das correções
+      - Avançar para próxima story no backlog
+      - Ou executar: *run-workflow story-development-cycle
+
+  flow_diagram: |
+    ```mermaid
+    graph TD
+        A[Start: Code Review & Fix] --> B["@qa: Auditoria Completa"]
+        B --> C["@architect: Validação Arquitetural"]
+
+        C --> D{Issues encontrados?}
+        D -->|Não| G["@qa: Revalidação (fast-path)"]
+        D -->|Sim| E["@dev: Corrigir Issues"]
+
+        E --> F["@qa: Revalidação"]
+
+        F --> H{Revalidação OK?}
+        H -->|Não| I{Tentativas < 3?}
+        I -->|Sim| E
+        I -->|Não| J[Escalar para Humano]
+        H -->|Sim| K[Story Done!]
+
+        G --> K
+
+        style K fill:#90EE90
+        style B fill:#DDA0DD
+        style C fill:#87CEEB
+        style E fill:#98FB98
+        style F fill:#DDA0DD
+        style J fill:#FFB6C1
+    ```
+
+  decision_guidance:
+    when_to_use:
+      - Após implementação de qualquer story (antes de marcar como Done)
+      - Após hotfixes que tocam múltiplos arquivos
+      - Como quality gate antes de push/merge para main
+      - Quando a equipe quer garantir conformidade com padrões do SOL
+
+    when_not_to_use:
+      - Mudanças triviais (typo, comment, .env update)
+      - Spikes/POCs exploratórios
+      - Atualizações apenas de documentação
+
+  handoff_prompts:
+    audit_complete: |
+      Auditoria QA concluída para Story ${story_id}!
+      Issues encontrados: ${issue_count}
+      BLOCKERs: ${blocker_count} | MAJORs: ${major_count} | MINORs: ${minor_count}
+      Veredicto: ${verdict}
+
+      Prosseguindo para validação arquitetural com @architect...
+
+    architecture_reviewed: |
+      Validação arquitetural concluída!
+      Conformidade: ${conformance_verdict}
+      Issues adicionais: ${arch_issue_count}
+
+      ${if_issues}Prosseguindo para correção com @dev...${endif}
+      ${if_no_issues}Nenhum issue — prosseguindo para revalidação final...${endif}
+
+    fixes_applied: |
+      Correções aplicadas pelo @dev!
+      Issues corrigidos: ${fixed_count}/${total_issues}
+      TypeScript: ${typecheck_result}
+
+      Prosseguindo para revalidação com @qa...
+
+    cycle_approved: |
+      Code Review & Fix APROVADO para Story ${story_id}!
+      Veredicto final: APPROVED
+      Story status: Done
+
+      Ciclo completo. Pronta para próxima story.
+
+    cycle_rejected: |
+      Revalidação REJEITADA para Story ${story_id}.
+      Issues pendentes: ${pending_issues}
+      Iteração: ${iteration}/${max_iterations}
+
+      Retornando para @dev corrigir...
+
+metadata:
+  author: Orion (AIOS Master)
+  created_date: 2026-02-25
+  version: 1.0.0
+  tags:
+    - code-review
+    - quality-gate
+    - fix-cycle
+    - qa
+    - architecture
+    - generic
+    - sol

@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "dotenv -e ../../.env -- next dev",
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
@@ -18,7 +18,9 @@
     "next-auth": "^5.0.0-beta.4",
     "openai": "^6.25.0",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "stripe": "^20.4.0",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "@types/bcryptjs": "^2.4.6",
