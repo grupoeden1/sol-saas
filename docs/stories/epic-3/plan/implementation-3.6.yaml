@@ -1,0 +1,711 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Story 3.6 — Refatoração do Sistema de Precificação
+# Implementation Plan
+# ─────────────────────────────────────────────────────────────────────────────
+
+storyId: "story-3.6"
+createdAt: "2026-02-26T22:00:00Z"
+createdBy: "@architect"
+status: pending
+complexity: STANDARD
+estimatedEffort: "3-5 days"
+
+# ─── Dependencies ────────────────────────────────────────────────────────────
+
+dependencies:
+  - name: tiktoken
+    version: "latest"
+    purpose: "Contagem precisa de tokens para cálculo de custo por mensagem (OpenAI-compatible tokenizer)"
+    install: "pnpm --filter web add tiktoken"
+
+# ─── Environment Variables ───────────────────────────────────────────────────
+
+envVars:
+  - name: FALLBACK_USD_BRL_RATE
+    default: "6.00"
+    description: "Cotação USD-BRL de fallback quando AwesomeAPI e banco estão indisponíveis"
+  - name: CREDIT_MARGIN_PERCENT
+    default: "40"
+    description: "Porcentagem do valor pago via Stripe disponibilizada como saldo interno"
+
+# ─── Phases ──────────────────────────────────────────────────────────────────
+
+phases:
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # PHASE 1 — Setup & Database Migration
+  # Tudo depende do schema novo. Executar primeiro e validar.
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  - id: "phase-1"
+    name: "Setup & Database Migration"
+    description: >
+      Instalar nova dependência (tiktoken), atualizar schema Prisma com todos os novos
+      campos/modelos, gerar e aplicar migration, e atualizar variáveis de ambiente.
+      Tudo o mais depende desta fase.
+
+    subtasks:
+
+      - id: "1.1"
+        description: "Instalar tiktoken como dependência de apps/web"
+        service: infra
+        files:
+          - "apps/web/package.json"
+        actions:
+          - "pnpm --filter web add tiktoken"
+        verification:
+          type: command
+          command: "pnpm --filter web exec -- node -e \"require('tiktoken')\""
+        status: pending
+        dependencies: []
+        notes: >
+          tiktoken é a biblioteca oficial da OpenAI para contagem de tokens.
+          Instalar em apps/web (não em packages/db) pois a contagem acontece na API route.
+
+      - id: "1.2"
+        description: "Atualizar schema Prisma com novos modelos e campos"
+        service: database
+        files:
+          - "packages/db/prisma/schema.prisma"
+        actions:
+          - "Criar model ExchangeRate { id, currency, rate (Decimal), date (@db.Date), createdAt, @@unique([currency, date]) }"
+          - "Renomear User.credits → User.balanceCents (Int, default 0)"
+          - "Adicionar User.minBalanceCents (Int, default -200)"
+          - "Adicionar em CreditTransaction: exchangeRate (Decimal?), inputTokens (Int?), outputTokens (Int?), modelUsed (String?), costUsd (Decimal?)"
+          - "Alterar CreditTransaction.description de String → String? (nullable para retrocompatibilidade)"
+        verification:
+          type: command
+          command: "cd c:/Projetos/Sol/sol-saas && pnpm --filter db exec -- npx prisma validate"
+        status: pending
+        dependencies: []
+        notes: >
+          IMPORTANTE: O rename de credits → balanceCents no Prisma deve usar @map("credits")
+          OU ser feito via migration SQL com ALTER TABLE ... RENAME COLUMN para preservar dados.
+          Prisma interpreta rename como drop+create — usar migration customizada.
+
+          Schema target (mudanças):
+          ```
+          model User {
+            balanceCents    Int  @default(0)     // was: credits
+            minBalanceCents Int  @default(-200)  // NEW
+          }
+          model CreditTransaction {
+            description     String?              // was: String (not nullable)
+            exchangeRate    Decimal?             // NEW
+            inputTokens     Int?                 // NEW
+            outputTokens    Int?                 // NEW
+            modelUsed       String?              // NEW
+            costUsd         Decimal?             // NEW
+          }
+          model ExchangeRate {
+            id        String   @id @default(cuid())
+            currency  String
+            rate      Decimal
+            date      DateTime @db.Date
+            createdAt DateTime @default(now())
+            @@unique([currency, date])
+          }
+          ```
+
+      - id: "1.3"
+        description: "Criar migration SQL customizada com rename seguro e CHECK constraint"
+        service: database
+        files:
+          - "packages/db/prisma/migrations/YYYYMMDD_pricing_refactoring/migration.sql"
+        actions:
+          - "pnpm --filter db exec -- npx prisma migrate dev --create-only --name pricing_refactoring"
+          - "Editar migration.sql gerada para usar RENAME COLUMN (não drop+create)"
+          - "Adicionar DROP CONSTRAINT user_credits_non_negative (se existir)"
+          - "Adicionar CHECK constraint: ALTER TABLE \"User\" ADD CONSTRAINT \"user_balance_above_min\" CHECK (\"balanceCents\" >= \"minBalanceCents\")"
+          - "Aplicar migration: pnpm --filter db exec -- npx prisma migrate dev"
+        verification:
+          type: command
+          command: "cd c:/Projetos/Sol/sol-saas && pnpm --filter db exec -- npx prisma migrate status"
+        status: pending
+        dependencies:
+          - "1.2"
+        notes: >
+          Migration SQL esperada (pseudocódigo):
+          ```sql
+          -- Rename credits → balanceCents
+          ALTER TABLE "User" RENAME COLUMN "credits" TO "balanceCents";
+
+          -- Add minBalanceCents
+          ALTER TABLE "User" ADD COLUMN "minBalanceCents" INTEGER NOT NULL DEFAULT -200;
+
+          -- Add new CreditTransaction fields
+          ALTER TABLE "CreditTransaction" ADD COLUMN "exchangeRate" DECIMAL;
+          ALTER TABLE "CreditTransaction" ADD COLUMN "inputTokens" INTEGER;
+          ALTER TABLE "CreditTransaction" ADD COLUMN "outputTokens" INTEGER;
+          ALTER TABLE "CreditTransaction" ADD COLUMN "modelUsed" TEXT;
+          ALTER TABLE "CreditTransaction" ADD COLUMN "costUsd" DECIMAL;
+          ALTER TABLE "CreditTransaction" ALTER COLUMN "description" DROP NOT NULL;
+
+          -- Create ExchangeRate table
+          CREATE TABLE "ExchangeRate" (
+            "id" TEXT NOT NULL,
+            "currency" TEXT NOT NULL,
+            "rate" DECIMAL NOT NULL,
+            "date" DATE NOT NULL,
+            "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            CONSTRAINT "ExchangeRate_pkey" PRIMARY KEY ("id")
+          );
+          CREATE UNIQUE INDEX "ExchangeRate_currency_date_key" ON "ExchangeRate"("currency", "date");
+
+          -- Drop old constraint (Story 3.1)
+          ALTER TABLE "User" DROP CONSTRAINT IF EXISTS "user_credits_non_negative";
+
+          -- Add new constraint
+          ALTER TABLE "User" ADD CONSTRAINT "user_balance_above_min"
+            CHECK ("balanceCents" >= "minBalanceCents");
+          ```
+
+      - id: "1.4"
+        description: "Atualizar .env.example com novas variáveis de ambiente"
+        service: infra
+        files:
+          - ".env.example"
+        actions:
+          - "Adicionar seção '# Pricing & Exchange Rate' com FALLBACK_USD_BRL_RATE e CREDIT_MARGIN_PERCENT"
+        verification:
+          type: command
+          command: "grep -q 'FALLBACK_USD_BRL_RATE' c:/Projetos/Sol/sol-saas/.env.example && grep -q 'CREDIT_MARGIN_PERCENT' c:/Projetos/Sol/sol-saas/.env.example && echo 'OK'"
+        status: pending
+        dependencies: []
+        notes: >
+          Adicionar ao final do .env.example:
+          ```
+          # Pricing & Exchange Rate (Story 3.6)
+          FALLBACK_USD_BRL_RATE="6.00"
+          CREDIT_MARGIN_PERCENT="40"
+          ```
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # PHASE 2 — Core Backend Implementation
+  # Serviços independentes em packages/db e apps/web/src/lib.
+  # Subtasks 2.1 e 2.2 podem ser executadas em PARALELO.
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  - id: "phase-2"
+    name: "Core Backend Implementation"
+    description: >
+      Implementar serviço de cotação, contador de tokens, e refatorar funções de créditos.
+      Exchange rate e token counter são independentes e podem ser implementados em paralelo.
+      Credits functions dependem do schema novo (Phase 1).
+
+    subtasks:
+
+      - id: "2.1"
+        description: "Criar serviço de cotação USD-BRL (packages/db/src/exchange-rate.ts)"
+        service: backend
+        files:
+          - "packages/db/src/exchange-rate.ts"
+        actions:
+          - "Criar arquivo packages/db/src/exchange-rate.ts"
+          - "Implementar getExchangeRate(currency: string): Promise<Decimal>"
+          - "Implementar updateExchangeRate(currency: string, rate: Decimal): Promise<ExchangeRate>"
+          - "Implementar fetchExchangeRateFromApi(currency: string): Promise<Decimal>"
+          - "Implementar ensureTodayRate(currency: string): Promise<Decimal> (lazy refresh)"
+          - "Criar ExchangeRateApiError custom error class"
+        verification:
+          type: command
+          command: "cd c:/Projetos/Sol/sol-saas && pnpm --filter db exec tsc --noEmit"
+        status: pending
+        dependencies:
+          - "1.3"
+        notes: >
+          Fluxo do ensureTodayRate (lazy — sem cron):
+          1. getExchangeRate("USD-BRL") — busca cotação de hoje no banco
+          2. Se encontrou cotação de hoje → retorna (cache hit)
+          3. Se não → fetchExchangeRateFromApi("USD-BRL") + updateExchangeRate
+          4. Se API falhou → retorna última cotação via getExchangeRate (aceita qualquer data)
+
+          getExchangeRate 3-level fallback:
+          1. Cotação de hoje (date = today)
+          2. Última cotação disponível (ORDER BY date DESC LIMIT 1)
+          3. FALLBACK_USD_BRL_RATE do .env (default "6.00")
+
+          API: GET https://economia.awesomeapi.com.br/json/last/USD-BRL
+          Response: { "USDBRL": { "bid": "5.4521", ... } }
+
+          Usar Prisma Decimal (import { Decimal } from '@prisma/client/runtime/library')
+          ou import { Decimal } from 'decimal.js' dependendo da versão do Prisma.
+
+      - id: "2.2"
+        description: "Criar contador de tokens e calculador de custo (apps/web/src/lib/token-counter.ts)"
+        service: backend
+        files:
+          - "apps/web/src/lib/token-counter.ts"
+        actions:
+          - "Criar arquivo apps/web/src/lib/token-counter.ts"
+          - "Definir constante MODEL_PRICING com preços por modelo"
+          - "Implementar countTokens(messages, model): number"
+          - "Implementar calculateCostCents(inputTokens, outputTokens, model, exchangeRate): { costUsd, costCents }"
+        verification:
+          type: command
+          command: "cd c:/Projetos/Sol/sol-saas && pnpm --filter web exec tsc --noEmit"
+        status: pending
+        dependencies:
+          - "1.1"
+        notes: >
+          MODEL_PRICING (preços OpenAI em USD por 1M tokens — atualizar conforme pricing page):
+          ```typescript
+          const MODEL_PRICING: Record<string, { input: number; output: number }> = {
+            'gpt-4o':      { input: 2.50,  output: 10.00 },
+            'gpt-4o-mini': { input: 0.15,  output: 0.60  },
+          }
+          const DEFAULT_PRICING = { input: 2.50, output: 10.00 } // fallback conservador
+          ```
+
+          countTokens usa tiktoken:
+          ```typescript
+          import { encoding_for_model } from 'tiktoken'
+
+          export function countTokens(
+            messages: Array<{ role: string; content: string }>,
+            model: string
+          ): number {
+            // encoding_for_model pode lançar para modelos desconhecidos — fallback para cl100k_base
+            const enc = encoding_for_model(model as TiktokenModel) ?? get_encoding('cl100k_base')
+            let total = 0
+            for (const msg of messages) {
+              total += 4 // overhead por mensagem (role, name, etc.)
+              total += enc.encode(msg.content).length
+            }
+            total += 2 // assistant reply priming
+            enc.free()
+            return total
+          }
+          ```
+
+          calculateCostCents:
+          ```typescript
+          export function calculateCostCents(
+            inputTokens: number,
+            outputTokens: number,
+            model: string,
+            exchangeRate: Decimal
+          ): { costUsd: Decimal; costCents: number } {
+            const pricing = MODEL_PRICING[model] ?? DEFAULT_PRICING
+            const costUsd = new Decimal(inputTokens).mul(pricing.input).div(1_000_000)
+              .plus(new Decimal(outputTokens).mul(pricing.output).div(1_000_000))
+            const costCents = Math.ceil(costUsd.mul(exchangeRate).mul(100).toNumber())
+            return { costUsd, costCents }
+          }
+          ```
+
+      - id: "2.3"
+        description: "Refatorar deductCredits e addCredits em packages/db/src/credits.ts"
+        service: backend
+        files:
+          - "packages/db/src/credits.ts"
+        actions:
+          - "Renomear InsufficientCreditsError → InsufficientBalanceError"
+          - "Atualizar mensagem do erro para incluir minBalanceCents"
+          - "Refatorar deductCredits: nova assinatura com costCents + metadata (exchangeRate, inputTokens, outputTokens, modelUsed, costUsd)"
+          - "Refatorar validação: balanceCents - costCents >= minBalanceCents"
+          - "Refatorar addCredits: nova assinatura com amountCents, stripePaymentId obrigatório, exchangeRate opcional"
+          - "Ambas funções operam em balanceCents (não mais credits)"
+          - "Retornar { balanceCents: number } em vez de number"
+        verification:
+          type: command
+          command: "cd c:/Projetos/Sol/sol-saas && pnpm --filter db exec tsc --noEmit"
+        status: pending
+        dependencies:
+          - "1.3"
+        notes: >
+          Refatoração incremental — preservar a estrutura existente, mudar assinaturas e lógica interna.
+
+          ANTES (current):
+            deductCredits(userId: string, amount: number): Promise<number>
+            addCredits(userId: string, amount: number, stripePaymentId?: string): Promise<number>
+
+          DEPOIS (target):
+            deductCredits(userId: string, costCents: number, metadata: DeductMetadata): Promise<{ balanceCents: number }>
+            addCredits(userId: string, amountCents: number, stripePaymentId: string, exchangeRate?: Decimal): Promise<{ balanceCents: number }>
+
+          DeductMetadata type:
+          ```typescript
+          interface DeductMetadata {
+            exchangeRate: Decimal;
+            inputTokens: number;
+            outputTokens: number;
+            modelUsed: string;
+            costUsd: Decimal;
+          }
+          ```
+
+          Validação de saldo:
+            ANTES: user.credits < amount → InsufficientCreditsError
+            DEPOIS: user.balanceCents - costCents < user.minBalanceCents → InsufficientBalanceError
+
+          CreditTransaction.create:
+            ANTES: { amount: -amount, type: 'consumption', description }
+            DEPOIS: { amount: -costCents, type: 'consumption', description, exchangeRate, inputTokens, outputTokens, modelUsed, costUsd }
+
+      - id: "2.4"
+        description: "Atualizar exports de packages/db/src/index.ts"
+        service: backend
+        files:
+          - "packages/db/src/index.ts"
+        actions:
+          - "Adicionar export * from './exchange-rate'"
+        verification:
+          type: command
+          command: "cd c:/Projetos/Sol/sol-saas && pnpm --filter db exec tsc --noEmit"
+        status: pending
+        dependencies:
+          - "2.1"
+          - "2.3"
+        notes: >
+          Linha a adicionar:
+          ```typescript
+          export * from './exchange-rate'
+          ```
+          Já existe: export * from './credits' (que agora exporta InsufficientBalanceError ao invés de InsufficientCreditsError)
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # PHASE 3 — API Route Integration
+  # Conectar os novos serviços às rotas existentes.
+  # Chat route depende de Phase 2 completa. Webhook pode ser paralelo ao chat.
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  - id: "phase-3"
+    name: "API Route Integration"
+    description: >
+      Refatorar as API routes de chat e webhook para usar o novo sistema de precificação.
+      Chat route: token counting + cost calculation + variable deduction.
+      Webhook: margin calculation + exchange rate recording.
+
+    subtasks:
+
+      - id: "3.1"
+        description: "Refatorar POST /api/chat com contagem de tokens e custo variável"
+        service: backend
+        files:
+          - "apps/web/src/app/api/chat/route.ts"
+        actions:
+          - "Import: countTokens, calculateCostCents de @/lib/token-counter"
+          - "Import: ensureTodayRate de @sol/db"
+          - "Import: Decimal (para tipo)"
+          - "ANTES da chamada OpenAI: countTokens(messages, model) → inputTokens"
+          - "ANTES da chamada OpenAI: ensureTodayRate('USD-BRL') → exchangeRate"
+          - "ANTES da chamada OpenAI: calculateCostCents(inputTokens, 0, model, exchangeRate) → estimatedCost"
+          - "Alterar check de créditos: user.balanceCents < estimatedCost.costCents → 402"
+          - "APÓS stream: contar outputTokens (via response text ou usage)"
+          - "APÓS stream: calculateCostCents(inputTokens, outputTokens, model, exchangeRate) → realCost"
+          - "APÓS stream: deductCredits(user.id, realCost.costCents, { exchangeRate, inputTokens, outputTokens, modelUsed: model, costUsd: realCost.costUsd })"
+          - "Renomear header X-Credits-Remaining → X-Balance-Remaining"
+          - "Renomear evento done: creditsRemaining → balanceRemaining"
+          - "Alterar user query: select { balanceCents: true, minBalanceCents: true } (não mais credits)"
+        verification:
+          type: command
+          command: "cd c:/Projetos/Sol/sol-saas && pnpm --filter web exec tsc --noEmit"
+        status: pending
+        dependencies:
+          - "2.2"
+          - "2.3"
+          - "2.4"
+        notes: >
+          Fluxo completo refatorado:
+          ```
+          POST /api/chat
+            ├─ auth check
+            ├─ buscar user com { balanceCents, minBalanceCents }
+            ├─ preparar messages array (system + history + new)
+            ├─ countTokens(messages, model) → inputTokens
+            ├─ ensureTodayRate("USD-BRL") → exchangeRate
+            ├─ calculateCostCents(inputTokens, 0, model, exchangeRate) → estimated
+            ├─ user.balanceCents - estimated.costCents < user.minBalanceCents → 402
+            ├─ save user message
+            ├─ header: X-Balance-Remaining = user.balanceCents (pré-dedução)
+            ├─ stream OpenAI
+            │   ├─ success:
+            │   │   ├─ save assistant message
+            │   │   ├─ countTokens([{ role: 'assistant', content: fullResponse }], model) → outputTokens
+            │   │   ├─ calculateCostCents(inputTokens, outputTokens, model, exchangeRate) → real
+            │   │   ├─ deductCredits(user.id, real.costCents, metadata) → { balanceCents }
+            │   │   └─ send { done: true, conversationId, balanceRemaining: balanceCents }
+            │   └─ error:
+            │       ├─ send { error: message }
+            │       └─ NO deduction
+          ```
+
+          PRESERVAR: streaming SSE, conversation management, error handling, model selection logic.
+          MUDAR: credit check, deduction call, headers, done event payload.
+
+          Para outputTokens: usar countTokens sobre a resposta completa.
+          Alternativa: usar stream.usage se disponível (depende do modelo/SDK).
+          Preferir countTokens para consistência.
+
+      - id: "3.2"
+        description: "Refatorar webhook Stripe com margem configurável e exchangeRate"
+        service: backend
+        files:
+          - "apps/web/src/app/api/webhooks/stripe/route.ts"
+        actions:
+          - "Import: getExchangeRate de @sol/db"
+          - "Ler CREDIT_MARGIN_PERCENT do process.env (default 40)"
+          - "Calcular amountCents = Math.floor(amountTotal * (marginPercent / 100))"
+          - "Buscar exchangeRate via getExchangeRate('USD-BRL')"
+          - "Chamar addCredits(userId, amountCents, stripePaymentId, exchangeRate)"
+          - "Remover leitura de creditsAmount da metadata (substituído por cálculo de margem)"
+          - "Ler amount_total do session object (centavos BRL do Stripe)"
+          - "Atualizar logs para refletir nova semântica"
+        verification:
+          type: command
+          command: "cd c:/Projetos/Sol/sol-saas && pnpm --filter web exec tsc --noEmit"
+        status: pending
+        dependencies:
+          - "2.3"
+          - "2.4"
+        notes: >
+          ANTES (current):
+          ```typescript
+          const { userId, creditsAmount } = session.metadata ?? {};
+          const credits = parseInt(creditsAmount, 10);
+          await addCredits(userId, credits, stripePaymentId);
+          ```
+
+          DEPOIS (target):
+          ```typescript
+          const { userId } = session.metadata ?? {};
+          const amountTotal = session.amount_total; // centavos BRL do Stripe
+          const marginPercent = parseInt(process.env.CREDIT_MARGIN_PERCENT ?? '40', 10);
+          const amountCents = Math.floor((amountTotal ?? 0) * (marginPercent / 100));
+          const exchangeRate = await getExchangeRate('USD-BRL');
+          await addCredits(userId, amountCents, stripePaymentId, exchangeRate);
+          ```
+
+          A metadata creditsAmount não é mais necessária — o cálculo é server-side baseado
+          em amount_total. Mas manter userId na metadata (necessário para saber quem pagou).
+
+          IMPORTANTE: Também atualizar a criação do checkout session (se existir em /api/payments/checkout)
+          para remover creditsAmount da metadata. Verificar arquivo.
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # PHASE 4 — Frontend & Verification
+  # Adaptar componentes do frontend e validar tudo end-to-end.
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  - id: "phase-4"
+    name: "Frontend & Verification"
+    description: >
+      Atualizar componentes frontend para consumir balanceCents, formatar saldo como créditos,
+      e verificar typecheck + lint do projeto completo.
+
+    subtasks:
+
+      - id: "4.1"
+        description: "Atualizar CreditsProvider e CreditsBadge para balanceCents"
+        service: frontend
+        files:
+          - "apps/web/src/components/layout/CreditsProvider.tsx"
+          - "apps/web/src/components/layout/CreditsBadge.tsx"
+        actions:
+          - "CreditsProvider: renomear estado interno credits → balanceCents"
+          - "CreditsProvider: adicionar função formatBalance(balanceCents: number): string"
+          - "CreditsProvider: exportar formatBalance via contexto"
+          - "CreditsProvider: manter updateCredits como nome público (aceita balanceCents)"
+          - "CreditsBadge: usar formatBalance() para exibição (nunca mostrar centavos)"
+          - "CreditsBadge: manter visual existente (star icon, solar colors)"
+        verification:
+          type: command
+          command: "cd c:/Projetos/Sol/sol-saas && pnpm --filter web exec tsc --noEmit"
+        status: pending
+        dependencies:
+          - "3.1"
+        notes: >
+          formatBalance deve converter balanceCents para exibição amigável:
+          ```typescript
+          function formatBalance(balanceCents: number): string {
+            // Mapear para "créditos" — aluno nunca vê centavos/reais
+            // Ex: 2796 centavos → "27,96 créditos" ou simplificado para "28 créditos"
+            const credits = Math.floor(balanceCents / 100)
+            if (credits <= 0) return '0 créditos'
+            return `${credits} crédito${credits !== 1 ? 's' : ''}`
+          }
+          ```
+
+          A API do contexto mantém retrocompatibilidade:
+          - initialCredits → initialBalance (prop rename)
+          - credits → balanceCents (internal state)
+          - updateCredits → aceita number (balanceCents do backend)
+
+      - id: "4.2"
+        description: "Atualizar AppLayout para buscar balanceCents e credits-config"
+        service: frontend
+        files:
+          - "apps/web/src/components/layout/AppLayout.tsx"
+          - "apps/web/src/lib/credits-config.ts"
+        actions:
+          - "AppLayout: alterar query de user.credits → user.balanceCents"
+          - "AppLayout: passar balanceCents como initialCredits no CreditsProvider"
+          - "credits-config: alterar descrições de pacotes ('~X scripts' em vez de 'X mensagens com a IA')"
+          - "credits-config: manter preços em centavos BRL como estão"
+          - "credits-config: remover campo credits dos pacotes (não mais relevante)"
+        verification:
+          type: command
+          command: "cd c:/Projetos/Sol/sol-saas && pnpm --filter web exec tsc --noEmit"
+        status: pending
+        dependencies:
+          - "4.1"
+        notes: >
+          AppLayout query change:
+          ```typescript
+          // ANTES:
+          const user = await prisma.user.findUnique({
+            where: { email: session.user.email },
+            select: { credits: true },
+          })
+          initialCredits = user?.credits ?? 0
+
+          // DEPOIS:
+          const user = await prisma.user.findUnique({
+            where: { email: session.user.email },
+            select: { balanceCents: true },
+          })
+          initialCredits = user?.balanceCents ?? 0
+          ```
+
+          credits-config update (exemplo):
+          ```typescript
+          {
+            id: 'starter',
+            price: 2990,        // mantém R$29,90
+            label: 'Starter',
+            description: '~30 scripts com a IA',  // estimativa baseada em custo médio
+          }
+          ```
+
+      - id: "4.3"
+        description: "Atualizar chat page para ler X-Balance-Remaining e balanceRemaining"
+        service: frontend
+        files:
+          - "apps/web/src/app/chat/page.tsx"
+        actions:
+          - "Renomear leitura de header: X-Credits-Remaining → X-Balance-Remaining"
+          - "Renomear leitura do evento done: creditsRemaining → balanceRemaining"
+          - "Atualizar condição de noCredits: balanceCents <= 0 (em vez de credits === 0)"
+          - "Manter toda a lógica de streaming, conversations, UI intacta"
+        verification:
+          type: command
+          command: "cd c:/Projetos/Sol/sol-saas && pnpm --filter web exec tsc --noEmit"
+        status: pending
+        dependencies:
+          - "4.1"
+        notes: >
+          Mudanças pontuais no handleSendMessage:
+          ```typescript
+          // ANTES:
+          const creditsRemaining = res.headers.get('X-Credits-Remaining')
+          // DEPOIS:
+          const balanceRemaining = res.headers.get('X-Balance-Remaining')
+
+          // ANTES (no done event):
+          if (typeof data.creditsRemaining === 'number') {
+            updateCredits(data.creditsRemaining)
+            setNoCredits(data.creditsRemaining === 0)
+          }
+          // DEPOIS:
+          if (typeof data.balanceRemaining === 'number') {
+            updateCredits(data.balanceRemaining)
+            setNoCredits(data.balanceRemaining <= 0)
+          }
+          ```
+
+          PRESERVAR: todo o resto (streaming, conversation sidebar, message bubbles, etc.)
+
+      - id: "4.4"
+        description: "Validação final: typecheck, lint e build"
+        service: infra
+        files: []
+        actions:
+          - "pnpm --filter web exec tsc --noEmit (zero errors)"
+          - "pnpm lint (zero new errors)"
+          - "Verificar que todas as referências a 'credits' foram atualizadas para 'balanceCents' nos arquivos modificados"
+        verification:
+          type: command
+          command: "cd c:/Projetos/Sol/sol-saas && pnpm --filter web exec tsc --noEmit && pnpm --filter db exec tsc --noEmit"
+        status: pending
+        dependencies:
+          - "4.1"
+          - "4.2"
+          - "4.3"
+        notes: >
+          Checklist de verificação final:
+          - [ ] Zero TypeScript errors em packages/db e apps/web
+          - [ ] Zero novos lint errors
+          - [ ] Todas as referências a user.credits → user.balanceCents
+          - [ ] Todas as referências a X-Credits-Remaining → X-Balance-Remaining
+          - [ ] Todas as referências a creditsRemaining → balanceRemaining
+          - [ ] InsufficientCreditsError → InsufficientBalanceError
+          - [ ] Nenhum import quebrado
+          - [ ] .env.example atualizado com novas variáveis
+
+# ─── Execution Graph ─────────────────────────────────────────────────────────
+#
+#   1.1 (tiktoken)  ──────────────────────────────── 2.2 (token-counter)
+#                                                           │
+#   1.2 (schema) ─── 1.3 (migration) ──┬── 2.1 (exchange)  │
+#                                       │         │         │
+#   1.4 (.env) ──────────────────────   ├── 2.3 (credits) ──┤
+#                                       │         │         │
+#                                       └── 2.4 (exports) ──┤
+#                                                           │
+#                                               ┌───────────┤
+#                                               │           │
+#                                          3.1 (chat)   3.2 (webhook)
+#                                               │
+#                                     ┌─────────┼─────────┐
+#                                     │         │         │
+#                                4.1 (credits) 4.2 (app) 4.3 (chat)
+#                                     │         │         │
+#                                     └─────────┴─────────┘
+#                                               │
+#                                          4.4 (verify)
+#
+# ─── Parallel Execution Opportunities ────────────────────────────────────────
+#
+#   Wave 1: 1.1 + 1.2 + 1.4 (all independent)
+#   Wave 2: 1.3 (depends on 1.2)
+#   Wave 3: 2.1 + 2.2 + 2.3 (2.1 and 2.3 depend on 1.3; 2.2 depends on 1.1)
+#   Wave 4: 2.4 (depends on 2.1 + 2.3)
+#   Wave 5: 3.1 + 3.2 (both depend on 2.3 + 2.4; 3.1 also needs 2.2)
+#   Wave 6: 4.1 + 4.2 + 4.3 (depend on 3.1)
+#   Wave 7: 4.4 (depends on 4.1 + 4.2 + 4.3)
+#
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ─── Risk Assessment ─────────────────────────────────────────────────────────
+
+risks:
+  - id: "R1"
+    description: "Prisma interpreta rename de coluna como drop+create, perdendo dados"
+    severity: HIGH
+    mitigation: "Usar --create-only e editar migration SQL para ALTER RENAME COLUMN"
+    affectedSubtasks: ["1.2", "1.3"]
+
+  - id: "R2"
+    description: "tiktoken pode ter issues de compatibilidade com WASM em ambiente Next.js"
+    severity: MEDIUM
+    mitigation: "Verificar compatibilidade com Edge Runtime; se necessário, configurar webpack config ou usar server-only"
+    affectedSubtasks: ["1.1", "2.2"]
+
+  - id: "R3"
+    description: "AwesomeAPI pode estar indisponível durante desenvolvimento/testes"
+    severity: LOW
+    mitigation: "3-level fallback garante operação (hoje → última → env var). Testes usam mock."
+    affectedSubtasks: ["2.1"]
+
+  - id: "R4"
+    description: "Checkout session metadata pode precisar de atualização (creditsAmount → amount_total)"
+    severity: MEDIUM
+    mitigation: "Verificar /api/payments/checkout e adaptar se necessário. amount_total é nativo do Stripe session."
+    affectedSubtasks: ["3.2"]
+
+  - id: "R5"
+    description: "Breaking change na interface de deductCredits/addCredits pode quebrar código não mapeado"
+    severity: MEDIUM
+    mitigation: "Buscar todas as referências antes de refatorar. Grep por deductCredits e addCredits no projeto."
+    affectedSubtasks: ["2.3", "3.1", "3.2"]

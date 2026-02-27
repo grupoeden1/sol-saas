@@ -1,34 +1,34 @@
 export interface CreditPackage {
   id: string;
-  credits: number;
-  price: number; // centavos BRL (ex: 1990 = R$19,90)
+  price: number; // centavos BRL (ex: 2990 = R$29,90)
   label: string;
   description: string;
+  scriptsEstimate: string; // estimativa de scripts (exibido na UI)
   popular?: boolean;
 }
 
 export const CREDIT_PACKAGES: CreditPackage[] = [
   {
     id: 'starter',
-    credits: 100,
     price: 2990,
     label: 'Starter',
-    description: '100 mensagens com a IA',
+    description: '~30 scripts com a IA',
+    scriptsEstimate: '~30 scripts',
   },
   {
     id: 'pro',
-    credits: 250,
     price: 6990,
     label: 'Pro',
-    description: '250 mensagens com a IA',
+    description: '~70 scripts com a IA',
+    scriptsEstimate: '~70 scripts',
     popular: true,
   },
   {
     id: 'max',
-    credits: 750,
     price: 14990,
     label: 'Max',
-    description: '750 mensagens com a IA',
+    description: '~200 scripts com a IA',
+    scriptsEstimate: '~200 scripts',
   },
 ];
 

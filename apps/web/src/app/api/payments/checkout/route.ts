@@ -58,7 +58,7 @@ export const POST = auth(async function handler(req) {
             currency: 'brl',
             unit_amount: pkg.price,
             product_data: {
-              name: `SOL — ${pkg.label} (${pkg.credits} créditos)`,
+              name: `SOL — ${pkg.label}`,
               description: pkg.description,
             },
           },
@@ -69,15 +69,14 @@ export const POST = auth(async function handler(req) {
       metadata: {
         userId: user.id,
         packageId: pkg.id,
-        creditsAmount: String(pkg.credits),
       },
     });
 
-    console.log(`[Checkout] Session created for userId=${user.id} packageId=${pkg.id} credits=${pkg.credits}`);
+    console.log(`[Checkout] Session created packageId=${pkg.id}`);
 
     return NextResponse.json({ sessionUrl: checkoutSession.url });
   } catch (error) {
-    console.error('[Checkout] Error creating session:', error);
+    console.error('[Checkout] Error creating session:', error instanceof Error ? error.message : 'Unknown');
     return NextResponse.json({ error: 'Failed to create checkout session' }, { status: 500 });
   }
 });

@@ -44,7 +44,7 @@ export async function GET(
 
     return Response.json(messages);
   } catch (error) {
-    console.error('[Messages API] Error:', error);
+    console.error('[Messages API] Error:', error instanceof Error ? error.message : 'Unknown');
     return new Response('Internal server error', { status: 500 });
   }
 }

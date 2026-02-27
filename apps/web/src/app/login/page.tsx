@@ -3,6 +3,7 @@
 import { useState, useEffect, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
+import Logo from '@/components/Logo';
 import { loginAction } from './actions';
 
 function LoginForm() {
@@ -33,7 +34,6 @@ function LoginForm() {
         return;
       }
 
-      // Sucesso - redireciona para dashboard
       const callbackUrl = searchParams.get('callbackUrl') || '/dashboard';
       router.push(callbackUrl);
       router.refresh();
@@ -45,80 +45,86 @@ function LoginForm() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-background py-12 px-4 sm:px-6 lg:px-8">
-      <div className="max-w-md w-full space-y-8">
-        <div>
-          <div className="text-center mb-4">
-            <span className="text-6xl">☀️</span>
-          </div>
-          <h2 className="mt-6 text-center text-3xl font-extrabold text-foreground">
-            Entrar no SOL
-          </h2>
-          <p className="mt-2 text-center text-sm text-foreground-muted">
-            Ou{' '}
-            <Link href="/register" className="font-medium text-solar-300 hover:text-solar-400 transition-colors">
-              crie sua conta gratuitamente
-            </Link>
+    <div className="flex min-h-screen items-center justify-center bg-background px-4">
+      {/* Background glow */}
+      <div className="pointer-events-none fixed inset-0 overflow-hidden">
+        <div className="absolute left-1/2 top-1/4 h-96 w-96 -translate-x-1/2 rounded-full bg-solar-500/5 blur-3xl" />
+      </div>
+
+      <div className="relative w-full max-w-md">
+        {/* Logo */}
+        <div className="mb-8 flex flex-col items-center">
+          <Logo size={48} className="mb-4" />
+          <h1 className="text-2xl font-bold text-foreground">Entrar no SOL</h1>
+          <p className="mt-1 text-sm text-foreground-muted">
+            Acesse sua conta para criar criativos
           </p>
         </div>
-        <form className="mt-8 space-y-6" onSubmit={handleSubmit}>
-          <div className="rounded-md shadow-sm -space-y-px">
-            <div>
-              <label htmlFor="email" className="sr-only">
-                Email
-              </label>
-              <input
-                id="email"
-                name="email"
-                type="email"
-                autoComplete="email"
-                required
-                className="appearance-none rounded-none relative block w-full px-3 py-2 border border-solar-800/30 bg-background-secondary placeholder-foreground-muted text-foreground rounded-t-md focus:outline-none focus:ring-2 focus:ring-solar-500 focus:border-solar-500 focus:z-10 sm:text-sm"
-                placeholder="Email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-              />
-            </div>
-            <div>
-              <label htmlFor="password" className="sr-only">
-                Senha
-              </label>
-              <input
-                id="password"
-                name="password"
-                type="password"
-                autoComplete="current-password"
-                required
-                className="appearance-none rounded-none relative block w-full px-3 py-2 border border-solar-800/30 bg-background-secondary placeholder-foreground-muted text-foreground rounded-b-md focus:outline-none focus:ring-2 focus:ring-solar-500 focus:border-solar-500 focus:z-10 sm:text-sm"
-                placeholder="Senha"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-              />
-            </div>
+
+        {/* Success Alert */}
+        {successMessage && (
+          <div className="mb-6 rounded-lg border border-green-500/50 bg-green-500/10 px-4 py-3 text-sm text-green-400">
+            {successMessage}
+          </div>
+        )}
+
+        {/* Error Alert */}
+        {error && (
+          <div className="mb-6 rounded-lg border border-red-500/50 bg-red-500/10 px-4 py-3 text-sm text-red-400">
+            {error}
+          </div>
+        )}
+
+        {/* Form Card */}
+        <form onSubmit={handleSubmit} className="rounded-2xl border border-solar-800/20 bg-background-secondary p-8">
+          <div className="mb-5">
+            <label htmlFor="email" className="mb-1.5 block text-sm font-medium text-foreground-muted">
+              Email
+            </label>
+            <input
+              id="email"
+              type="email"
+              autoComplete="email"
+              required
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="seu@email.com"
+              className="w-full rounded-lg border border-solar-800/30 bg-background px-4 py-2.5 text-foreground placeholder:text-foreground-muted/40 transition-all focus-solar focus:border-solar-500/50"
+            />
           </div>
 
-          {successMessage && (
-            <div className="rounded-md bg-green-500/10 border border-green-500/50 p-4">
-              <div className="text-sm text-green-400">{successMessage}</div>
-            </div>
-          )}
-
-          {error && (
-            <div className="rounded-md bg-red-500/10 border border-red-500/50 p-4">
-              <div className="text-sm text-red-400">{error}</div>
-            </div>
-          )}
-
-          <div>
-            <button
-              type="submit"
-              disabled={loading}
-              className="group relative w-full flex justify-center py-2 px-4 border border-solar-500/50 text-sm font-medium rounded-md text-foreground bg-solar-500/10 hover:bg-solar-500/20 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-solar-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-            >
-              {loading ? 'Entrando...' : 'Entrar'}
-            </button>
+          <div className="mb-6">
+            <label htmlFor="password" className="mb-1.5 block text-sm font-medium text-foreground-muted">
+              Senha
+            </label>
+            <input
+              id="password"
+              type="password"
+              autoComplete="current-password"
+              required
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="••••••••"
+              className="w-full rounded-lg border border-solar-800/30 bg-background px-4 py-2.5 text-foreground placeholder:text-foreground-muted/40 transition-all focus-solar focus:border-solar-500/50"
+            />
           </div>
+
+          <button
+            type="submit"
+            disabled={loading}
+            className="w-full rounded-lg bg-solar-500 py-2.5 text-sm font-semibold text-background transition-all hover:bg-solar-600 hover:shadow-lg hover:shadow-solar-500/25 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {loading ? 'Entrando...' : 'Entrar'}
+          </button>
         </form>
+
+        {/* Register Link */}
+        <p className="mt-6 text-center text-sm text-foreground-muted">
+          Não tem conta?{' '}
+          <Link href="/register" className="font-medium text-solar-400 transition-all hover:text-solar-300">
+            Cadastre-se
+          </Link>
+        </p>
       </div>
     </div>
   );

@@ -1,6 +1,12 @@
 import { auth } from '@/lib/auth';
 import { SYSTEM_PROMPT, detectFinalOutputIntent } from '@/lib/prompts';
-import { prisma, deductCredits } from '@sol/db';
+import {
+  prisma,
+  deductCredits,
+  ensureTodayRate,
+  InsufficientBalanceError,
+} from '@sol/db';
+import { countTokens, countRawTokens, calculateCostCents } from '@sol/db/token-counter';
 import OpenAI from 'openai';
 import { z } from 'zod';
 
@@ -9,9 +15,14 @@ const chatSchema = z.object({
   message: z.string().min(1).max(2000),
 });
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
+// Lazy singleton — avoid instantiation at module load (breaks next build without env vars)
+let _openai: OpenAI | null = null;
+function getOpenAI() {
+  if (!_openai) {
+    _openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  }
+  return _openai;
+}
 
 export async function POST(req: Request) {
   try {
@@ -21,21 +32,18 @@ export async function POST(req: Request) {
       return new Response('Unauthorized', { status: 401 });
     }
 
-    // Buscar usuário
+    // Buscar usuário com campos de saldo
     const user = await prisma.user.findUnique({
       where: { email: session.user.email },
+      select: {
+        id: true,
+        balanceCents: true,
+        minBalanceCents: true,
+      },
     });
 
     if (!user) {
       return new Response('User not found', { status: 404 });
-    }
-
-    // Verificar saldo de créditos antes de qualquer chamada externa (AC1 - Story 2.4)
-    if (user.credits === 0) {
-      return new Response(JSON.stringify({ error: 'insufficient_credits' }), {
-        status: 402,
-        headers: { 'Content-Type': 'application/json' },
-      });
     }
 
     // Parse e validar body com Zod
@@ -52,7 +60,6 @@ export async function POST(req: Request) {
     let conversation;
 
     if (conversationId) {
-      // Validar que a conversa pertence ao usuário
       conversation = await prisma.conversation.findFirst({
         where: {
           id: conversationId,
@@ -64,7 +71,6 @@ export async function POST(req: Request) {
         return new Response('Conversation not found or access denied', { status: 403 });
       }
     } else {
-      // Criar nova conversa
       conversation = await prisma.conversation.create({
         data: {
           userId: user.id,
@@ -95,7 +101,7 @@ export async function POST(req: Request) {
       ? (process.env.OPENAI_MODEL_FINAL || 'gpt-4o')
       : (process.env.OPENAI_MODEL_DEFAULT || 'gpt-4o-mini');
 
-    console.log(`[Chat API] Using model: ${model} (final intent: ${useFinalModel})`);
+    console.log(`[Chat API] model=${model} finalIntent=${useFinalModel}`);
 
     // Preparar mensagens para OpenAI
     const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
@@ -109,8 +115,31 @@ export async function POST(req: Request) {
       { role: 'user', content: message },
     ];
 
+    // ── Token counting & cost estimation (Story 3.6) ──────────────────────
+    const tokenMessages = messages.map((m) => ({
+      role: String(m.role),
+      content: typeof m.content === 'string' ? m.content : '',
+    }));
+    const inputTokens = countTokens(tokenMessages, model);
+
+    // Buscar cotação do dia (lazy refresh)
+    const exchangeRate = await ensureTodayRate('USD-BRL');
+
+    // Calcular custo estimado do input (sem output ainda)
+    const estimated = calculateCostCents(inputTokens, 0, model, exchangeRate);
+
+    console.log(`[Chat API] inputTokens=${inputTokens} estimatedCost=${estimated.costCents}`);
+
+    // Pré-check: saldo suficiente para cobrir ao menos o custo do input
+    if (user.balanceCents - estimated.costCents < user.minBalanceCents) {
+      return new Response(JSON.stringify({ error: 'insufficient_credits' }), {
+        status: 402,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+
     // Iniciar streaming da OpenAI
-    const stream = await openai.chat.completions.create({
+    const stream = await getOpenAI().chat.completions.create({
       model,
       messages,
       stream: true,
@@ -142,30 +171,63 @@ export async function POST(req: Request) {
             },
           });
 
-          // Deduzir 1 crédito após stream bem-sucedido (Story 3.2)
-          let creditsRemaining = user.credits;
+          // ── Calcular custo real (input + output) e deduzir ────────────
+          const outputTokens = countRawTokens(fullResponse, model);
+          const realCost = calculateCostCents(inputTokens, outputTokens, model, exchangeRate);
+
+          console.log(`[Chat API] outputTokens=${outputTokens} realCost=${realCost.costCents}`);
+
+          let balanceRemaining = user.balanceCents;
           try {
-            creditsRemaining = await deductCredits(user.id, 1);
+            const result = await deductCredits(user.id, realCost.costCents, {
+              exchangeRate,
+              inputTokens,
+              outputTokens,
+              modelUsed: model,
+              costUsd: realCost.costUsd,
+            });
+            balanceRemaining = result.balanceCents;
           } catch (deductError) {
-            // Race condition: saldo chegou a zero entre o check inicial e a dedução.
-            // A resposta já foi entregue ao aluno — apenas loga.
-            console.error('[Chat API] Credit deduction failed (response already delivered):', deductError);
-            creditsRemaining = 0;
+            // Race condition: saldo insuficiente após stream.
+            // Resposta já entregue — registrar audit trail para visibilidade.
+            if (deductError instanceof InsufficientBalanceError) {
+              console.warn('[Chat API] Balance insufficient post-stream (response already delivered):', deductError.message);
+            } else {
+              console.error('[Chat API] Credit deduction failed:', deductError);
+            }
+
+            // Audit trail: registrar tentativa falha para rastreabilidade
+            try {
+              await prisma.creditTransaction.create({
+                data: {
+                  userId: user.id,
+                  amount: 0,
+                  type: 'consumption',
+                  description: `Dedução falha: ${realCost.costCents} centavos (${inputTokens + outputTokens} tokens, ${model}) — saldo insuficiente pós-stream`,
+                  exchangeRate,
+                  inputTokens,
+                  outputTokens,
+                  modelUsed: model,
+                  costUsd: realCost.costUsd,
+                },
+              });
+            } catch (auditError) {
+              console.error('[Chat API] Failed to write audit trail:', auditError);
+            }
+
+            balanceRemaining = 0;
           }
 
           // Enviar evento de conclusão com saldo pós-dedução
           controller.enqueue(
             encoder.encode(
-              `data: ${JSON.stringify({ done: true, conversationId: conversation.id, creditsRemaining })}\n\n`
+              `data: ${JSON.stringify({ done: true, conversationId: conversation.id, balanceRemaining })}\n\n`
             )
           );
           controller.close();
         } catch (error) {
-          console.error('[Chat API] Streaming error:', {
-            conversationId: conversation.id,
-            userId: user.id,
-            error,
-          });
+          // OpenAI error → nenhuma dedução
+          console.error('[Chat API] Streaming error:', error instanceof Error ? error.message : 'Unknown');
 
           const errorMessage = getErrorMessage(error);
           controller.enqueue(
@@ -176,18 +238,17 @@ export async function POST(req: Request) {
       },
     });
 
-    // Incluir saldo atual no header para atualização em tempo real do badge (AC3 - Story 2.4)
-    // Nota: deducção real de créditos é implementada na Story 3.2
+    // Header com saldo pré-dedução para feedback imediato no badge
     return new Response(readable, {
       headers: {
         'Content-Type': 'text/event-stream',
         'Cache-Control': 'no-cache',
         'Connection': 'keep-alive',
-        'X-Credits-Remaining': String(user.credits),
+        'X-Balance-Remaining': String(user.balanceCents),
       },
     });
   } catch (error) {
-    console.error('[Chat API] Request error:', error);
+    console.error('[Chat API] Request error:', error instanceof Error ? error.message : 'Unknown');
     return new Response('Internal server error', { status: 500 });
   }
 }

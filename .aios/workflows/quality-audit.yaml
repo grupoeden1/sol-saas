@@ -1,0 +1,479 @@
+# ============================================
+# Quality Audit Workflow
+# SOL SaaS — Varredura completa de qualidade
+#
+# Pipeline: Architect (static analysis) → QA (quality review) → Dev (fix & backlog)
+# Cada etapa consome o output da anterior.
+#
+# @version 1.0.0
+# @author @aios-master (Orion)
+# @trigger *workflow quality-audit
+# ============================================
+
+workflow:
+  id: quality-audit
+  name: "Quality Audit — Static Analysis → QA Review → Auto-Fix"
+  version: "1.0.0"
+  description: >-
+    Workflow sequencial de auditoria de qualidade para o projeto SOL.
+    Etapa 1 (Architect): varredura estática do codebase, mapeamento de inconsistências
+    entre docs e código, violações de stack, rotas sem auth, riscos de produção.
+    Etapa 2 (QA): revisão completa de qualidade contra critérios de aceite, segurança,
+    lógica financeira, TypeScript strict, e estados de erro no frontend.
+    Etapa 3 (Dev): correção automática de BLOCKER e HIGH, registro de MEDIUM e LOW
+    como débito técnico no backlog.
+
+  type: sequential
+  project_types:
+    - saas
+    - fullstack
+    - quality-assurance
+
+  # ═══════════════════════════════════════════════════════════════════════════════════
+  #                              TRIGGER CONFIGURATION
+  # ═══════════════════════════════════════════════════════════════════════════════════
+
+  triggers:
+    - event: command
+      command: "*workflow quality-audit"
+      action: start
+
+    - event: command
+      command: "*quality-audit"
+      action: start
+
+    # Executar etapas individuais
+    - event: command
+      command: "*quality-audit-architect"
+      action: run_step
+      step: static_analysis
+
+    - event: command
+      command: "*quality-audit-qa"
+      action: run_step
+      step: quality_review
+
+    - event: command
+      command: "*quality-audit-dev"
+      action: run_step
+      step: auto_fix
+
+  # ═══════════════════════════════════════════════════════════════════════════════════
+  #                              CONFIGURATION
+  # ═══════════════════════════════════════════════════════════════════════════════════
+
+  config:
+    # Reference documents
+    architectureDoc: "docs/architecture.md"
+    prdDoc: "docs/prd.md"
+    storiesDir: "docs/stories"
+    backlogFile: "docs/stories/backlog/tech-debt.md"
+
+    # Severity levels for auto-fix threshold
+    autoFixSeverities:
+      - BLOCKER
+      - HIGH
+
+    backlogSeverities:
+      - MEDIUM
+      - LOW
+
+    # Timeouts per step (milliseconds)
+    staticAnalysisTimeout: 1800000   # 30 min
+    qualityReviewTimeout: 3600000    # 60 min
+    autoFixTimeout: 3600000          # 60 min
+
+    # Retry configuration
+    maxRetries: 1
+    retryDelay: 5000
+
+    # Output directory
+    outputDir: "docs/audit"
+
+    # TypeScript check after each fix
+    typecheckAfterFix: true
+    typecheckCommand: "tsc --noEmit"
+
+  # ═══════════════════════════════════════════════════════════════════════════════════
+  #                              INPUTS
+  # ═══════════════════════════════════════════════════════════════════════════════════
+
+  inputs:
+    scope:
+      type: string
+      required: false
+      default: "full"
+      description: >-
+        Escopo da auditoria: "full" (codebase inteiro), "epic-N" (epic específico),
+        ou path relativo (ex: "apps/web/src/app/api")
+
+    severity_filter:
+      type: array
+      required: false
+      default: [BLOCKER, HIGH, MEDIUM, LOW, INFO]
+      description: "Severidades a incluir no relatório"
+
+  # ═══════════════════════════════════════════════════════════════════════════════════
+  #                              WORKFLOW SEQUENCE
+  # ═══════════════════════════════════════════════════════════════════════════════════
+
+  sequence:
+
+    # ═════════════════════════════════════════════════════════════════════════════════
+    # STEP 1: STATIC ANALYSIS (Architect)
+    # ═════════════════════════════════════════════════════════════════════════════════
+
+    - step: static_analysis
+      phase: 1
+      phase_name: "Varredura Estática do Codebase"
+      agent: architect
+
+      description: >-
+        Architect realiza varredura estática completa do codebase:
+        1. Mapear inconsistências entre docs/architecture.md e código implementado
+        2. Identificar violações do tech-stack (any, dependências proibidas, lógica no frontend)
+        3. Verificar rotas de API sem autenticação
+        4. Identificar riscos para produção
+        Output: relatório priorizado por BLOCKER > HIGH > MEDIUM > LOW
+
+      prompt: |
+        Execute uma varredura estática completa do codebase SOL SaaS.
+
+        **Documentos de referência:**
+        - Architecture: {config.architectureDoc}
+        - PRD: {config.prdDoc}
+        - Escopo: {inputs.scope}
+
+        **Checklist de análise:**
+
+        1. INCONSISTÊNCIAS DOCS ↔ CÓDIGO
+           - Comparar docs/architecture.md com implementação real
+           - Verificar se todos os modelos do schema.prisma estão documentados
+           - Verificar se todas as rotas de API documentadas existem e vice-versa
+           - Verificar se as integrações documentadas (OpenAI, Stripe, AwesomeAPI) estão implementadas conforme descrito
+
+        2. VIOLAÇÕES DE TECH-STACK
+           - TypeScript strict: buscar `any`, `as unknown`, `@ts-ignore`, `@ts-expect-error`
+           - Dependências: verificar se todas as deps em package.json são necessárias
+           - Separação de responsabilidades: lógica de negócio no frontend (deveria estar em packages/db ou API)
+           - Imports circulares ou incorretos entre packages/db e apps/web
+
+        3. ROTAS SEM AUTENTICAÇÃO
+           - Listar todas as rotas em apps/web/src/app/api/
+           - Verificar quais NÃO chamam auth() ou validam session
+           - Classificar: pública (ok), privada sem auth (BLOCKER)
+
+        4. RISCOS DE PRODUÇÃO
+           - Secrets hardcoded ou expostos
+           - console.log com dados sensíveis (userId, email, tokens)
+           - Queries N+1 ou sem paginação
+           - Falta de rate limiting em rotas públicas
+           - Falta de CORS ou CSP headers
+
+        **Formato do output:**
+        Relatório em Markdown com seções por categoria, cada finding com:
+        - ID (SA-001, SA-002, ...)
+        - Severidade: BLOCKER | HIGH | MEDIUM | LOW | INFO
+        - Arquivo e linha
+        - Descrição do problema
+        - Correção sugerida
+
+        Salvar em: {config.outputDir}/01-static-analysis.md
+
+      inputs:
+        architectureDoc: "{config.architectureDoc}"
+        prdDoc: "{config.prdDoc}"
+        scope: "{inputs.scope}"
+
+      outputs:
+        - "{config.outputDir}/01-static-analysis.md"
+        - findingsCount
+        - blockerCount
+        - highCount
+
+      timeout: "{config.staticAnalysisTimeout}"
+
+      on_success:
+        log: "Static analysis complete: {findingsCount} findings ({blockerCount} BLOCKER, {highCount} HIGH)"
+        next: quality_review
+
+      on_failure:
+        action: retry
+        max_retries: "{config.maxRetries}"
+        on_exhausted:
+          action: halt
+          reason: "Architect static analysis failed after retries"
+
+    # ═════════════════════════════════════════════════════════════════════════════════
+    # STEP 2: QUALITY REVIEW (QA)
+    # ═════════════════════════════════════════════════════════════════════════════════
+
+    - step: quality_review
+      phase: 2
+      phase_name: "Revisão Completa de Qualidade"
+      agent: qa
+
+      description: >-
+        QA recebe o relatório de análise estática do Architect + PRD e executa
+        revisão completa de qualidade cobrindo critérios de aceite, segurança,
+        lógica financeira, TypeScript, e estados de erro no frontend.
+
+      prompt: |
+        Execute revisão completa de qualidade do projeto SOL SaaS.
+
+        **Inputs:**
+        - Relatório de análise estática: {config.outputDir}/01-static-analysis.md
+        - PRD: {config.prdDoc}
+        - Architecture: {config.architectureDoc}
+        - Stories: {config.storiesDir}/
+
+        **Checklist de revisão:**
+
+        1. CRITÉRIOS DE ACEITE — TODAS AS STORIES
+           - Ler cada story em docs/stories/epic-*/
+           - Verificar se todos os ACs estão implementados
+           - Marcar ACs não implementados como BLOCKER
+
+        2. SEGURANÇA
+           - Auth: toda rota privada valida session via auth()
+           - Variáveis sensíveis: DATABASE_URL, STRIPE_SECRET, OPENAI_API_KEY nunca no client
+           - Validação de inputs: Zod em todas as rotas de API
+           - HMAC do Stripe: webhook valida signature antes de processar
+           - SQL injection: nenhum raw query sem parametrização
+
+        3. WEBHOOK STRIPE
+           - HMAC validation via constructEvent
+           - Idempotência via stripePaymentId UNIQUE
+           - Tratamento de metadata incompleto
+           - Guard contra amount <= 0
+           - Error handling com retry do Stripe
+
+        4. LÓGICA DE CRÉDITOS
+           - deductCredits: transação atômica, respeita minBalanceCents
+           - addCredits: transação atômica, idempotente via stripePaymentId
+           - Race condition: CHECK constraint como safety net
+           - Falha da OpenAI: zero dedução (nenhuma cobrança se stream falha)
+           - Audit trail: toda transação tem metadata completa
+
+        5. TYPESCRIPT STRICT
+           - Buscar: `any`, `as unknown`, `as any`, `@ts-ignore`, `@ts-expect-error`
+           - Type assertions suspeitas (as Record, as string, etc.)
+           - Enums vs union types
+           - Nullable fields sem tratamento
+
+        6. ESTADOS DE ERRO NO FRONTEND
+           - Falha de API no chat: mensagem de erro amigável
+           - Stream caindo no meio: estado consistente (loading reseta)
+           - Pagamento recusado: redirect correto
+           - Saldo insuficiente: prompt inline + input desabilitado
+           - Rede offline: tratamento ou fallback
+
+        **Formato do output:**
+        Relatório em Markdown, cada finding com:
+        - ID (QA-001, QA-002, ...)
+        - Severidade: BLOCKER | HIGH | MEDIUM | LOW | INFO
+        - Categoria (Segurança, Lógica, TypeScript, Frontend, Regressão)
+        - Arquivo e linha exata
+        - Descrição do problema
+        - Correção sugerida (código se possível)
+        - AC relacionado (se aplicável)
+
+        Incluir seção de cross-reference com findings do Architect (SA-*) confirmados ou descartados.
+
+        Salvar em: {config.outputDir}/02-quality-review.md
+
+      inputs:
+        staticAnalysisReport: "{config.outputDir}/01-static-analysis.md"
+        prdDoc: "{config.prdDoc}"
+        architectureDoc: "{config.architectureDoc}"
+        storiesDir: "{config.storiesDir}"
+
+      outputs:
+        - "{config.outputDir}/02-quality-review.md"
+        - findingsCount
+        - blockerCount
+        - highCount
+        - mediumCount
+        - lowCount
+
+      timeout: "{config.qualityReviewTimeout}"
+
+      on_success:
+        log: "Quality review complete: {findingsCount} findings ({blockerCount} BLOCKER, {highCount} HIGH, {mediumCount} MEDIUM, {lowCount} LOW)"
+        next: auto_fix
+
+      on_failure:
+        action: retry
+        max_retries: "{config.maxRetries}"
+        on_exhausted:
+          action: halt
+          reason: "QA quality review failed after retries"
+
+    # ═════════════════════════════════════════════════════════════════════════════════
+    # STEP 3: AUTO-FIX & BACKLOG (Dev)
+    # ═════════════════════════════════════════════════════════════════════════════════
+
+    - step: auto_fix
+      phase: 3
+      phase_name: "Correção Automática & Registro de Débito"
+      agent: dev
+
+      description: >-
+        Dev recebe relatórios das Etapas 1 e 2, corrige automaticamente todos
+        os itens BLOCKER e HIGH, e registra MEDIUM e LOW como débito técnico.
+
+      prompt: |
+        Corrija automaticamente todos os findings classificados como BLOCKER e HIGH
+        dos relatórios de auditoria do projeto SOL SaaS.
+
+        **Inputs:**
+        - Relatório Architect: {config.outputDir}/01-static-analysis.md
+        - Relatório QA: {config.outputDir}/02-quality-review.md
+
+        **Procedimento para BLOCKER e HIGH:**
+
+        Para CADA finding BLOCKER ou HIGH (de ambos os relatórios, sem duplicatas):
+
+        1. Ler o arquivo indicado no finding
+        2. Aplicar a correção sugerida (ou implementar solução adequada)
+        3. Rodar `tsc --noEmit` após cada correção para garantir que não quebrou nada
+        4. Se o typecheck falhar: reverter e tentar abordagem alternativa
+        5. Registrar: finding ID, arquivo, o que foi feito, resultado do typecheck
+
+        **Procedimento para MEDIUM e LOW:**
+
+        Consolidar todos os findings MEDIUM e LOW em um arquivo de débito técnico:
+        - Salvar em: {config.backlogFile}
+        - Formato por item:
+          ```
+          ### [ID] Título curto
+          - **Severidade:** MEDIUM | LOW
+          - **Arquivo:** path:line
+          - **Descrição:** ...
+          - **Correção sugerida:** ...
+          - **Origem:** SA-XXX | QA-XXX
+          ```
+
+        **Verificação final:**
+        - Rodar typecheck completo: `tsc --noEmit` em apps/web
+        - Contar findings corrigidos vs total
+        - Se algum BLOCKER não foi corrigido: marcar como FAILED com justificativa
+
+        **Formato do output:**
+        Relatório em Markdown com:
+        - Resumo executivo (corrigidos / total BLOCKER+HIGH, registrados MEDIUM+LOW)
+        - Tabela de correções aplicadas (ID, arquivo, status, typecheck)
+        - Tabela de débito técnico registrado (ID, severidade, arquivo)
+        - Resultado do typecheck final
+        - Status: PASS (todos BLOCKER+HIGH corrigidos) | PARTIAL | FAILED
+
+        Salvar em: {config.outputDir}/03-fix-report.md
+
+      inputs:
+        staticAnalysisReport: "{config.outputDir}/01-static-analysis.md"
+        qualityReviewReport: "{config.outputDir}/02-quality-review.md"
+        backlogFile: "{config.backlogFile}"
+
+      outputs:
+        - "{config.outputDir}/03-fix-report.md"
+        - "{config.backlogFile}"
+        - fixedCount
+        - backlogCount
+        - typecheckPassed
+        - status
+
+      timeout: "{config.autoFixTimeout}"
+
+      on_success:
+        log: "Auto-fix complete: {fixedCount} fixed, {backlogCount} backlogged, typecheck: {typecheckPassed}, status: {status}"
+
+      on_failure:
+        action: retry
+        max_retries: "{config.maxRetries}"
+        on_exhausted:
+          action: halt
+          reason: "Dev auto-fix failed after retries"
+
+  # ═══════════════════════════════════════════════════════════════════════════════════
+  #                              WORKFLOW COMPLETION
+  # ═══════════════════════════════════════════════════════════════════════════════════
+
+  completion:
+    success_message: |
+      ============================================================
+        Quality Audit Complete — SOL SaaS
+      ============================================================
+
+      Etapa 1 — Architect (Static Analysis)
+        Findings: {outputs.static_analysis.findingsCount}
+        BLOCKER:  {outputs.static_analysis.blockerCount}
+        HIGH:     {outputs.static_analysis.highCount}
+        Report:   {config.outputDir}/01-static-analysis.md
+
+      Etapa 2 — QA (Quality Review)
+        Findings: {outputs.quality_review.findingsCount}
+        BLOCKER:  {outputs.quality_review.blockerCount}
+        HIGH:     {outputs.quality_review.highCount}
+        MEDIUM:   {outputs.quality_review.mediumCount}
+        LOW:      {outputs.quality_review.lowCount}
+        Report:   {config.outputDir}/02-quality-review.md
+
+      Etapa 3 — Dev (Auto-Fix & Backlog)
+        Fixed:        {outputs.auto_fix.fixedCount} (BLOCKER + HIGH)
+        Backlogged:   {outputs.auto_fix.backlogCount} (MEDIUM + LOW)
+        TypeCheck:    {outputs.auto_fix.typecheckPassed}
+        Status:       {outputs.auto_fix.status}
+        Report:       {config.outputDir}/03-fix-report.md
+        Tech Debt:    {config.backlogFile}
+
+      ============================================================
+
+    outputs:
+      - "{config.outputDir}/01-static-analysis.md"
+      - "{config.outputDir}/02-quality-review.md"
+      - "{config.outputDir}/03-fix-report.md"
+      - "{config.backlogFile}"
+
+  # ═══════════════════════════════════════════════════════════════════════════════════
+  #                              ERROR HANDLING
+  # ═══════════════════════════════════════════════════════════════════════════════════
+
+  error_handling:
+    missing_docs:
+      message: "Documento de referência não encontrado: {missingDoc}"
+      suggestion: "Verifique se docs/architecture.md e docs/prd.md existem no projeto"
+      action: halt
+
+    typecheck_failure:
+      message: "TypeCheck falhou após correção de {findingId}"
+      suggestion: "Reverter correção e tentar abordagem alternativa"
+      action: continue
+
+    agent_timeout:
+      message: "Agente {agent} excedeu timeout na fase {phase_name}"
+      suggestion: "Executar etapa individualmente: *quality-audit-{agent}"
+      action: halt
+
+  # ═══════════════════════════════════════════════════════════════════════════════════
+  #                              METADATA
+  # ═══════════════════════════════════════════════════════════════════════════════════
+
+  metadata:
+    project: "SOL SaaS"
+    created: "2026-02-26"
+    author: "@aios-master (Orion)"
+    tags:
+      - quality-audit
+      - static-analysis
+      - qa-review
+      - auto-fix
+      - tech-debt
+      - workflow
+    agents:
+      - architect
+      - qa
+      - dev
+    dependencies:
+      - docs/architecture.md
+      - docs/prd.md
+      - docs/stories/

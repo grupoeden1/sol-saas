@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
+import Logo from '@/components/Logo';
 
 export default function RegisterPage() {
   const router = useRouter();
@@ -16,14 +17,8 @@ export default function RegisterPage() {
     e.preventDefault();
     setError('');
 
-    // Validações client-side
     if (!email || !password || !confirmPassword) {
       setError('Todos os campos são obrigatórios');
-      return;
-    }
-
-    if (password !== confirmPassword) {
-      setError('As senhas não coincidem');
       return;
     }
 
@@ -32,14 +27,17 @@ export default function RegisterPage() {
       return;
     }
 
+    if (password !== confirmPassword) {
+      setError('As senhas não coincidem');
+      return;
+    }
+
     setLoading(true);
 
     try {
       const res = await fetch('/api/auth/register', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password }),
       });
 
@@ -50,7 +48,6 @@ export default function RegisterPage() {
         return;
       }
 
-      // Sucesso - redireciona para login
       router.push('/login?registered=true');
     } catch {
       setError('Erro ao conectar com o servidor');
@@ -60,90 +57,98 @@ export default function RegisterPage() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-background py-12 px-4 sm:px-6 lg:px-8">
-      <div className="max-w-md w-full space-y-8">
-        <div>
-          <div className="text-center mb-4">
-            <span className="text-6xl">☀️</span>
-          </div>
-          <h2 className="mt-6 text-center text-3xl font-extrabold text-foreground">
-            Criar conta no SOL
-          </h2>
-          <p className="mt-2 text-center text-sm text-foreground-muted">
-            Ou{' '}
-            <Link href="/login" className="font-medium text-solar-300 hover:text-solar-400 transition-colors">
-              faça login se já tem conta
-            </Link>
+    <div className="flex min-h-screen items-center justify-center bg-background px-4">
+      {/* Background glow */}
+      <div className="pointer-events-none fixed inset-0 overflow-hidden">
+        <div className="absolute left-1/2 top-1/3 h-96 w-96 -translate-x-1/2 rounded-full bg-solar-500/5 blur-3xl" />
+      </div>
+
+      <div className="relative w-full max-w-md">
+        {/* Logo */}
+        <div className="mb-8 flex flex-col items-center">
+          <Logo size={48} className="mb-4" />
+          <h1 className="text-2xl font-bold text-foreground">Criar conta no SOL</h1>
+          <p className="mt-1 text-sm text-foreground-muted">
+            Comece a criar criativos personalizados
           </p>
         </div>
-        <form className="mt-8 space-y-6" onSubmit={handleSubmit}>
-          <div className="rounded-md shadow-sm -space-y-px">
-            <div>
-              <label htmlFor="email" className="sr-only">
-                Email
-              </label>
-              <input
-                id="email"
-                name="email"
-                type="email"
-                autoComplete="email"
-                required
-                className="appearance-none rounded-none relative block w-full px-3 py-2 border border-solar-800/30 bg-background-secondary placeholder-foreground-muted text-foreground rounded-t-md focus:outline-none focus:ring-2 focus:ring-solar-500 focus:border-solar-500 focus:z-10 sm:text-sm"
-                placeholder="Email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-              />
-            </div>
-            <div>
-              <label htmlFor="password" className="sr-only">
-                Senha
-              </label>
-              <input
-                id="password"
-                name="password"
-                type="password"
-                autoComplete="new-password"
-                required
-                className="appearance-none rounded-none relative block w-full px-3 py-2 border border-solar-800/30 bg-background-secondary placeholder-foreground-muted text-foreground focus:outline-none focus:ring-2 focus:ring-solar-500 focus:border-solar-500 focus:z-10 sm:text-sm"
-                placeholder="Senha (mín. 8 caracteres)"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-              />
-            </div>
-            <div>
-              <label htmlFor="confirm-password" className="sr-only">
-                Confirmar senha
-              </label>
-              <input
-                id="confirm-password"
-                name="confirm-password"
-                type="password"
-                autoComplete="new-password"
-                required
-                className="appearance-none rounded-none relative block w-full px-3 py-2 border border-solar-800/30 bg-background-secondary placeholder-foreground-muted text-foreground rounded-b-md focus:outline-none focus:ring-2 focus:ring-solar-500 focus:border-solar-500 focus:z-10 sm:text-sm"
-                placeholder="Confirmar senha"
-                value={confirmPassword}
-                onChange={(e) => setConfirmPassword(e.target.value)}
-              />
-            </div>
+
+        {/* Error Alert */}
+        {error && (
+          <div className="mb-6 rounded-lg border border-red-500/50 bg-red-500/10 px-4 py-3 text-sm text-red-400">
+            {error}
+          </div>
+        )}
+
+        {/* Form Card */}
+        <form onSubmit={handleSubmit} className="rounded-2xl border border-solar-800/20 bg-background-secondary p-8">
+          <div className="mb-5">
+            <label htmlFor="email" className="mb-1.5 block text-sm font-medium text-foreground-muted">
+              Email
+            </label>
+            <input
+              id="email"
+              type="email"
+              autoComplete="email"
+              required
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="seu@email.com"
+              className="w-full rounded-lg border border-solar-800/30 bg-background px-4 py-2.5 text-foreground placeholder:text-foreground-muted/40 transition-all focus-solar focus:border-solar-500/50"
+            />
           </div>
 
-          {error && (
-            <div className="rounded-md bg-red-500/10 border border-red-500/50 p-4">
-              <div className="text-sm text-red-400">{error}</div>
-            </div>
-          )}
-
-          <div>
-            <button
-              type="submit"
-              disabled={loading}
-              className="group relative w-full flex justify-center py-2 px-4 border border-solar-500/50 text-sm font-medium rounded-md text-foreground bg-solar-500/10 hover:bg-solar-500/20 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-solar-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-            >
-              {loading ? 'Criando conta...' : 'Criar conta'}
-            </button>
+          <div className="mb-5">
+            <label htmlFor="password" className="mb-1.5 block text-sm font-medium text-foreground-muted">
+              Senha
+            </label>
+            <input
+              id="password"
+              type="password"
+              autoComplete="new-password"
+              required
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="Mínimo 8 caracteres"
+              className="w-full rounded-lg border border-solar-800/30 bg-background px-4 py-2.5 text-foreground placeholder:text-foreground-muted/40 transition-all focus-solar focus:border-solar-500/50"
+            />
           </div>
+
+          <div className="mb-6">
+            <label htmlFor="confirmPassword" className="mb-1.5 block text-sm font-medium text-foreground-muted">
+              Confirmar senha
+            </label>
+            <input
+              id="confirmPassword"
+              type="password"
+              autoComplete="new-password"
+              required
+              value={confirmPassword}
+              onChange={(e) => setConfirmPassword(e.target.value)}
+              placeholder="Repita a senha"
+              className="w-full rounded-lg border border-solar-800/30 bg-background px-4 py-2.5 text-foreground placeholder:text-foreground-muted/40 transition-all focus-solar focus:border-solar-500/50"
+            />
+            {password && confirmPassword && password !== confirmPassword && (
+              <p className="mt-1.5 text-xs text-red-400">As senhas não coincidem.</p>
+            )}
+          </div>
+
+          <button
+            type="submit"
+            disabled={loading}
+            className="w-full rounded-lg bg-solar-500 py-2.5 text-sm font-semibold text-background transition-all hover:bg-solar-600 hover:shadow-lg hover:shadow-solar-500/25 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {loading ? 'Criando conta...' : 'Criar conta'}
+          </button>
         </form>
+
+        {/* Login Link */}
+        <p className="mt-6 text-center text-sm text-foreground-muted">
+          Já tem conta?{' '}
+          <Link href="/login" className="font-medium text-solar-400 transition-all hover:text-solar-300">
+            Entrar
+          </Link>
+        </p>
       </div>
     </div>
   );

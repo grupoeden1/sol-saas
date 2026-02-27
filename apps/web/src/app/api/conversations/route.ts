@@ -28,7 +28,7 @@ export async function GET() {
 
     return Response.json(conversations);
   } catch (error) {
-    console.error('[Conversations API] Error:', error);
+    console.error('[Conversations API] Error:', error instanceof Error ? error.message : 'Unknown');
     return new Response('Internal server error', { status: 500 });
   }
 }

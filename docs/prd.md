@@ -22,6 +22,9 @@ O SOL é um SaaS conversacional com IA que resolve esse gargalo diretamente: via
 | Date       | Version | Description       | Author      |
 | ---------- | ------- | ----------------- | ----------- |
 | 2026-02-24 | 1.0     | Initial PRD draft | Morgan (PM) |
+| 2026-02-26 | 2.0     | Novo modelo de precificação: créditos como unidade monetária interna com custo variável por mensagem baseado em consumo real de tokens e cotação USD-BRL diária. Atualização de FR5, FR6, FR7, FR9, NFR4, Technical Assumptions, Stories 3.1 e 3.2. | Morgan (PM) |
+| 2026-02-26 | 2.1     | Alinhamento com refinamento do @architect: User.credits → balanceCents + minBalanceCents, CreditTransaction com inputTokens/outputTokens/costUsd, ExchangeRate com currency+date (@@unique), funções getExchangeRate/updateExchangeRate, header X-Balance-Remaining | Morgan (PM) |
+| 2026-02-27 | 3.0     | Adição do Epic 4 (Admin & Operações) com Story 4.1 (Painel Administrativo). Documenta funcionalidade /admin já implementada e define critérios de aceite para proteção de rota com role-based access control. | Morgan (PM) |
 
 ---
 
@@ -33,11 +36,11 @@ O SOL é um SaaS conversacional com IA que resolve esse gargalo diretamente: via
 - **FR2:** O sistema deve manter sessão autenticada via JWT em cookie httpOnly
 - **FR3:** O usuário autenticado deve ter acesso a um chat conversacional com IA para geração de ofertas e scripts de criativos
 - **FR4:** O chat deve enviar mensagens para a API da OpenAI (GPT-4o para outputs finais, GPT-4o-mini para iterações) e retornar respostas via streaming (Server-Sent Events)
-- **FR5:** O sistema deve descontar créditos do saldo do usuário a cada mensagem enviada ao chat
-- **FR6:** O usuário deve ser bloqueado de enviar novas mensagens quando seu saldo de créditos for zero
-- **FR7:** O usuário deve poder visualizar seu saldo atual de créditos no painel do usuário
+- **FR5:** O sistema deve descontar do saldo interno do usuário o custo real de cada mensagem, calculado com base nos tokens consumidos (input + output) pela API da OpenAI e na cotação USD-BRL do dia
+- **FR6:** O usuário deve ser bloqueado de enviar novas mensagens quando seu saldo interno for insuficiente para cobrir o custo estimado do input (system prompt + histórico + mensagem nova)
+- **FR7:** O usuário deve poder visualizar seu saldo em créditos e uma estimativa aproximada de scripts restantes no painel do usuário. O aluno NÃO visualiza custo por mensagem, cotação ou saldo em reais
 - **FR8:** O sistema deve permitir a compra de pacotes de créditos via Stripe Checkout (cartão e PIX)
-- **FR9:** O sistema deve processar webhooks do Stripe para confirmar pagamentos e creditar o saldo do usuário no banco de dados
+- **FR9:** O sistema deve processar webhooks do Stripe para confirmar pagamentos e creditar o saldo interno do usuário no banco de dados. Uma porcentagem configurável do valor pago (inicialmente 40%) é disponibilizada como saldo interno para consumo nas chamadas da OpenAI
 - **FR10:** O usuário deve ter acesso a um painel básico com: saldo de créditos, histórico de compras e histórico de conversas
 
 ### Non Functional
@@ -45,7 +48,7 @@ O SOL é um SaaS conversacional com IA que resolve esse gargalo diretamente: via
 - **NFR1:** A stack deve seguir arquitetura zero lock-in — Next.js 14 + Prisma + PostgreSQL + Docker, sem uso de Supabase, Firebase, Vercel (produção) ou qualquer BaaS
 - **NFR2:** Todo código deve ser TypeScript strict mode — sem `any`, sem `as unknown`
 - **NFR3:** O tempo de resposta da primeira palavra via streaming do chat não deve exceder 3 segundos em condições normais de rede
-- **NFR4:** A lógica de consumo de créditos deve ser implementada no banco (PostgreSQL + Prisma), nunca no Stripe
+- **NFR4:** A lógica de consumo de créditos deve ser implementada no banco (PostgreSQL + Prisma), nunca no Stripe. A cotação USD-BRL deve ser consultada diariamente via API externa (AwesomeAPI) e armazenada na tabela `exchange_rates` (com constraint `@@unique([currency, date])`). Cada `credit_transaction` deve registrar `exchange_rate`, `input_tokens`, `output_tokens`, `model_used` e `cost_usd` para auditoria completa
 - **NFR5:** Toda lógica de negócio (deducção de créditos, processamento de webhooks) deve ficar em API Routes do Next.js, nunca exposta no frontend
 - **NFR6:** Variáveis sensíveis (chaves OpenAI, Stripe, NextAuth secret) nunca devem aparecer no código — sempre em `.env`
 - **NFR7:** O sistema deve ser deployável via Docker Compose em VPS própria
@@ -70,7 +73,7 @@ Interface minimalista e focada na tarefa: o aluno entra, digita o contexto do se
 
 1. **Login / Cadastro** — tela simples com email + senha, sem OAuth no MVP
 2. **Chat Principal** — tela full-height com histórico de mensagens e input fixo no rodapé. Tela mais importante do produto.
-3. **Prompt inline de créditos insuficientes** — ao tentar enviar com saldo zero, aparece prompt inline no chat (não modal, não página separada) com CTA direto para compra de créditos
+3. **Prompt inline de créditos insuficientes** — ao tentar enviar com saldo insuficiente para cobrir o input estimado, aparece prompt inline no chat (não modal, não página separada) com CTA direto para compra de créditos
 4. **Painel do Usuário** — saldo de créditos, histórico de compras de créditos, histórico de conversas (lista)
 5. **Compra de Créditos** — listagem de pacotes disponíveis → redirect para Stripe Checkout
 6. **Sucesso/Erro de Pagamento** — páginas de retorno após o checkout do Stripe
@@ -121,11 +124,14 @@ packages/db       → Prisma schema, client e migrations
 ### Additional Technical Assumptions
 
 - **Autenticação:** NextAuth.js v5, Credentials Provider (email + senha), JWT em cookie httpOnly. Sem OAuth, sem magic links no MVP.
-- **Pagamentos:** Stripe Checkout + Webhooks. PIX + cartão. Lógica de créditos 100% no PostgreSQL (`credit_transactions`), nunca no Stripe.
-- **IA:** OpenAI GPT-4o para outputs finais, GPT-4o-mini para iterações intermediárias. Streaming via Server-Sent Events (não WebSockets).
+- **Pagamentos:** Stripe Checkout + Webhooks. PIX + cartão. Lógica de créditos 100% no PostgreSQL (`credit_transactions`), nunca no Stripe. Webhook credita porcentagem configurável do valor pago (inicialmente 40%) como saldo interno em centavos de real.
+- **IA:** OpenAI GPT-4o para outputs finais, GPT-4o-mini para iterações intermediárias. Streaming via Server-Sent Events (não WebSockets). Contagem precisa de tokens via `tiktoken` para cálculo de custo real por mensagem.
+- **Cotação cambial:** Cotação USD-BRL consultada diariamente via AwesomeAPI (`https://economia.awesomeapi.com.br/json/last/USD-BRL`) e armazenada em tabela `exchange_rates`. Fallback: última cotação salva; se não existir, usa variável de ambiente `FALLBACK_USD_BRL_RATE`.
+- **Modelo de custo por mensagem:** `costUsd = (inputTokens × preço_input_modelo + outputTokens × preço_output_modelo)`. Conversão: `costCents = Math.ceil(costUsd × exchangeRate × 100)`. Cada transação registra `exchangeRate`, `inputTokens`, `outputTokens`, `modelUsed` e `costUsd` para rastreabilidade completa.
+- **Proteções:** Limite de saldo negativo per-user via `minBalanceCents` (default -200 = -R$2,00). Se o output empurrar `balanceCents` para negativo até `minBalanceCents`, registra normalmente e bloqueia a próxima mensagem.
 - **Infraestrutura:** VPS própria, Docker Compose, GitHub Actions para CI/CD. Proibido: Vercel produção, Railway, Render.
 - **Idioma do código:** TypeScript strict mode. Sem `any`. Sem `as unknown`.
-- **Variáveis sensíveis:** sempre em `.env`, nunca hardcodadas.
+- **Variáveis sensíveis:** sempre em `.env`, nunca hardcodadas. Inclui: `FALLBACK_USD_BRL_RATE`, `CREDIT_MARGIN_PERCENT` (porcentagem do valor pago disponibilizada como saldo).
 
 ---
 
@@ -136,6 +142,7 @@ packages/db       → Prisma schema, client e migrations
 | 1    | Foundation & Auth     | Estabelecer infraestrutura (Turborepo, Docker, PostgreSQL, CI/CD) e autenticação completa (NextAuth.js v5). Entrega: produto deployado com login funcional.                   |
 | 2    | Chat Core com IA      | Implementar chat com streaming OpenAI, persistência de histórico e estado inline de créditos insuficientes. Entrega: aluno pode conversar com a IA e receber ofertas ao vivo. |
 | 3    | Créditos & Pagamentos | Implementar sistema de créditos, Stripe Checkout + PIX/cartão, webhooks e painel do usuário. Entrega: SOL monetizado, ciclo de valor fechado.                                 |
+| 4    | Admin & Operações     | Ferramentas de administração e operação do SOL: painel admin com visibilidade de uso, controle de usuários e monitoramento de tokens/custos. Entrega: operador tem controle total do produto. |
 
 ---
 
@@ -166,7 +173,7 @@ so that authentication can be implemented against a properly structured database
 
 **Acceptance Criteria:**
 
-1. Migration Prisma cria tabela `users` com campos: `id`, `email` (unique), `password_hash`, `credits` (int, default 0), `created_at`, `updated_at`
+1. Migration Prisma cria tabela `users` com campos: `id`, `email` (unique), `password_hash`, `balance_cents` (int, default 0 — saldo interno em centavos de real), `min_balance_cents` (int, default -200 — limite de saldo negativo), `created_at`, `updated_at`
 2. Migration cria tabela `sessions` compatível com NextAuth.js v5
 3. `prisma generate` não produz erros e o Prisma Client tipado está disponível em `packages/db`
 4. Seed script cria um usuário de teste para desenvolvimento local
@@ -266,17 +273,17 @@ so that the response feels immediate and alive.
 
 ### Story 2.4 — Estado Inline de Créditos Insuficientes
 
-As a student with no credits,
+As a student with insufficient credits,
 I want to see a clear inline prompt when I try to send a message,
 so that I know exactly what to do to continue using SOL.
 
 **Acceptance Criteria:**
 
-1. Ao tentar enviar mensagem com saldo zero, `POST /api/chat` retorna `402 Payment Required`
-2. Frontend exibe prompt inline no chat (não modal, não nova página): "Você ficou sem créditos. [Comprar créditos →]"
-3. Link "Comprar créditos" redireciona para `/credits`
-4. Badge de créditos no header atualiza em tempo real após cada mensagem enviada com sucesso (via header `X-Credits-Remaining`)
-5. Input do chat é desabilitado visualmente enquanto o saldo é zero
+1. Ao tentar enviar mensagem com saldo insuficiente para cobrir o custo estimado do input, `POST /api/chat` retorna `402 Payment Required`
+2. Frontend exibe prompt inline no chat (não modal, não nova página): "Seus créditos são insuficientes. [Comprar créditos →]"
+3. Link "Comprar créditos" redireciona para `/credits/buy`
+4. Badge de créditos no header atualiza em tempo real após cada mensagem enviada com sucesso (via header `X-Balance-Remaining`)
+5. Input do chat é desabilitado visualmente enquanto `balanceCents` é insuficiente
 
 ---
 
@@ -284,32 +291,40 @@ so that I know exactly what to do to continue using SOL.
 
 > Implementar o sistema de créditos (deducção por uso, saldo em tempo real) e a integração completa com Stripe — pacotes de créditos, Checkout, PIX/cartão, webhooks e painel do usuário. Ao final deste epic, o SOL está monetizado e o ciclo completo de valor está fechado.
 
-### Story 3.1 — Database Schema: Credits & Transactions
+### Story 3.1 — Database Schema: Credits, Transactions & Exchange Rates
 
 As a developer,
-I want the credit and transaction schema,
-so that all credit movements are auditable and consistent.
+I want the credit, transaction and exchange rate schema,
+so that all credit movements are auditable, cost-trackable and consistent.
 
 **Acceptance Criteria:**
 
-1. Migration Prisma cria tabela `credit_transactions` com: `id`, `user_id` (FK), `amount` (int, positivo = crédito, negativo = débito), `type` (enum: `purchase` | `consumption`), `description`, `stripe_payment_id` (nullable, unique), `created_at`
-2. Coluna `credits` na tabela `users` representa saldo atual — atualizada via transação atômica junto com insert em `credit_transactions`
-3. Funções utilitárias em `packages/db`: `deductCredits(userId, amount)` e `addCredits(userId, amount, stripePaymentId)` com rollback em caso de saldo insuficiente
-4. Saldo nunca vai abaixo de zero — constraint no banco + validação na função
+1. Migration Prisma cria tabela `credit_transactions` com: `id`, `user_id` (FK), `amount` (int, em centavos de real — positivo = crédito, negativo = débito), `type` (enum: `purchase` | `consumption`), `description`, `stripe_payment_id` (nullable, unique), `exchange_rate` (Decimal, nullable — cotação USD-BRL no momento da transação), `input_tokens` (int, nullable — tokens de input consumidos), `output_tokens` (int, nullable — tokens de output consumidos), `model_used` (string, nullable — modelo OpenAI utilizado), `cost_usd` (Decimal, nullable — custo em dólar da chamada OpenAI), `created_at`
+2. Migration Prisma cria tabela `exchange_rates` com: `id`, `currency` (string — ex: "USD-BRL"), `rate` (Decimal — cotação), `date` (DateTime @db.Date — data sem horário), `created_at`. Constraint: `@@unique([currency, date])`
+3. Coluna `balance_cents` na tabela `users` representa saldo interno atual em centavos de real — atualizada via transação atômica junto com insert em `credit_transactions`
+4. Funções utilitárias em `packages/db`: `deductCredits(userId, costCents, metadata: { exchangeRate, inputTokens, outputTokens, modelUsed, costUsd })` e `addCredits(userId, amountCents, stripePaymentId, exchangeRate?)` com rollback em caso de saldo insuficiente (respeitando `minBalanceCents` do usuário)
+5. Limite de saldo negativo per-user via `min_balance_cents` (default -200 = -R$2,00) — saldo pode ficar levemente negativo se o output da IA empurrar além de zero, mas não abaixo de `minBalanceCents`
+6. Funções utilitárias `getExchangeRate(currency)` (retorna cotação do dia, fallback para última disponível ou `FALLBACK_USD_BRL_RATE`) e `updateExchangeRate(currency, rate)` (upsert na tabela para a data de hoje)
 
-### Story 3.2 — Deducção de Crédito no Chat
+### Story 3.2 — Deducção de Crédito Baseada em Tokens no Chat
 
 As a product owner,
-I want credits to be deducted automatically when a student sends a message,
-so that usage is metered correctly.
+I want credits to be deducted based on real token consumption and daily exchange rate,
+so that usage is metered accurately and sustainably.
 
 **Acceptance Criteria:**
 
-1. `POST /api/chat` verifica saldo do usuário **antes** de chamar a OpenAI — retorna `402` se saldo = 0
-2. Após resposta completa do stream, deduz 1 crédito via `deductCredits()` em transação atômica
-3. Se a chamada OpenAI falhar, nenhum crédito é deductado
-4. Header `X-Credits-Remaining` retornado em toda resposta de chat — frontend atualiza badge sem re-fetch
-5. Logs de consumo registrados em `credit_transactions` com `type: consumption`
+1. `POST /api/chat` conta tokens de input com precisão (system prompt + histórico + mensagem nova) usando `tiktoken` **antes** de chamar a OpenAI
+2. Backend busca cotação do dia via `getExchangeRate("USD-BRL")`
+3. Calcula custo estimado do input: `costUsd = inputTokens × preço_input_modelo`, converte para centavos: `costCents = Math.ceil(costUsd × exchangeRate × 100)`
+4. Verifica se `balanceCents >= costCents` (ou se `balanceCents - costCents >= minBalanceCents`). Se insuficiente, retorna `402 Payment Required`
+5. Se o saldo é suficiente, inicia stream OpenAI normalmente
+6. Ao completar o stream, calcula custo real total: `costUsd = (inputTokens × preço_input + outputTokens × preço_output)`, converte para centavos de real
+7. Deduz via `deductCredits(userId, costCents, { exchangeRate, inputTokens, outputTokens, modelUsed, costUsd })` em transação atômica
+8. Se a chamada OpenAI falhar antes de produzir output, nenhum crédito é deduzido
+9. Se o custo do output empurrar `balanceCents` para negativo (até `minBalanceCents`), registra normalmente e bloqueia a próxima mensagem
+10. Header `X-Balance-Remaining` retornado em toda resposta de chat — frontend atualiza badge sem re-fetch
+11. Logs de consumo registrados em `credit_transactions` com `type: consumption` e metadados completos (`exchangeRate`, `inputTokens`, `outputTokens`, `modelUsed`, `costUsd`)
 
 ### Story 3.3 — Pacotes de Créditos & Stripe Checkout
 
@@ -329,16 +344,17 @@ so that I can buy credits easily.
 ### Story 3.4 — Stripe Webhook: Processamento de Pagamentos
 
 As a product owner,
-I want successful payments to automatically add credits to the student's account,
+I want successful payments to automatically add internal balance to the student's account,
 so that the purchase flow is seamless and reliable.
 
 **Acceptance Criteria:**
 
 1. `POST /api/webhooks/stripe` valida assinatura do webhook com `STRIPE_WEBHOOK_SECRET`
-2. Evento `checkout.session.completed` dispara `addCredits(userId, amount, stripePaymentId)` em transação atômica
-3. Idempotência garantida — `stripe_payment_id` tem constraint unique, duplo disparo não duplica créditos
-4. Endpoint retorna `200` rapidamente (processamento síncrono, sem filas no MVP)
-5. Falhas logadas com `stripe_payment_id` para reprocessamento manual se necessário
+2. Evento `checkout.session.completed` calcula saldo interno a creditar: `valor_pago_centavos × (CREDIT_MARGIN_PERCENT / 100)` (ex: pacote de R$69,90 com margem de 40% = R$27,96 de saldo interno = 2796 centavos)
+3. Busca cotação atual via `getExchangeRate("USD-BRL")` para registro e dispara `addCredits(userId, amountCents, stripePaymentId, exchangeRate)` em transação atômica
+4. Idempotência garantida — `stripe_payment_id` tem constraint unique, duplo disparo não duplica créditos
+5. Endpoint retorna `200` rapidamente (processamento síncrono, sem filas no MVP)
+6. Falhas logadas com `stripe_payment_id` para reprocessamento manual se necessário
 
 ### Story 3.5 — Painel do Usuário
 
@@ -352,6 +368,64 @@ so that I can track my usage and manage my account.
 2. Dados carregados via Server Components do Next.js 14
 3. Link "Comprar mais créditos" em destaque quando saldo < 10
 4. Layout consistente com o shell definido no Epic 1
+
+### Story 3.6 — Refatoração do Sistema de Precificação
+
+As a product owner,
+I want the credit system to deduct costs based on real token consumption and daily USD-BRL exchange rate,
+so that the business margin is protected and usage is metered accurately.
+
+**Acceptance Criteria:**
+
+1. Mensagem enviada deduz custo real baseado em tokens consumidos e cotação do dia
+2. Saldo insuficiente para input bloqueia envio com prompt inline (`402`)
+3. Saldo pode ficar negativo até `minBalanceCents` (-R$2,00) após output; saldo negativo bloqueia próxima mensagem
+4. Toda `CreditTransaction` registra `exchangeRate`, `inputTokens`, `outputTokens`, `modelUsed`, `costUsd`
+5. Cotação USD-BRL buscada 1x/dia via AwesomeAPI, armazenada em `exchange_rates`, fallback em 3 níveis
+6. Webhook credita `valor_pago × CREDIT_MARGIN_PERCENT%` em centavos no `balanceCents`
+7. Frontend exibe saldo em "créditos" (não reais), atualiza via `X-Balance-Remaining` e evento `done`
+8. `tiktoken` conta tokens com precisão; custo: `Math.ceil(costUsd × exchangeRate × 100)`
+9. Nenhuma regressão em auth, chat UI, streaming SSE, Stripe Checkout
+10. Testes unitários e de integração passam
+
+**Full spec:** [docs/stories/epic-3/story-3.6-pricing-refactoring.md](stories/epic-3/story-3.6-pricing-refactoring.md)
+
+---
+
+## Epic 4: Admin & Operações
+
+> Ferramentas de administração e operação do SOL: painel administrativo com visibilidade completa de uso por usuário, controle de tokens consumidos e monitoramento do produto. Ao final deste epic, o operador do SOL tem controle e visibilidade total da operação.
+
+### Story 4.1 — Painel Administrativo
+
+As a SOL administrator,
+I want an admin dashboard at /admin to monitor token usage per user and control the operation,
+so that I have full visibility into product usage and can manage the platform effectively.
+
+**Status:** Parcialmente implementado — interface criada em `/admin`, proteção de rota pendente.
+
+**Já implementado:**
+
+- Página `/admin` com dados de uso por usuário
+- Visualização de tokens consumidos por usuário
+
+**Pendente:**
+
+- Proteção de rota com verificação de role admin no middleware
+- Campo `role` no modelo `User` do Prisma com enum `Role` (`USER` | `ADMIN`)
+- Apenas usuários com `role: ADMIN` conseguem acessar `/admin`
+- Qualquer acesso não autorizado redireciona para `/login`
+
+**Acceptance Criteria:**
+
+1. Enum `Role` (`USER`, `ADMIN`) adicionado ao schema Prisma e campo `role` no modelo `User` com default `USER`
+2. Migration Prisma aplica sem erros e não afeta usuários existentes (default `USER`)
+3. Middleware bloqueia acesso a `/admin` para qualquer usuário sem `role: ADMIN`, redirecionando para `/login`
+4. Sessão JWT inclui `role` do usuário para verificação sem query extra ao banco
+5. Seed script cria um usuário admin padrão para desenvolvimento local (ex: `admin@sol.com`)
+6. Em produção, promoção a admin feita diretamente no banco via query segura: `UPDATE users SET role = 'ADMIN' WHERE email = '...'`
+7. Página `/admin` exibe: lista de usuários com saldo, tokens consumidos e última atividade
+8. Nenhuma regressão em auth, chat ou fluxo de créditos
 
 ---
 

@@ -41,15 +41,15 @@ export default function BuyButton({ packageId }: BuyButtonProps) {
       <button
         onClick={handleBuy}
         disabled={loading}
-        className="w-full px-6 py-3 bg-solar-500/10 border border-solar-500/50 text-solar-300 rounded-lg font-semibold hover:bg-solar-500/20 disabled:opacity-60 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-2"
+        className="w-full rounded-lg bg-solar-500 py-2.5 text-sm font-semibold text-background transition-all hover:bg-solar-600 hover:shadow-lg hover:shadow-solar-500/25 disabled:cursor-not-allowed disabled:opacity-50 flex items-center justify-center gap-2"
       >
         {loading ? (
           <>
-            <span className="w-4 h-4 border-2 border-solar-300/30 border-t-solar-300 rounded-full animate-spin" />
+            <span className="w-4 h-4 border-2 border-background/30 border-t-background rounded-full animate-spin" />
             <span>Aguarde...</span>
           </>
         ) : (
-          'Comprar →'
+          'Comprar'
         )}
       </button>
       {error && (
