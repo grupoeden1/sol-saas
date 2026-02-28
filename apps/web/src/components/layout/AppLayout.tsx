@@ -28,19 +28,14 @@ export default async function AppLayout({ children }: { children: React.ReactNod
 
         {session?.user?.email && (
           <header className="fixed left-0 right-0 top-4 z-50 mx-auto flex h-14 w-[calc(100%-2rem)] max-w-5xl items-center justify-between rounded-full border border-solar-800/30 bg-background-secondary/70 px-4 backdrop-blur-xl md:px-6">
-            {/* Left spacer */}
-            <div className="flex-1" />
-
-            {/* Centered Logo */}
-            <div className="absolute left-1/2 top-1/2 flex -translate-x-1/2 -translate-y-1/2 items-center justify-center">
-              <Link href="/dashboard" className="flex items-center gap-2 text-solar-300 transition-all hover:opacity-80">
-                <Logo size={32} />
-                <LogoWithText height={18} className="hidden sm:block" />
-              </Link>
-            </div>
+            {/* Logo — always visible on the left */}
+            <Link href="/dashboard" className="flex shrink-0 items-center gap-2 text-solar-300 transition-all hover:opacity-80">
+              <Logo size={28} />
+              <LogoWithText height={16} className="hidden sm:block" />
+            </Link>
 
             {/* Right actions */}
-            <div className="flex flex-1 items-center justify-end gap-2 sm:gap-3">
+            <div className="flex items-center gap-2 sm:gap-3">
               <CreditsBadge />
               <Link
                 href="/credits/buy"

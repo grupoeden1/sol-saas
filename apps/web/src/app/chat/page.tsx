@@ -64,7 +64,7 @@ function ConversationSidebar({
       )}
 
       <aside
-        className={`fixed bottom-4 left-4 top-24 z-40 flex w-72 flex-col overflow-hidden rounded-2xl border border-solar-800/20 bg-background-secondary/80 backdrop-blur-xl transition-transform duration-300 md:relative md:top-0 md:h-[calc(100vh-7rem)] md:translate-x-0 ${
+        className={`fixed bottom-4 left-4 top-24 z-40 flex w-72 flex-col overflow-hidden rounded-2xl border border-solar-800/20 bg-background-secondary/80 backdrop-blur-xl transition-transform duration-300 md:relative md:top-0 md:h-[calc(100dvh-7rem)] md:translate-x-0 ${
           isOpen ? 'translate-x-0' : '-translate-x-[120%]'
         }`}
         role="listbox"
@@ -711,7 +711,7 @@ export default function ChatPage() {
   }, [currentConversationId, loading, noCredits, updateCredits]);
 
   return (
-    <div className="mx-auto flex h-[calc(100vh-6rem)] w-[calc(100%-2rem)] max-w-5xl overflow-hidden md:gap-6">
+    <div className="mx-auto flex h-[calc(100dvh-6rem)] w-[calc(100%-2rem)] max-w-5xl overflow-hidden md:gap-6">
       {/* Desktop Sidebar */}
       <div className="hidden shrink-0 md:block md:w-72">
         <ConversationSidebar
