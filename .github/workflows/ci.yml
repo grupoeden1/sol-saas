@@ -44,8 +44,8 @@ jobs:
       - name: Install dependencies
         run: pnpm install
 
-      - name: Generate Prisma Client
-        run: pnpm db:migrate --name init_ci
+      - name: Apply migrations & generate Prisma Client
+        run: pnpm run db:deploy
         env:
           DATABASE_URL: postgresql://sol_user:sol_password_test@localhost:5432/sol_db_test
 
