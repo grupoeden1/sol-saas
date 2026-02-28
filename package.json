@@ -13,10 +13,11 @@
     "lint": "turbo run lint",
     "typecheck": "turbo run typecheck",
     "test": "turbo run test",
-    "db:migrate": "pnpm -C packages/db exec prisma migrate dev",
-    "db:studio": "pnpm -C packages/db exec prisma studio",
-    "db:push": "pnpm -C packages/db exec prisma db push",
-    "db:generate": "pnpm -C packages/db exec prisma generate"
+    "db:migrate": "pnpm -C packages/db run db:migrate",
+    "db:deploy": "pnpm -C packages/db run db:deploy",
+    "db:studio": "pnpm -C packages/db run db:studio",
+    "db:push": "pnpm -C packages/db run db:push",
+    "db:generate": "pnpm -C packages/db run db:generate"
   },
   "devDependencies": {
     "dotenv-cli": "^11.0.0",

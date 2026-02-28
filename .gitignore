@@ -40,3 +40,7 @@ prisma/migrations/*_migration_lock.toml
 
 # Docker
 postgres_data/
+
+# Design reference & brand assets (local only — not part of the monorepo)
+frontend/
+Id Visual/
