@@ -1,26 +1,37 @@
 import { redirect } from 'next/navigation';
 import Link from 'next/link';
 import { auth } from '@/lib/auth';
+import { prisma } from '@sol/db';
 import Logo from '@/components/Logo';
 import LogoWithText from '@/components/LogoWithText';
 import LogoutButton from '@/components/LogoutButton';
+import MetricCard from '@/components/admin/MetricCard';
+import UsersTable from '@/components/admin/UsersTable';
 
-// -- Mock Data for Admin --
-const metrics = [
-  { label: 'Total de Usuários', value: '1,248', increase: '+12% esse mês' },
-  { label: 'Receita Mensal', value: 'R$ 14.520', increase: '+8% esse mês' },
-  { label: 'Scripts Gerados', value: '45,820', increase: '+24% esse mês' },
-];
+const PAGE_SIZE = 20;
 
-const users = [
-  { id: 1, name: 'João Silva', email: 'joao@example.com', balanceCents: 150, plan: 'Pro' },
-  { id: 2, name: 'Maria Santos', email: 'maria@example.com', balanceCents: 42, plan: 'Starter' },
-  { id: 3, name: 'Pedro Almeida', email: 'pedro@example.com', balanceCents: 750, plan: 'Max' },
-  { id: 4, name: 'Ana Costa', email: 'ana@example.com', balanceCents: 0, plan: 'Free' },
-  { id: 5, name: 'Lucas Ferreira', email: 'lucas@example.com', balanceCents: 210, plan: 'Pro' },
-];
+interface AdminPageProps {
+  searchParams: Promise<{ page?: string }>;
+}
 
-export default async function AdminDashboardPage() {
+function formatRevenue(cents: number): string {
+  return `R$ ${(cents / 100).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`;
+}
+
+function formatTokensShort(tokens: number): string {
+  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M`;
+  if (tokens >= 1_000) return `${(tokens / 1_000).toFixed(1)}k`;
+  return String(tokens);
+}
+
+function calcChange(current: number, previous: number): string | null {
+  if (previous === 0) return current > 0 ? '+100% este mês' : null;
+  const pct = Math.round(((current - previous) / previous) * 100);
+  const sign = pct >= 0 ? '+' : '';
+  return `${sign}${pct}% este mês`;
+}
+
+export default async function AdminDashboardPage({ searchParams }: AdminPageProps) {
   const session = await auth();
 
   if (!session?.user?.email) {
@@ -31,12 +42,154 @@ export default async function AdminDashboardPage() {
     redirect('/dashboard');
   }
 
+  const resolvedParams = await searchParams;
+  const page = Math.max(1, Number(resolvedParams?.page) || 1);
+
+  // Date boundaries for month-over-month metrics
+  const now = new Date();
+  const firstDayThisMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+  const firstDayLastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+
+  // All metrics in parallel
+  const [
+    totalUsers,
+    usersThisMonth,
+    usersLastMonth,
+    revenueAll,
+    revenueThisMonth,
+    revenueLastMonth,
+    tokensAll,
+    tokensThisMonth,
+    tokensLastMonth,
+    userCount,
+    usersPage,
+  ] = await Promise.all([
+    // Total users
+    prisma.user.count(),
+    // Users this month
+    prisma.user.count({ where: { createdAt: { gte: firstDayThisMonth } } }),
+    // Users last month
+    prisma.user.count({
+      where: { createdAt: { gte: firstDayLastMonth, lt: firstDayThisMonth } },
+    }),
+    // Total revenue (purchases)
+    prisma.creditTransaction.aggregate({
+      where: { type: 'purchase' },
+      _sum: { amount: true },
+    }),
+    // Revenue this month
+    prisma.creditTransaction.aggregate({
+      where: { type: 'purchase', createdAt: { gte: firstDayThisMonth } },
+      _sum: { amount: true },
+    }),
+    // Revenue last month
+    prisma.creditTransaction.aggregate({
+      where: {
+        type: 'purchase',
+        createdAt: { gte: firstDayLastMonth, lt: firstDayThisMonth },
+      },
+      _sum: { amount: true },
+    }),
+    // Total tokens consumed
+    prisma.creditTransaction.aggregate({
+      where: { type: 'consumption' },
+      _sum: { inputTokens: true, outputTokens: true },
+    }),
+    // Tokens this month
+    prisma.creditTransaction.aggregate({
+      where: { type: 'consumption', createdAt: { gte: firstDayThisMonth } },
+      _sum: { inputTokens: true, outputTokens: true },
+    }),
+    // Tokens last month
+    prisma.creditTransaction.aggregate({
+      where: {
+        type: 'consumption',
+        createdAt: { gte: firstDayLastMonth, lt: firstDayThisMonth },
+      },
+      _sum: { inputTokens: true, outputTokens: true },
+    }),
+    // Users count for pagination
+    prisma.user.count(),
+    // Users page with conversation count
+    prisma.user.findMany({
+      take: PAGE_SIZE,
+      skip: (page - 1) * PAGE_SIZE,
+      orderBy: { createdAt: 'desc' },
+      select: {
+        id: true,
+        email: true,
+        role: true,
+        balanceCents: true,
+        createdAt: true,
+        _count: { select: { conversations: true } },
+      },
+    }),
+  ]);
+
+  // Aggregate tokens per user (for users on this page)
+  const userIds = usersPage.map((u) => u.id);
+  const tokensByUser = userIds.length > 0
+    ? await prisma.creditTransaction.groupBy({
+        by: ['userId'],
+        where: { userId: { in: userIds }, type: 'consumption' },
+        _sum: { inputTokens: true, outputTokens: true },
+      })
+    : [];
+
+  const tokenMap = new Map(
+    tokensByUser.map((t) => [
+      t.userId,
+      (t._sum.inputTokens ?? 0) + (t._sum.outputTokens ?? 0),
+    ])
+  );
+
+  // Build user rows
+  const userRows = usersPage.map((u) => ({
+    id: u.id,
+    email: u.email,
+    role: u.role as 'USER' | 'ADMIN',
+    balanceCents: u.balanceCents,
+    totalTokens: tokenMap.get(u.id) ?? 0,
+    conversationCount: u._count.conversations,
+    createdAt: u.createdAt,
+  }));
+
+  const totalPages = Math.ceil(userCount / PAGE_SIZE);
+
+  // Metrics values
+  const totalRevenueCents = revenueAll._sum.amount ?? 0;
+  const revenueThisMonthCents = revenueThisMonth._sum.amount ?? 0;
+  const revenueLastMonthCents = revenueLastMonth._sum.amount ?? 0;
+
+  const totalTokensConsumed =
+    (tokensAll._sum.inputTokens ?? 0) + (tokensAll._sum.outputTokens ?? 0);
+  const tokensThisMonthTotal =
+    (tokensThisMonth._sum.inputTokens ?? 0) + (tokensThisMonth._sum.outputTokens ?? 0);
+  const tokensLastMonthTotal =
+    (tokensLastMonth._sum.inputTokens ?? 0) + (tokensLastMonth._sum.outputTokens ?? 0);
+
+  const metrics = [
+    {
+      label: 'Total de Usuários',
+      value: String(totalUsers),
+      change: calcChange(usersThisMonth, usersLastMonth),
+    },
+    {
+      label: 'Receita Total',
+      value: formatRevenue(totalRevenueCents),
+      change: calcChange(revenueThisMonthCents, revenueLastMonthCents),
+    },
+    {
+      label: 'Tokens Consumidos',
+      value: formatTokensShort(totalTokensConsumed),
+      change: calcChange(tokensThisMonthTotal, tokensLastMonthTotal),
+    },
+  ];
+
   return (
     <div className="relative flex min-h-screen flex-col overflow-hidden bg-gradient-to-b from-[#1a1a1a] to-[#0a0a0a]">
-      {/* Subtle Glow Behind */}
-      <div className="absolute inset-0 z-0 pointer-events-none opacity-20 bg-[radial-gradient(circle_at_top_left,_var(--tw-gradient-stops))] from-solar-500/30 via-transparent to-transparent" />
+      <div className="pointer-events-none absolute inset-0 z-0 opacity-20 bg-[radial-gradient(circle_at_top_left,_var(--tw-gradient-stops))] from-solar-500/30 via-transparent to-transparent" />
 
-      {/* Floating Admin Header */}
       <header className="fixed left-0 right-0 top-4 z-50 mx-auto flex h-14 w-[calc(100%-2rem)] max-w-6xl items-center justify-between rounded-full border border-solar-800/30 bg-background-secondary/70 px-4 backdrop-blur-xl md:px-6">
         <div className="flex items-center gap-4">
           <Link href="/dashboard" className="flex items-center gap-2 text-solar-300 transition-all hover:opacity-80">
@@ -52,80 +205,24 @@ export default async function AdminDashboardPage() {
         </div>
       </header>
 
-      {/* Main Content */}
       <main className="relative z-10 flex-1 px-4 pb-12 pt-28 md:px-8">
         <div className="mx-auto max-w-6xl">
           <div className="mb-8 flex items-end justify-between">
             <div>
               <h1 className="text-3xl font-bold text-foreground">Painel de Controle</h1>
-              <p className="mt-1 text-sm text-foreground-muted">Gerencie usuários, planos e métricas do SOL.</p>
+              <p className="mt-1 text-sm text-foreground-muted">
+                {totalUsers} usuário{totalUsers !== 1 ? 's' : ''} cadastrado{totalUsers !== 1 ? 's' : ''}
+              </p>
             </div>
           </div>
 
-          {/* Metrics Grid */}
           <div className="mb-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {metrics.map((metric, i) => (
-              <div
-                key={i}
-                className="rounded-2xl border border-solar-800/20 bg-background-secondary/40 p-5 backdrop-blur-md transition-all hover:border-solar-500/30 hover:bg-background-secondary/60"
-              >
-                <p className="text-sm font-medium text-foreground-muted">{metric.label}</p>
-                <p className="mt-2 text-3xl font-bold text-solar-300">{metric.value}</p>
-                <p className="mt-2 text-xs text-green-400">{metric.increase}</p>
-              </div>
+              <MetricCard key={i} label={metric.label} value={metric.value} change={metric.change} />
             ))}
           </div>
 
-          {/* Users Table Area */}
-          <div className="overflow-hidden rounded-2xl border border-solar-800/20 bg-background-secondary/40 backdrop-blur-md">
-            <div className="border-b border-solar-800/20 px-6 py-4">
-              <h2 className="text-lg font-semibold text-foreground">Usuários Recentes</h2>
-            </div>
-
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-sm">
-                <thead className="bg-solar-500/5 text-xs uppercase text-foreground-muted">
-                  <tr>
-                    <th scope="col" className="px-6 py-4 font-semibold">Nome</th>
-                    <th scope="col" className="px-6 py-4 font-semibold">Email</th>
-                    <th scope="col" className="px-6 py-4 font-semibold">Plano</th>
-                    <th scope="col" className="px-6 py-4 font-semibold">Créditos</th>
-                    <th scope="col" className="px-6 py-4 text-right font-semibold">Ações</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-solar-800/20">
-                  {users.map((user) => (
-                    <tr key={user.id} className="transition-all hover:bg-solar-500/5">
-                      <td className="px-6 py-4 font-medium text-foreground">{user.name}</td>
-                      <td className="px-6 py-4 text-foreground-muted">{user.email}</td>
-                      <td className="px-6 py-4">
-                        <span className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium ${
-                          user.plan === 'Free' ? 'bg-foreground-muted/10 text-foreground-muted' : 'bg-solar-500/20 text-solar-300'
-                        }`}>
-                          {user.plan}
-                        </span>
-                      </td>
-                      <td className="px-6 py-4 text-foreground">{user.balanceCents}</td>
-                      <td className="px-6 py-4 text-right">
-                        <button className="font-medium text-solar-400 hover:text-solar-300 hover:underline">
-                          Editar
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-
-            {/* Pagination Placeholder */}
-            <div className="border-t border-solar-800/20 px-6 py-4 flex items-center justify-between">
-              <span className="text-xs text-foreground-muted">Mostrando 1 a 5 de 1,248 resultados</span>
-              <div className="flex items-center gap-2 text-sm">
-                <button className="rounded bg-background-secondary px-3 py-1.5 text-foreground-muted hover:text-foreground disabled:opacity-50" disabled>Anterior</button>
-                <button className="rounded bg-solar-500/10 px-3 py-1.5 text-solar-300 hover:bg-solar-500/20">Próxima</button>
-              </div>
-            </div>
-          </div>
+          <UsersTable users={userRows} currentPage={page} totalPages={totalPages} />
         </div>
       </main>
     </div>

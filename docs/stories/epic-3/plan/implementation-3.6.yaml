@@ -1,22 +1,38 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # Story 3.6 — Refatoração do Sistema de Precificação
-# Implementation Plan
+# Implementation Plan v2 (Delta-focused)
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# CONTEXTO: A maior parte do código de precificação já foi implementada
+# (Stories 3.1, 3.2, 3.4, 3.5, 3.6v1). Este plano captura apenas o DELTA
+# entre o código atual e a spec alvo do PRD v4.0 / Architecture v3.0.
+#
+# Mudanças-chave:
+#   1. Remover conceito minBalanceCents (saldo NUNCA negativo com gate)
+#   2. MAX_OUTPUT_TOKENS: 1000 → 8192 (constante exportada, não env var)
+#   3. Adicionar maxOutputTokens ao CreditTransaction (auditoria)
+#   4. Adicionar estimateMaxCost() e calculateRealCost() como funções nomeadas
+#   5. CREDIT_MARGIN_PERCENT → CREDIT_PERCENTAGE (fração decimal 0.40)
+#   6. Header X-Balance-Remaining → X-Balance-Cents
+#   7. Evento done: balanceRemaining → balanceCents
+#   8. Gate simplificado: balanceCents < maxCostCents → 402
+#   9. 402 payload expandido: { error, required, available }
 # ─────────────────────────────────────────────────────────────────────────────
 
 storyId: "story-3.6"
-createdAt: "2026-02-26T22:00:00Z"
+createdAt: "2026-02-27T18:00:00Z"
 createdBy: "@architect"
-status: pending
+status: completed
 complexity: STANDARD
-estimatedEffort: "3-5 days"
+estimatedEffort: "2-3 days (delta refactoring, not greenfield)"
 
 # ─── Dependencies ────────────────────────────────────────────────────────────
 
 dependencies:
   - name: tiktoken
-    version: "latest"
-    purpose: "Contagem precisa de tokens para cálculo de custo por mensagem (OpenAI-compatible tokenizer)"
-    install: "pnpm --filter web add tiktoken"
+    version: "^1.0.22"
+    purpose: "Contagem precisa de tokens (já instalado em packages/db)"
+    install: "N/A — já está em packages/db/package.json"
 
 # ─── Environment Variables ───────────────────────────────────────────────────
 
@@ -24,656 +40,698 @@ envVars:
   - name: FALLBACK_USD_BRL_RATE
     default: "6.00"
     description: "Cotação USD-BRL de fallback quando AwesomeAPI e banco estão indisponíveis"
-  - name: CREDIT_MARGIN_PERCENT
-    default: "40"
-    description: "Porcentagem do valor pago via Stripe disponibilizada como saldo interno"
+    status: exists  # já está no .env.example
+  - name: CREDIT_PERCENTAGE
+    default: "0.40"
+    description: "Fração do valor pago via Stripe disponibilizada como saldo interno (0.40 = 40%)"
+    status: rename  # renomear de CREDIT_MARGIN_PERCENT
+
+# ─── Constants ────────────────────────────────────────────────────────────────
+
+constants:
+  - name: MAX_OUTPUT_TOKENS
+    value: 8192
+    location: "packages/db/src/token-counter.ts"
+    purpose: "Teto de segurança para gate pré-chamada e max_tokens da OpenAI"
+    status: change  # atualmente 1000 inline em chat/route.ts, mover para token-counter
+  - name: MIN_COST_CENTS
+    value: 100
+    location: "packages/db/src/token-counter.ts"
+    purpose: "Custo mínimo por mensagem = 1 crédito"
+    status: export  # existe como const local, precisa ser exportada
 
 # ─── Phases ──────────────────────────────────────────────────────────────────
 
 phases:
 
   # ═══════════════════════════════════════════════════════════════════════════
-  # PHASE 1 — Setup & Database Migration
-  # Tudo depende do schema novo. Executar primeiro e validar.
+  # PHASE 1 — Setup: Migration + .env.example
+  # Schema e configuração. Tudo depende desta fase.
   # ═══════════════════════════════════════════════════════════════════════════
 
   - id: "phase-1"
-    name: "Setup & Database Migration"
+    name: "Setup: Migration + .env.example"
     description: >
-      Instalar nova dependência (tiktoken), atualizar schema Prisma com todos os novos
-      campos/modelos, gerar e aplicar migration, e atualizar variáveis de ambiente.
-      Tudo o mais depende desta fase.
+      Migration Prisma para remover minBalanceCents e adicionar maxOutputTokens.
+      Atualização do .env.example para renomear CREDIT_MARGIN_PERCENT → CREDIT_PERCENTAGE.
+      Toda refatoração de código depende desta fase.
 
     subtasks:
 
-      - id: "1.1"
-        description: "Instalar tiktoken como dependência de apps/web"
-        service: infra
-        files:
-          - "apps/web/package.json"
-        actions:
-          - "pnpm --filter web add tiktoken"
-        verification:
-          type: command
-          command: "pnpm --filter web exec -- node -e \"require('tiktoken')\""
-        status: pending
-        dependencies: []
-        notes: >
-          tiktoken é a biblioteca oficial da OpenAI para contagem de tokens.
-          Instalar em apps/web (não em packages/db) pois a contagem acontece na API route.
+      # ─── 1.1: Migration Prisma ────────────────────────────────────────────
 
-      - id: "1.2"
-        description: "Atualizar schema Prisma com novos modelos e campos"
+      - id: "1.1"
+        title: "Migration Prisma — Remover minBalanceCents, adicionar maxOutputTokens"
         service: database
         files:
-          - "packages/db/prisma/schema.prisma"
+          - path: "packages/db/prisma/schema.prisma"
+            action: MODIFY
+          - path: "packages/db/prisma/migrations/YYYYMMDD_remove_min_balance_add_max_tokens/migration.sql"
+            action: CREATE
+        currentState: |
+          - User tem campo `minBalanceCents Int @default(-200)` → NÃO é necessário com gate
+          - CreditTransaction NÃO tem campo `maxOutputTokens` → precisa para auditoria
+          - Pode existir CHECK constraint `user_balance_above_min` referenciando minBalanceCents
+        targetState: |
+          - User SEM minBalanceCents (campo removido do schema e da tabela)
+          - CreditTransaction COM `maxOutputTokens Int?` (nullable para registros antigos)
+          - CHECK constraint antiga removida (se existir)
+          - Proteção de saldo garantida pelo UPDATE atômico com WHERE >= 0
         actions:
-          - "Criar model ExchangeRate { id, currency, rate (Decimal), date (@db.Date), createdAt, @@unique([currency, date]) }"
-          - "Renomear User.credits → User.balanceCents (Int, default 0)"
-          - "Adicionar User.minBalanceCents (Int, default -200)"
-          - "Adicionar em CreditTransaction: exchangeRate (Decimal?), inputTokens (Int?), outputTokens (Int?), modelUsed (String?), costUsd (Decimal?)"
-          - "Alterar CreditTransaction.description de String → String? (nullable para retrocompatibilidade)"
+          - "Em schema.prisma: remover linha `minBalanceCents Int @default(-200)` do model User"
+          - "Em schema.prisma: adicionar `maxOutputTokens Int?` ao model CreditTransaction (após costUsd)"
+          - "Criar migration: pnpm --filter db exec -- npx prisma migrate dev --create-only --name remove_min_balance_add_max_tokens"
+          - "Verificar migration SQL gerada — deve conter DROP COLUMN e ADD COLUMN (não drop+create table)"
+          - "Se houver CHECK constraint user_balance_above_min: adicionar DROP CONSTRAINT na migration"
+          - "Aplicar migration: pnpm --filter db exec -- npx prisma migrate dev"
+          - "Verificar: pnpm --filter db exec -- npx prisma generate"
         verification:
           type: command
           command: "cd c:/Projetos/Sol/sol-saas && pnpm --filter db exec -- npx prisma validate"
-        status: pending
+        status: completed
         dependencies: []
-        notes: >
-          IMPORTANTE: O rename de credits → balanceCents no Prisma deve usar @map("credits")
-          OU ser feito via migration SQL com ALTER TABLE ... RENAME COLUMN para preservar dados.
-          Prisma interpreta rename como drop+create — usar migration customizada.
-
-          Schema target (mudanças):
-          ```
-          model User {
-            balanceCents    Int  @default(0)     // was: credits
-            minBalanceCents Int  @default(-200)  // NEW
-          }
-          model CreditTransaction {
-            description     String?              // was: String (not nullable)
-            exchangeRate    Decimal?             // NEW
-            inputTokens     Int?                 // NEW
-            outputTokens    Int?                 // NEW
-            modelUsed       String?              // NEW
-            costUsd         Decimal?             // NEW
-          }
-          model ExchangeRate {
-            id        String   @id @default(cuid())
-            currency  String
-            rate      Decimal
-            date      DateTime @db.Date
-            createdAt DateTime @default(now())
-            @@unique([currency, date])
-          }
-          ```
-
-      - id: "1.3"
-        description: "Criar migration SQL customizada com rename seguro e CHECK constraint"
-        service: database
-        files:
-          - "packages/db/prisma/migrations/YYYYMMDD_pricing_refactoring/migration.sql"
-        actions:
-          - "pnpm --filter db exec -- npx prisma migrate dev --create-only --name pricing_refactoring"
-          - "Editar migration.sql gerada para usar RENAME COLUMN (não drop+create)"
-          - "Adicionar DROP CONSTRAINT user_credits_non_negative (se existir)"
-          - "Adicionar CHECK constraint: ALTER TABLE \"User\" ADD CONSTRAINT \"user_balance_above_min\" CHECK (\"balanceCents\" >= \"minBalanceCents\")"
-          - "Aplicar migration: pnpm --filter db exec -- npx prisma migrate dev"
-        verification:
-          type: command
-          command: "cd c:/Projetos/Sol/sol-saas && pnpm --filter db exec -- npx prisma migrate status"
-        status: pending
-        dependencies:
-          - "1.2"
-        notes: >
-          Migration SQL esperada (pseudocódigo):
+        notes: |
+          Migration SQL esperada:
           ```sql
-          -- Rename credits → balanceCents
-          ALTER TABLE "User" RENAME COLUMN "credits" TO "balanceCents";
+          -- Remover minBalanceCents
+          ALTER TABLE "User" DROP COLUMN "minBalanceCents";
 
-          -- Add minBalanceCents
-          ALTER TABLE "User" ADD COLUMN "minBalanceCents" INTEGER NOT NULL DEFAULT -200;
+          -- Remover CHECK constraint antiga (se existir)
+          ALTER TABLE "User" DROP CONSTRAINT IF EXISTS "user_balance_above_min";
 
-          -- Add new CreditTransaction fields
-          ALTER TABLE "CreditTransaction" ADD COLUMN "exchangeRate" DECIMAL;
-          ALTER TABLE "CreditTransaction" ADD COLUMN "inputTokens" INTEGER;
-          ALTER TABLE "CreditTransaction" ADD COLUMN "outputTokens" INTEGER;
-          ALTER TABLE "CreditTransaction" ADD COLUMN "modelUsed" TEXT;
-          ALTER TABLE "CreditTransaction" ADD COLUMN "costUsd" DECIMAL;
-          ALTER TABLE "CreditTransaction" ALTER COLUMN "description" DROP NOT NULL;
-
-          -- Create ExchangeRate table
-          CREATE TABLE "ExchangeRate" (
-            "id" TEXT NOT NULL,
-            "currency" TEXT NOT NULL,
-            "rate" DECIMAL NOT NULL,
-            "date" DATE NOT NULL,
-            "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            CONSTRAINT "ExchangeRate_pkey" PRIMARY KEY ("id")
-          );
-          CREATE UNIQUE INDEX "ExchangeRate_currency_date_key" ON "ExchangeRate"("currency", "date");
-
-          -- Drop old constraint (Story 3.1)
-          ALTER TABLE "User" DROP CONSTRAINT IF EXISTS "user_credits_non_negative";
-
-          -- Add new constraint
-          ALTER TABLE "User" ADD CONSTRAINT "user_balance_above_min"
-            CHECK ("balanceCents" >= "minBalanceCents");
+          -- Adicionar maxOutputTokens ao CreditTransaction
+          ALTER TABLE "CreditTransaction" ADD COLUMN "maxOutputTokens" INTEGER;
           ```
 
-      - id: "1.4"
-        description: "Atualizar .env.example com novas variáveis de ambiente"
+          IMPORTANTE: Como removemos minBalanceCents, o UPDATE atômico em credits.ts
+          passará a usar `>= 0` em vez de `>= minBalanceCents`. Isso será feito na Phase 2.
+
+          Dados existentes: registros antigos terão maxOutputTokens = NULL (nullable).
+
+      # ─── 1.2: .env.example ─────────────────────────────────────────────────
+
+      - id: "1.2"
+        title: "Renomear CREDIT_MARGIN_PERCENT → CREDIT_PERCENTAGE no .env.example"
         service: infra
         files:
-          - ".env.example"
+          - path: ".env.example"
+            action: MODIFY
+        currentState: |
+          Linha 44: CREDIT_MARGIN_PERCENT="40"
+          Comentário linha 43: "# Porcentagem do valor pago via Stripe disponibilizada como saldo interno"
+        targetState: |
+          CREDIT_PERCENTAGE="0.40"
+          Comentário: "# Fração do valor pago via Stripe disponibilizada como saldo interno (0.40 = 40%)"
         actions:
-          - "Adicionar seção '# Pricing & Exchange Rate' com FALLBACK_USD_BRL_RATE e CREDIT_MARGIN_PERCENT"
+          - "Substituir `CREDIT_MARGIN_PERCENT=\"40\"` por `CREDIT_PERCENTAGE=\"0.40\"`"
+          - "Atualizar comentário para refletir semântica de fração decimal"
         verification:
-          type: command
-          command: "grep -q 'FALLBACK_USD_BRL_RATE' c:/Projetos/Sol/sol-saas/.env.example && grep -q 'CREDIT_MARGIN_PERCENT' c:/Projetos/Sol/sol-saas/.env.example && echo 'OK'"
-        status: pending
+          type: manual
+          description: "Verificar que .env.example contém CREDIT_PERCENTAGE e não CREDIT_MARGIN_PERCENT"
+        status: completed
         dependencies: []
-        notes: >
-          Adicionar ao final do .env.example:
-          ```
-          # Pricing & Exchange Rate (Story 3.6)
-          FALLBACK_USD_BRL_RATE="6.00"
-          CREDIT_MARGIN_PERCENT="40"
-          ```
+        notes: |
+          Mudança semântica: integer percent (40) → decimal fraction (0.40).
+          O código do webhook (Phase 3) será atualizado para usar parseFloat.
+
+          LEMBRAR: Atualizar também o .env local do desenvolvedor (não versionado).
 
   # ═══════════════════════════════════════════════════════════════════════════
-  # PHASE 2 — Core Backend Implementation
-  # Serviços independentes em packages/db e apps/web/src/lib.
-  # Subtasks 2.1 e 2.2 podem ser executadas em PARALELO.
+  # PHASE 2 — Core (packages/db): token-counter + credits
+  # Subtasks podem ser executadas em PARALELO (independentes entre si).
+  # Todas dependem da Phase 1 (schema atualizado).
   # ═══════════════════════════════════════════════════════════════════════════
 
   - id: "phase-2"
-    name: "Core Backend Implementation"
+    name: "Core (packages/db): token-counter + credits"
     description: >
-      Implementar serviço de cotação, contador de tokens, e refatorar funções de créditos.
-      Exchange rate e token counter são independentes e podem ser implementados em paralelo.
-      Credits functions dependem do schema novo (Phase 1).
+      Adicionar funções estimateMaxCost e calculateRealCost ao token-counter.
+      Exportar constantes MAX_OUTPUT_TOKENS e MIN_COST_CENTS.
+      Refatorar deductCredits para remover minBalanceCents e adicionar maxOutputTokens.
+      exchange-rate.ts NÃO precisa de alterações.
 
     subtasks:
 
+      # ─── 2.1: Exportar constantes e adicionar funções ao token-counter ────
+
       - id: "2.1"
-        description: "Criar serviço de cotação USD-BRL (packages/db/src/exchange-rate.ts)"
+        title: "Adicionar MAX_OUTPUT_TOKENS, estimateMaxCost e calculateRealCost"
         service: backend
         files:
-          - "packages/db/src/exchange-rate.ts"
+          - path: "packages/db/src/token-counter.ts"
+            action: MODIFY
+        currentState: |
+          - MIN_COST_CENTS = 100 é const LOCAL dentro de calculateCostCents (linha 95)
+          - MAX_OUTPUT_TOKENS não existe (definido inline como 1000 em chat/route.ts:129)
+          - estimateMaxCost() não existe
+          - calculateRealCost() não existe
+          - calculateCostCents() existe e funciona corretamente (linhas 83-100)
+          - MODEL_PRICING e DEFAULT_PRICING exportados (linhas 13-20)
+          - countTokens() e countRawTokens() existem e funcionam
+        targetState: |
+          - MAX_OUTPUT_TOKENS = 8192 exportado como constante de módulo
+          - MIN_COST_CENTS = 100 exportado como constante de módulo
+          - estimateMaxCost(inputTokens, model, exchangeRate) → number (maxCostCents)
+          - calculateRealCost(inputTokens, outputTokens, model, exchangeRate) → { costCents, costUsd }
+          - calculateCostCents mantido como implementação interna (usado por ambas)
         actions:
-          - "Criar arquivo packages/db/src/exchange-rate.ts"
-          - "Implementar getExchangeRate(currency: string): Promise<Decimal>"
-          - "Implementar updateExchangeRate(currency: string, rate: Decimal): Promise<ExchangeRate>"
-          - "Implementar fetchExchangeRateFromApi(currency: string): Promise<Decimal>"
-          - "Implementar ensureTodayRate(currency: string): Promise<Decimal> (lazy refresh)"
-          - "Criar ExchangeRateApiError custom error class"
+          - "Mover MIN_COST_CENTS para nível de módulo e exportar"
+          - "Adicionar e exportar `export const MAX_OUTPUT_TOKENS = 8192`"
+          - "Adicionar função exportada `estimateMaxCost`"
+          - "Adicionar função exportada `calculateRealCost` (wrapper de calculateCostCents)"
+          - "Atualizar calculateCostCents para usar MIN_COST_CENTS do nível de módulo"
         verification:
           type: command
           command: "cd c:/Projetos/Sol/sol-saas && pnpm --filter db exec tsc --noEmit"
-        status: pending
-        dependencies:
-          - "1.3"
-        notes: >
-          Fluxo do ensureTodayRate (lazy — sem cron):
-          1. getExchangeRate("USD-BRL") — busca cotação de hoje no banco
-          2. Se encontrou cotação de hoje → retorna (cache hit)
-          3. Se não → fetchExchangeRateFromApi("USD-BRL") + updateExchangeRate
-          4. Se API falhou → retorna última cotação via getExchangeRate (aceita qualquer data)
-
-          getExchangeRate 3-level fallback:
-          1. Cotação de hoje (date = today)
-          2. Última cotação disponível (ORDER BY date DESC LIMIT 1)
-          3. FALLBACK_USD_BRL_RATE do .env (default "6.00")
-
-          API: GET https://economia.awesomeapi.com.br/json/last/USD-BRL
-          Response: { "USDBRL": { "bid": "5.4521", ... } }
-
-          Usar Prisma Decimal (import { Decimal } from '@prisma/client/runtime/library')
-          ou import { Decimal } from 'decimal.js' dependendo da versão do Prisma.
-
-      - id: "2.2"
-        description: "Criar contador de tokens e calculador de custo (apps/web/src/lib/token-counter.ts)"
-        service: backend
-        files:
-          - "apps/web/src/lib/token-counter.ts"
-        actions:
-          - "Criar arquivo apps/web/src/lib/token-counter.ts"
-          - "Definir constante MODEL_PRICING com preços por modelo"
-          - "Implementar countTokens(messages, model): number"
-          - "Implementar calculateCostCents(inputTokens, outputTokens, model, exchangeRate): { costUsd, costCents }"
-        verification:
-          type: command
-          command: "cd c:/Projetos/Sol/sol-saas && pnpm --filter web exec tsc --noEmit"
-        status: pending
+        status: completed
         dependencies:
           - "1.1"
-        notes: >
-          MODEL_PRICING (preços OpenAI em USD por 1M tokens — atualizar conforme pricing page):
-          ```typescript
-          const MODEL_PRICING: Record<string, { input: number; output: number }> = {
-            'gpt-4o':      { input: 2.50,  output: 10.00 },
-            'gpt-4o-mini': { input: 0.15,  output: 0.60  },
-          }
-          const DEFAULT_PRICING = { input: 2.50, output: 10.00 } // fallback conservador
-          ```
+        notes: |
+          Código a adicionar (após as constantes MODEL_PRICING):
 
-          countTokens usa tiktoken:
           ```typescript
-          import { encoding_for_model } from 'tiktoken'
+          // ─── Constants ─────────────────────────────────────────────────────────
+          export const MAX_OUTPUT_TOKENS = 8192   // teto para gate e max_tokens OpenAI
+          export const MIN_COST_CENTS = 100       // 1 crédito = custo mínimo por mensagem
 
-          export function countTokens(
-            messages: Array<{ role: string; content: string }>,
-            model: string
+          // ─── estimateMaxCost ───────────────────────────────────────────────────
+          /**
+           * Estima custo MÁXIMO possível (input real + MAX_OUTPUT_TOKENS de output).
+           * Usado como gate pré-chamada: se saldo < maxCost → 402.
+           */
+          export function estimateMaxCost(
+            inputTokens: number,
+            model: string,
+            exchangeRate: Prisma.Decimal,
           ): number {
-            // encoding_for_model pode lançar para modelos desconhecidos — fallback para cl100k_base
-            const enc = encoding_for_model(model as TiktokenModel) ?? get_encoding('cl100k_base')
-            let total = 0
-            for (const msg of messages) {
-              total += 4 // overhead por mensagem (role, name, etc.)
-              total += enc.encode(msg.content).length
-            }
-            total += 2 // assistant reply priming
-            enc.free()
-            return total
+            const { costCents } = calculateCostCents(
+              inputTokens,
+              MAX_OUTPUT_TOKENS,
+              model,
+              exchangeRate,
+            )
+            return costCents
           }
-          ```
 
-          calculateCostCents:
-          ```typescript
-          export function calculateCostCents(
+          // ─── calculateRealCost ─────────────────────────────────────────────────
+          /**
+           * Calcula custo REAL após streaming (input + output reais).
+           * Sempre >= MIN_COST_CENTS.
+           */
+          export function calculateRealCost(
             inputTokens: number,
             outputTokens: number,
             model: string,
-            exchangeRate: Decimal
-          ): { costUsd: Decimal; costCents: number } {
-            const pricing = MODEL_PRICING[model] ?? DEFAULT_PRICING
-            const costUsd = new Decimal(inputTokens).mul(pricing.input).div(1_000_000)
-              .plus(new Decimal(outputTokens).mul(pricing.output).div(1_000_000))
-            const costCents = Math.ceil(costUsd.mul(exchangeRate).mul(100).toNumber())
-            return { costUsd, costCents }
+            exchangeRate: Prisma.Decimal,
+          ): { costCents: number; costUsd: Prisma.Decimal } {
+            return calculateCostCents(inputTokens, outputTokens, model, exchangeRate)
           }
           ```
 
-      - id: "2.3"
-        description: "Refatorar deductCredits e addCredits em packages/db/src/credits.ts"
+          calculateRealCost é um alias semântico de calculateCostCents.
+          Ambas podem coexistir — calculateCostCents é o workhorse, calculateRealCost
+          torna a intenção explícita na API route.
+
+          Nota: exchange-rate.ts NÃO precisa de alterações (já funcional).
+
+      # ─── 2.2: Refatorar deductCredits ─────────────────────────────────────
+
+      - id: "2.2"
+        title: "Refatorar deductCredits: remover minBalanceCents, adicionar maxOutputTokens"
         service: backend
         files:
-          - "packages/db/src/credits.ts"
+          - path: "packages/db/src/credits.ts"
+            action: MODIFY
+        currentState: |
+          - DeductMetadata: { exchangeRate, inputTokens, outputTokens, modelUsed, costUsd, conversationTitle }
+            → FALTA maxOutputTokens
+          - InsufficientBalanceError constructor: (userId, current, required, min)
+            → parâmetro `min` referencia minBalanceCents
+          - deductCredits WHERE: `"balanceCents" - ${costCents} >= "minBalanceCents"` (linha 96)
+          - user query selects: { balanceCents, minBalanceCents } (linha 104)
+          - Erro referencia minBalanceCents na mensagem (linha 20)
+        targetState: |
+          - DeductMetadata: adicionar `maxOutputTokens: number`
+          - InsufficientBalanceError: remover parâmetro `min` (saldo nunca negativo)
+          - deductCredits WHERE: `"balanceCents" - ${costCents} >= 0` (sem minBalanceCents)
+          - user query selects: { balanceCents } apenas
+          - CreditTransaction.create: incluir maxOutputTokens
+          - Erro simplificado: "Saldo insuficiente: usuário X tem Y centavos, necessário Z"
         actions:
-          - "Renomear InsufficientCreditsError → InsufficientBalanceError"
-          - "Atualizar mensagem do erro para incluir minBalanceCents"
-          - "Refatorar deductCredits: nova assinatura com costCents + metadata (exchangeRate, inputTokens, outputTokens, modelUsed, costUsd)"
-          - "Refatorar validação: balanceCents - costCents >= minBalanceCents"
-          - "Refatorar addCredits: nova assinatura com amountCents, stripePaymentId obrigatório, exchangeRate opcional"
-          - "Ambas funções operam em balanceCents (não mais credits)"
-          - "Retornar { balanceCents: number } em vez de number"
+          - "Adicionar `maxOutputTokens: number` à interface DeductMetadata"
+          - "Simplificar InsufficientBalanceError: remover parâmetro `min`, atualizar mensagem"
+          - "Alterar WHERE do UPDATE atômico: >= 'minBalanceCents' → >= 0"
+          - "Remover minBalanceCents do select do user query no catch"
+          - "Adicionar maxOutputTokens: metadata.maxOutputTokens ao CreditTransaction.create"
         verification:
           type: command
           command: "cd c:/Projetos/Sol/sol-saas && pnpm --filter db exec tsc --noEmit"
-        status: pending
+        status: completed
         dependencies:
-          - "1.3"
-        notes: >
-          Refatoração incremental — preservar a estrutura existente, mudar assinaturas e lógica interna.
+          - "1.1"
+        notes: |
+          DELTA detalhado por bloco de código:
 
-          ANTES (current):
-            deductCredits(userId: string, amount: number): Promise<number>
-            addCredits(userId: string, amount: number, stripePaymentId?: string): Promise<number>
+          1. DeductMetadata (linha 6-13):
+             ANTES: sem maxOutputTokens
+             DEPOIS: adicionar `maxOutputTokens: number` após conversationTitle
 
-          DEPOIS (target):
-            deductCredits(userId: string, costCents: number, metadata: DeductMetadata): Promise<{ balanceCents: number }>
-            addCredits(userId: string, amountCents: number, stripePaymentId: string, exchangeRate?: Decimal): Promise<{ balanceCents: number }>
+          2. InsufficientBalanceError (linhas 17-24):
+             ANTES: constructor(userId, current, required, min)
+                    msg: `...tem ${current} centavos, necessário ${required}, limite mínimo ${min}`
+             DEPOIS: constructor(userId, current, required)
+                     msg: `...tem ${current} centavos, necessário ${required}`
 
-          DeductMetadata type:
-          ```typescript
-          interface DeductMetadata {
-            exchangeRate: Decimal;
-            inputTokens: number;
-            outputTokens: number;
-            modelUsed: string;
-            costUsd: Decimal;
-          }
-          ```
+          3. UPDATE atômico (linha 96):
+             ANTES: AND "balanceCents" - ${costCents} >= "minBalanceCents"
+             DEPOIS: AND "balanceCents" - ${costCents} >= 0
 
-          Validação de saldo:
-            ANTES: user.credits < amount → InsufficientCreditsError
-            DEPOIS: user.balanceCents - costCents < user.minBalanceCents → InsufficientBalanceError
+          4. User query no catch (linhas 102-105):
+             ANTES: select: { balanceCents: true, minBalanceCents: true }
+             DEPOIS: select: { balanceCents: true }
 
-          CreditTransaction.create:
-            ANTES: { amount: -amount, type: 'consumption', description }
-            DEPOIS: { amount: -costCents, type: 'consumption', description, exchangeRate, inputTokens, outputTokens, modelUsed, costUsd }
+          5. throw InsufficientBalanceError (linhas 107-112):
+             ANTES: (userId, user?.balanceCents ?? 0, costCents, user?.minBalanceCents ?? -200)
+             DEPOIS: (userId, user?.balanceCents ?? 0, costCents)
 
-      - id: "2.4"
-        description: "Atualizar exports de packages/db/src/index.ts"
-        service: backend
-        files:
-          - "packages/db/src/index.ts"
-        actions:
-          - "Adicionar export * from './exchange-rate'"
-        verification:
-          type: command
-          command: "cd c:/Projetos/Sol/sol-saas && pnpm --filter db exec tsc --noEmit"
-        status: pending
-        dependencies:
-          - "2.1"
-          - "2.3"
-        notes: >
-          Linha a adicionar:
-          ```typescript
-          export * from './exchange-rate'
-          ```
-          Já existe: export * from './credits' (que agora exporta InsufficientBalanceError ao invés de InsufficientCreditsError)
+          6. CreditTransaction.create (linhas 115-127):
+             ANTES: sem maxOutputTokens
+             DEPOIS: adicionar `maxOutputTokens: metadata.maxOutputTokens,`
+
+      # ─── 2.3: Nota sobre exchange-rate.ts ──────────────────────────────────
+
+      # exchange-rate.ts NÃO precisa de alterações.
+      # Funções getExchangeRate, ensureTodayRate, updateExchangeRate, fetchExchangeRateFromApi
+      # estão corretas e alinhadas com Architecture v3.0.
+      # Export via index.ts já existe.
+
+      # ─── 2.4: Nota sobre addCredits ───────────────────────────────────────
+
+      # addCredits NÃO precisa de alterações de código.
+      # Assinatura atual: addCredits(userId, amountCents, stripePaymentId, exchangeRate?)
+      # Alinhada com spec. exchangeRate continua opcional (webhook sempre passa).
+      # A mudança de CREDIT_MARGIN_PERCENT → CREDIT_PERCENTAGE é na API route (Phase 3).
 
   # ═══════════════════════════════════════════════════════════════════════════
-  # PHASE 3 — API Route Integration
-  # Conectar os novos serviços às rotas existentes.
-  # Chat route depende de Phase 2 completa. Webhook pode ser paralelo ao chat.
+  # PHASE 3 — API Routes: chat + webhook
+  # Conectar as funções refatoradas às rotas.
+  # Depende da Phase 2 completa.
   # ═══════════════════════════════════════════════════════════════════════════
 
   - id: "phase-3"
-    name: "API Route Integration"
+    name: "API Routes: chat + webhook"
     description: >
-      Refatorar as API routes de chat e webhook para usar o novo sistema de precificação.
-      Chat route: token counting + cost calculation + variable deduction.
-      Webhook: margin calculation + exchange rate recording.
+      Refatorar chat route para usar estimateMaxCost, MAX_OUTPUT_TOKENS=8192,
+      gate simplificado, header X-Balance-Cents, e payload 402 expandido.
+      Refatorar webhook para usar CREDIT_PERCENTAGE (fração decimal).
 
     subtasks:
 
+      # ─── 3.1: Refatorar POST /api/chat ─────────────────────────────────────
+
       - id: "3.1"
-        description: "Refatorar POST /api/chat com contagem de tokens e custo variável"
+        title: "Refatorar chat route: gate, MAX_OUTPUT_TOKENS, header, done event"
         service: backend
         files:
-          - "apps/web/src/app/api/chat/route.ts"
+          - path: "apps/web/src/app/api/chat/route.ts"
+            action: MODIFY
+        currentState: |
+          - Linha 9: import { countTokens, countRawTokens, calculateCostCents } from '@sol/db/token-counter'
+          - Linha 40: select { balanceCents: true, minBalanceCents: true }
+          - Linha 129: const MAX_OUTPUT_TOKENS = 1000 (local)
+          - Linha 130: calculateCostCents(inputTokens, MAX_OUTPUT_TOKENS, ...) para gate
+          - Linha 135: gate check: balanceCents - estimated.costCents < user.minBalanceCents → 402
+          - Linha 136: 402 payload: { error: 'insufficient_credits' }
+          - Linha 148: max_tokens: 1000
+          - Linha 183-190: deductCredits metadata sem maxOutputTokens
+          - Linha 226: done event: { done: true, conversationId, balanceRemaining }
+          - Linha 249: header: X-Balance-Remaining
+        targetState: |
+          - Import: estimateMaxCost, calculateRealCost, MAX_OUTPUT_TOKENS from token-counter
+          - select { balanceCents: true } (sem minBalanceCents)
+          - MAX_OUTPUT_TOKENS importado (8192), não local
+          - Gate: estimateMaxCost(inputTokens, model, exchangeRate) → maxCostCents
+          - Gate check: user.balanceCents < maxCostCents → 402
+          - 402 payload: { error: 'insufficient_credits', required: maxCostCents, available: user.balanceCents }
+          - max_tokens: MAX_OUTPUT_TOKENS (8192)
+          - deductCredits metadata inclui maxOutputTokens: MAX_OUTPUT_TOKENS
+          - done event: { done: true, conversationId, balanceCents }
+          - header: X-Balance-Cents
         actions:
-          - "Import: countTokens, calculateCostCents de @/lib/token-counter"
-          - "Import: ensureTodayRate de @sol/db"
-          - "Import: Decimal (para tipo)"
-          - "ANTES da chamada OpenAI: countTokens(messages, model) → inputTokens"
-          - "ANTES da chamada OpenAI: ensureTodayRate('USD-BRL') → exchangeRate"
-          - "ANTES da chamada OpenAI: calculateCostCents(inputTokens, 0, model, exchangeRate) → estimatedCost"
-          - "Alterar check de créditos: user.balanceCents < estimatedCost.costCents → 402"
-          - "APÓS stream: contar outputTokens (via response text ou usage)"
-          - "APÓS stream: calculateCostCents(inputTokens, outputTokens, model, exchangeRate) → realCost"
-          - "APÓS stream: deductCredits(user.id, realCost.costCents, { exchangeRate, inputTokens, outputTokens, modelUsed: model, costUsd: realCost.costUsd })"
-          - "Renomear header X-Credits-Remaining → X-Balance-Remaining"
-          - "Renomear evento done: creditsRemaining → balanceRemaining"
-          - "Alterar user query: select { balanceCents: true, minBalanceCents: true } (não mais credits)"
+          - "Atualizar imports: adicionar estimateMaxCost, calculateRealCost, MAX_OUTPUT_TOKENS; remover calculateCostCents se não usado diretamente"
+          - "Remover minBalanceCents do select do user query (linha 40-41)"
+          - "Remover const MAX_OUTPUT_TOKENS = 1000 (linha 129) — agora importado"
+          - "Substituir calculateCostCents gate por estimateMaxCost(inputTokens, model, exchangeRate)"
+          - "Simplificar gate check: `if (user.balanceCents < maxCostCents)` → 402"
+          - "Expandir 402 payload: adicionar required e available"
+          - "Alterar max_tokens: 1000 → MAX_OUTPUT_TOKENS"
+          - "Substituir calculateCostCents pós-stream por calculateRealCost"
+          - "Adicionar maxOutputTokens: MAX_OUTPUT_TOKENS ao metadata do deductCredits"
+          - "Renomear done event: balanceRemaining → balanceCents"
+          - "Renomear header: X-Balance-Remaining → X-Balance-Cents"
         verification:
           type: command
           command: "cd c:/Projetos/Sol/sol-saas && pnpm --filter web exec tsc --noEmit"
-        status: pending
+        status: completed
         dependencies:
+          - "2.1"
           - "2.2"
-          - "2.3"
-          - "2.4"
-        notes: >
-          Fluxo completo refatorado:
-          ```
-          POST /api/chat
-            ├─ auth check
-            ├─ buscar user com { balanceCents, minBalanceCents }
-            ├─ preparar messages array (system + history + new)
-            ├─ countTokens(messages, model) → inputTokens
-            ├─ ensureTodayRate("USD-BRL") → exchangeRate
-            ├─ calculateCostCents(inputTokens, 0, model, exchangeRate) → estimated
-            ├─ user.balanceCents - estimated.costCents < user.minBalanceCents → 402
-            ├─ save user message
-            ├─ header: X-Balance-Remaining = user.balanceCents (pré-dedução)
-            ├─ stream OpenAI
-            │   ├─ success:
-            │   │   ├─ save assistant message
-            │   │   ├─ countTokens([{ role: 'assistant', content: fullResponse }], model) → outputTokens
-            │   │   ├─ calculateCostCents(inputTokens, outputTokens, model, exchangeRate) → real
-            │   │   ├─ deductCredits(user.id, real.costCents, metadata) → { balanceCents }
-            │   │   └─ send { done: true, conversationId, balanceRemaining: balanceCents }
-            │   └─ error:
-            │       ├─ send { error: message }
-            │       └─ NO deduction
-          ```
+        notes: |
+          DELTA detalhado por bloco:
 
-          PRESERVAR: streaming SSE, conversation management, error handling, model selection logic.
-          MUDAR: credit check, deduction call, headers, done event payload.
+          1. Imports (linhas 1-11):
+             ANTES:
+               import { countTokens, countRawTokens, calculateCostCents } from '@sol/db/token-counter';
+             DEPOIS:
+               import {
+                 countTokens, countRawTokens, estimateMaxCost, calculateRealCost, MAX_OUTPUT_TOKENS,
+               } from '@sol/db/token-counter';
 
-          Para outputTokens: usar countTokens sobre a resposta completa.
-          Alternativa: usar stream.usage se disponível (depende do modelo/SDK).
-          Preferir countTokens para consistência.
+          2. User query (linhas 38-42):
+             ANTES: select: { id: true, balanceCents: true, minBalanceCents: true }
+             DEPOIS: select: { id: true, balanceCents: true }
+
+          3. Gate estimation (linhas 128-132):
+             ANTES:
+               const MAX_OUTPUT_TOKENS = 1000;
+               const estimated = calculateCostCents(inputTokens, MAX_OUTPUT_TOKENS, model, exchangeRate);
+               console.log(`[Chat API] inputTokens=${inputTokens} estimatedCost=${estimated.costCents} (includes max ${MAX_OUTPUT_TOKENS} output tokens)`);
+             DEPOIS:
+               const maxCostCents = estimateMaxCost(inputTokens, model, exchangeRate);
+               console.log(`[Chat API] inputTokens=${inputTokens} maxCostCents=${maxCostCents} (gate: input + ${MAX_OUTPUT_TOKENS} output tokens)`);
+
+          4. Gate check (linhas 134-140):
+             ANTES:
+               if (user.balanceCents - estimated.costCents < user.minBalanceCents) {
+                 return new Response(JSON.stringify({ error: 'insufficient_credits' }), {
+                   status: 402, headers: { 'Content-Type': 'application/json' },
+                 });
+               }
+             DEPOIS:
+               if (user.balanceCents < maxCostCents) {
+                 return new Response(JSON.stringify({
+                   error: 'insufficient_credits',
+                   required: maxCostCents,
+                   available: user.balanceCents,
+                 }), {
+                   status: 402, headers: { 'Content-Type': 'application/json' },
+                 });
+               }
+
+          5. OpenAI max_tokens (linha 148):
+             ANTES: max_tokens: 1000,
+             DEPOIS: max_tokens: MAX_OUTPUT_TOKENS,
+
+          6. Real cost calculation (linhas 176-178):
+             ANTES:
+               const realCost = calculateCostCents(inputTokens, outputTokens, model, exchangeRate);
+             DEPOIS:
+               const realCost = calculateRealCost(inputTokens, outputTokens, model, exchangeRate);
+
+          7. deductCredits metadata (linhas 183-190):
+             ANTES: { exchangeRate, inputTokens, outputTokens, modelUsed: model, costUsd: realCost.costUsd, conversationTitle: conversation.title }
+             DEPOIS: { exchangeRate, inputTokens, outputTokens, modelUsed: model, costUsd: realCost.costUsd, conversationTitle: conversation.title, maxOutputTokens: MAX_OUTPUT_TOKENS }
+
+          8. Done event (linha 226):
+             ANTES: { done: true, conversationId: conversation.id, balanceRemaining }
+             DEPOIS: { done: true, conversationId: conversation.id, balanceCents: balanceRemaining }
+             (variável local pode manter o nome balanceRemaining, mas o campo no JSON muda)
+
+          9. Header (linha 249):
+             ANTES: 'X-Balance-Remaining': String(user.balanceCents)
+             DEPOIS: 'X-Balance-Cents': String(user.balanceCents)
+
+          PRESERVAR: streaming SSE, conversation management, error handling, model selection,
+          audit trail no catch do deductCredits, getErrorMessage function.
+
+      # ─── 3.2: Refatorar webhook Stripe ─────────────────────────────────────
 
       - id: "3.2"
-        description: "Refatorar webhook Stripe com margem configurável e exchangeRate"
+        title: "Refatorar webhook: CREDIT_MARGIN_PERCENT → CREDIT_PERCENTAGE"
         service: backend
         files:
-          - "apps/web/src/app/api/webhooks/stripe/route.ts"
+          - path: "apps/web/src/app/api/webhooks/stripe/route.ts"
+            action: MODIFY
+        currentState: |
+          - Linha 43: const marginPercent = parseInt(process.env.CREDIT_MARGIN_PERCENT ?? '40', 10) || 40;
+          - Linha 44: const amountCents = Math.floor(amountTotal * (marginPercent / 100));
+        targetState: |
+          - const creditPercentage = parseFloat(process.env.CREDIT_PERCENTAGE ?? '0.40');
+          - const amountCents = Math.floor(amountTotal * creditPercentage);
         actions:
-          - "Import: getExchangeRate de @sol/db"
-          - "Ler CREDIT_MARGIN_PERCENT do process.env (default 40)"
-          - "Calcular amountCents = Math.floor(amountTotal * (marginPercent / 100))"
-          - "Buscar exchangeRate via getExchangeRate('USD-BRL')"
-          - "Chamar addCredits(userId, amountCents, stripePaymentId, exchangeRate)"
-          - "Remover leitura de creditsAmount da metadata (substituído por cálculo de margem)"
-          - "Ler amount_total do session object (centavos BRL do Stripe)"
-          - "Atualizar logs para refletir nova semântica"
+          - "Substituir leitura de CREDIT_MARGIN_PERCENT por CREDIT_PERCENTAGE"
+          - "Trocar parseInt por parseFloat (fração decimal)"
+          - "Simplificar cálculo: multiplicar diretamente por fraction (sem dividir por 100)"
+          - "Atualizar log para refletir nova variável"
         verification:
           type: command
           command: "cd c:/Projetos/Sol/sol-saas && pnpm --filter web exec tsc --noEmit"
-        status: pending
+        status: completed
         dependencies:
-          - "2.3"
-          - "2.4"
-        notes: >
-          ANTES (current):
+          - "1.2"
+        notes: |
+          DELTA:
           ```typescript
-          const { userId, creditsAmount } = session.metadata ?? {};
-          const credits = parseInt(creditsAmount, 10);
-          await addCredits(userId, credits, stripePaymentId);
+          // ANTES:
+          const marginPercent = parseInt(process.env.CREDIT_MARGIN_PERCENT ?? '40', 10) || 40;
+          const amountCents = Math.floor(amountTotal * (marginPercent / 100));
+          // ...
+          console.log(`[Webhook] Créditos adicionados amountCents=${amountCents} margin=${marginPercent}%`);
+
+          // DEPOIS:
+          const creditPercentage = parseFloat(process.env.CREDIT_PERCENTAGE ?? '0.40');
+          const amountCents = Math.floor((amountTotal ?? 0) * creditPercentage);
+          // ...
+          console.log(`[Webhook] Créditos adicionados amountCents=${amountCents} percentage=${creditPercentage}`);
           ```
 
-          DEPOIS (target):
-          ```typescript
-          const { userId } = session.metadata ?? {};
-          const amountTotal = session.amount_total; // centavos BRL do Stripe
-          const marginPercent = parseInt(process.env.CREDIT_MARGIN_PERCENT ?? '40', 10);
-          const amountCents = Math.floor((amountTotal ?? 0) * (marginPercent / 100));
-          const exchangeRate = await getExchangeRate('USD-BRL');
-          await addCredits(userId, amountCents, stripePaymentId, exchangeRate);
-          ```
-
-          A metadata creditsAmount não é mais necessária — o cálculo é server-side baseado
-          em amount_total. Mas manter userId na metadata (necessário para saber quem pagou).
-
-          IMPORTANTE: Também atualizar a criação do checkout session (se existir em /api/payments/checkout)
-          para remover creditsAmount da metadata. Verificar arquivo.
+          A lógica restante do webhook (validação, idempotência, getExchangeRate, addCredits)
+          NÃO muda — já está correta.
 
   # ═══════════════════════════════════════════════════════════════════════════
-  # PHASE 4 — Frontend & Verification
-  # Adaptar componentes do frontend e validar tudo end-to-end.
+  # PHASE 4 — Frontend: chat page header e done event
+  # Adaptar consumo dos novos nomes de header e campo do evento done.
+  # Depende da Phase 3 (API routes atualizadas).
   # ═══════════════════════════════════════════════════════════════════════════
 
   - id: "phase-4"
-    name: "Frontend & Verification"
+    name: "Frontend: chat page"
     description: >
-      Atualizar componentes frontend para consumir balanceCents, formatar saldo como créditos,
-      e verificar typecheck + lint do projeto completo.
+      Atualizar consumo do header X-Balance-Remaining → X-Balance-Cents
+      e do campo balanceRemaining → balanceCents no evento done.
+      CreditsProvider, formatBalance, CreditsBadge NÃO precisam de alterações.
 
     subtasks:
 
+      # ─── 4.1: Atualizar chat page ─────────────────────────────────────────
+
       - id: "4.1"
-        description: "Atualizar CreditsProvider e CreditsBadge para balanceCents"
+        title: "Chat page: X-Balance-Remaining → X-Balance-Cents, balanceRemaining → balanceCents"
         service: frontend
         files:
-          - "apps/web/src/components/layout/CreditsProvider.tsx"
-          - "apps/web/src/components/layout/CreditsBadge.tsx"
+          - path: "apps/web/src/app/chat/page.tsx"
+            action: MODIFY
+        currentState: |
+          - Linha 352: res.headers.get('X-Balance-Remaining')
+          - Linha 410: data.balanceRemaining (evento done)
+          - Linha 411: updateCredits(data.balanceRemaining)
+          - Linha 412: setNoCredits(data.balanceRemaining <= 0)
+        targetState: |
+          - res.headers.get('X-Balance-Cents')
+          - data.balanceCents (evento done)
+          - updateCredits(data.balanceCents)
+          - setNoCredits(data.balanceCents <= 0)
         actions:
-          - "CreditsProvider: renomear estado interno credits → balanceCents"
-          - "CreditsProvider: adicionar função formatBalance(balanceCents: number): string"
-          - "CreditsProvider: exportar formatBalance via contexto"
-          - "CreditsProvider: manter updateCredits como nome público (aceita balanceCents)"
-          - "CreditsBadge: usar formatBalance() para exibição (nunca mostrar centavos)"
-          - "CreditsBadge: manter visual existente (star icon, solar colors)"
+          - "Substituir 'X-Balance-Remaining' por 'X-Balance-Cents' na leitura do header (linha 352)"
+          - "Substituir 'data.balanceRemaining' por 'data.balanceCents' nas 3 ocorrências (linhas 410-412)"
         verification:
           type: command
           command: "cd c:/Projetos/Sol/sol-saas && pnpm --filter web exec tsc --noEmit"
-        status: pending
+        status: completed
         dependencies:
           - "3.1"
-        notes: >
-          formatBalance deve converter balanceCents para exibição amigável:
+        notes: |
+          DELTA:
           ```typescript
-          function formatBalance(balanceCents: number): string {
-            // Mapear para "créditos" — aluno nunca vê centavos/reais
-            // Ex: 2796 centavos → "27,96 créditos" ou simplificado para "28 créditos"
-            const credits = Math.floor(balanceCents / 100)
-            if (credits <= 0) return '0 créditos'
-            return `${credits} crédito${credits !== 1 ? 's' : ''}`
-          }
-          ```
-
-          A API do contexto mantém retrocompatibilidade:
-          - initialCredits → initialBalance (prop rename)
-          - credits → balanceCents (internal state)
-          - updateCredits → aceita number (balanceCents do backend)
-
-      - id: "4.2"
-        description: "Atualizar AppLayout para buscar balanceCents e credits-config"
-        service: frontend
-        files:
-          - "apps/web/src/components/layout/AppLayout.tsx"
-          - "apps/web/src/lib/credits-config.ts"
-        actions:
-          - "AppLayout: alterar query de user.credits → user.balanceCents"
-          - "AppLayout: passar balanceCents como initialCredits no CreditsProvider"
-          - "credits-config: alterar descrições de pacotes ('~X scripts' em vez de 'X mensagens com a IA')"
-          - "credits-config: manter preços em centavos BRL como estão"
-          - "credits-config: remover campo credits dos pacotes (não mais relevante)"
-        verification:
-          type: command
-          command: "cd c:/Projetos/Sol/sol-saas && pnpm --filter web exec tsc --noEmit"
-        status: pending
-        dependencies:
-          - "4.1"
-        notes: >
-          AppLayout query change:
-          ```typescript
-          // ANTES:
-          const user = await prisma.user.findUnique({
-            where: { email: session.user.email },
-            select: { credits: true },
-          })
-          initialCredits = user?.credits ?? 0
+          // ANTES (linha 352):
+          const balanceHeader = res.headers.get('X-Balance-Remaining');
 
           // DEPOIS:
-          const user = await prisma.user.findUnique({
-            where: { email: session.user.email },
-            select: { balanceCents: true },
-          })
-          initialCredits = user?.balanceCents ?? 0
-          ```
+          const balanceHeader = res.headers.get('X-Balance-Cents');
 
-          credits-config update (exemplo):
-          ```typescript
-          {
-            id: 'starter',
-            price: 2990,        // mantém R$29,90
-            label: 'Starter',
-            description: '~30 scripts com a IA',  // estimativa baseada em custo médio
-          }
-          ```
-
-      - id: "4.3"
-        description: "Atualizar chat page para ler X-Balance-Remaining e balanceRemaining"
-        service: frontend
-        files:
-          - "apps/web/src/app/chat/page.tsx"
-        actions:
-          - "Renomear leitura de header: X-Credits-Remaining → X-Balance-Remaining"
-          - "Renomear leitura do evento done: creditsRemaining → balanceRemaining"
-          - "Atualizar condição de noCredits: balanceCents <= 0 (em vez de credits === 0)"
-          - "Manter toda a lógica de streaming, conversations, UI intacta"
-        verification:
-          type: command
-          command: "cd c:/Projetos/Sol/sol-saas && pnpm --filter web exec tsc --noEmit"
-        status: pending
-        dependencies:
-          - "4.1"
-        notes: >
-          Mudanças pontuais no handleSendMessage:
-          ```typescript
-          // ANTES:
-          const creditsRemaining = res.headers.get('X-Credits-Remaining')
-          // DEPOIS:
-          const balanceRemaining = res.headers.get('X-Balance-Remaining')
-
-          // ANTES (no done event):
-          if (typeof data.creditsRemaining === 'number') {
-            updateCredits(data.creditsRemaining)
-            setNoCredits(data.creditsRemaining === 0)
-          }
-          // DEPOIS:
+          // ANTES (linhas 410-412):
           if (typeof data.balanceRemaining === 'number') {
-            updateCredits(data.balanceRemaining)
-            setNoCredits(data.balanceRemaining <= 0)
+            updateCredits(data.balanceRemaining);
+            setNoCredits(data.balanceRemaining <= 0);
+          }
+
+          // DEPOIS:
+          if (typeof data.balanceCents === 'number') {
+            updateCredits(data.balanceCents);
+            setNoCredits(data.balanceCents <= 0);
           }
           ```
 
-          PRESERVAR: todo o resto (streaming, conversation sidebar, message bubbles, etc.)
+          CreditsProvider, formatBalance, CreditsBadge, AppLayout, CreditSummary,
+          TransactionHistory NÃO precisam de alterações — já usam balanceCents
+          e formatBalance corretamente.
 
-      - id: "4.4"
-        description: "Validação final: typecheck, lint e build"
+  # ═══════════════════════════════════════════════════════════════════════════
+  # PHASE 5 — Validation: typecheck + lint + manual tests
+  # Verificação end-to-end. Depende de todas as fases anteriores.
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  - id: "phase-5"
+    name: "Validation: typecheck + lint + testes"
+    description: >
+      Verificação completa: TypeScript strict, lint, e testes manuais
+      do fluxo de chat (gate/dedução) e webhook (CREDIT_PERCENTAGE).
+
+    subtasks:
+
+      # ─── 5.1: TypeScript typecheck ────────────────────────────────────────
+
+      - id: "5.1"
+        title: "TypeScript typecheck — zero errors"
         service: infra
         files: []
         actions:
-          - "pnpm --filter web exec tsc --noEmit (zero errors)"
-          - "pnpm lint (zero new errors)"
-          - "Verificar que todas as referências a 'credits' foram atualizadas para 'balanceCents' nos arquivos modificados"
+          - "pnpm --filter db exec tsc --noEmit → zero errors"
+          - "pnpm --filter web exec tsc --noEmit → zero errors"
+          - "pnpm typecheck → zero errors (se existir script no root)"
         verification:
           type: command
-          command: "cd c:/Projetos/Sol/sol-saas && pnpm --filter web exec tsc --noEmit && pnpm --filter db exec tsc --noEmit"
-        status: pending
+          command: "cd c:/Projetos/Sol/sol-saas && pnpm --filter db exec tsc --noEmit && pnpm --filter web exec tsc --noEmit"
+        status: completed
         dependencies:
           - "4.1"
-          - "4.2"
-          - "4.3"
-        notes: >
-          Checklist de verificação final:
-          - [ ] Zero TypeScript errors em packages/db e apps/web
-          - [ ] Zero novos lint errors
-          - [ ] Todas as referências a user.credits → user.balanceCents
-          - [ ] Todas as referências a X-Credits-Remaining → X-Balance-Remaining
-          - [ ] Todas as referências a creditsRemaining → balanceRemaining
-          - [ ] InsufficientCreditsError → InsufficientBalanceError
-          - [ ] Nenhum import quebrado
-          - [ ] .env.example atualizado com novas variáveis
+        notes: |
+          Pontos de atenção para erros de tipo:
+          - Todas as referências a user.minBalanceCents devem ter sido removidas
+          - DeductMetadata agora requer maxOutputTokens
+          - Imports atualizados em chat/route.ts
+          - Campo maxOutputTokens no Prisma schema (nullable Int?)
+
+      # ─── 5.2: Lint ────────────────────────────────────────────────────────
+
+      - id: "5.2"
+        title: "Lint — zero novos erros"
+        service: infra
+        files: []
+        actions:
+          - "pnpm lint → zero novos erros nos arquivos modificados"
+        verification:
+          type: command
+          command: "cd c:/Projetos/Sol/sol-saas && pnpm lint"
+        status: completed
+        dependencies:
+          - "5.1"
+        notes: |
+          Se houver erros de lint pré-existentes, verificar que nenhum NOVO erro
+          foi introduzido pelas mudanças desta story.
+
+      # ─── 5.3: Verificação manual de referências ───────────────────────────
+
+      - id: "5.3"
+        title: "Grep: garantir que todas as referências antigas foram atualizadas"
+        service: infra
+        files: []
+        actions:
+          - "grep -r 'minBalanceCents' --include='*.ts' --include='*.tsx' → ZERO resultados (exceto migrations)"
+          - "grep -r 'CREDIT_MARGIN_PERCENT' --include='*.ts' --include='*.tsx' --include='*.env*' → ZERO resultados"
+          - "grep -r 'X-Balance-Remaining' --include='*.ts' --include='*.tsx' → ZERO resultados"
+          - "grep -r 'balanceRemaining' --include='*.ts' --include='*.tsx' → ZERO resultados"
+          - "grep -r 'MAX_OUTPUT_TOKENS.*=.*1000' --include='*.ts' → ZERO resultados"
+        verification:
+          type: command
+          command: "cd c:/Projetos/Sol/sol-saas && grep -r 'minBalanceCents' --include='*.ts' --include='*.tsx' -l | grep -v migrations | wc -l"
+        status: completed
+        dependencies:
+          - "5.1"
+        notes: |
+          Estes greps validam que NENHUMA referência antiga permaneceu no código.
+          Migrations antigas podem conter esses termos — isso é esperado e correto.
+
+      # ─── 5.4: Teste manual do fluxo completo ──────────────────────────────
+
+      - id: "5.4"
+        title: "Teste manual: chat gate + dedução + webhook"
+        service: qa
+        files: []
+        actions:
+          - "Verificar migration aplicou sem erros"
+          - "Chat com saldo suficiente: gate aceita → stream com max_tokens 8192 → deduz custo real"
+          - "Chat com saldo insuficiente: gate rejeita → 402 com { required, available }"
+          - "Verificar CreditTransaction inclui maxOutputTokens (8192)"
+          - "Verificar header X-Balance-Cents na response"
+          - "Verificar done event inclui balanceCents (não balanceRemaining)"
+          - "Verificar badge atualiza corretamente no frontend"
+          - "Simular webhook: CREDIT_PERCENTAGE = 0.40 → calcula centavos corretamente"
+          - "Saldo nunca fica negativo em nenhum cenário"
+        verification:
+          type: manual
+          description: "Todos os cenários passam sem regressões"
+        status: completed
+        dependencies:
+          - "5.1"
+          - "5.2"
+          - "5.3"
+        notes: |
+          Cenários de teste prioritários:
+
+          1. Gate aceita:
+             - Saldo 5000, estimativa máxima ~3000 → stream → custo real ~500
+             - Verificar: CreditTransaction.maxOutputTokens = 8192
+             - Verificar: saldo decrementou pelo custo real (não estimado)
+
+          2. Gate rejeita:
+             - Saldo 100, estimativa máxima ~3000 → 402
+             - Verificar: response body tem required e available
+             - Verificar: nenhum CreditTransaction criado
+
+          3. OpenAI error:
+             - Saldo qualquer → stream falha → nenhum crédito deduzido
+
+          4. Webhook:
+             - Pagamento R$69,90 (6990 centavos) × 0.40 = 2796 centavos
+             - Verificar: addCredits(userId, 2796, stripePaymentId, exchangeRate)
+
+          5. Frontend:
+             - Badge atualiza via X-Balance-Cents no header
+             - Badge atualiza via balanceCents no evento done
+             - Saldo 0 → input desabilitado
 
 # ─── Execution Graph ─────────────────────────────────────────────────────────
 #
-#   1.1 (tiktoken)  ──────────────────────────────── 2.2 (token-counter)
-#                                                           │
-#   1.2 (schema) ─── 1.3 (migration) ──┬── 2.1 (exchange)  │
-#                                       │         │         │
-#   1.4 (.env) ──────────────────────   ├── 2.3 (credits) ──┤
-#                                       │         │         │
-#                                       └── 2.4 (exports) ──┤
-#                                                           │
-#                                               ┌───────────┤
-#                                               │           │
-#                                          3.1 (chat)   3.2 (webhook)
-#                                               │
-#                                     ┌─────────┼─────────┐
-#                                     │         │         │
-#                                4.1 (credits) 4.2 (app) 4.3 (chat)
-#                                     │         │         │
-#                                     └─────────┴─────────┘
-#                                               │
-#                                          4.4 (verify)
+#   Phase 1 (Setup)
+#   ├── 1.1 (migration) ──────┬──── 2.1 (token-counter)
+#   │                         │
+#   └── 1.2 (.env.example) ──┬├──── 2.2 (credits)
+#                            ││
+#                            │└──── (exchange-rate: sem mudanças)
+#                            │
+#   Phase 2 (Core)           │
+#   ├── 2.1 + 2.2 ───────────┼──── 3.1 (chat route)
+#   │                        │
+#   └── (1.2) ───────────────┴──── 3.2 (webhook)
+#
+#   Phase 3 (API Routes)
+#   ├── 3.1 ─────────────────────── 4.1 (chat page)
+#   │
+#   Phase 4 (Frontend)
+#   └── 4.1 ─────────────────────── 5.1 (typecheck)
+#                                     │
+#   Phase 5 (Validation)              ├── 5.2 (lint)
+#                                     ├── 5.3 (grep refs)
+#                                     └── 5.4 (manual test)
 #
 # ─── Parallel Execution Opportunities ────────────────────────────────────────
 #
-#   Wave 1: 1.1 + 1.2 + 1.4 (all independent)
-#   Wave 2: 1.3 (depends on 1.2)
-#   Wave 3: 2.1 + 2.2 + 2.3 (2.1 and 2.3 depend on 1.3; 2.2 depends on 1.1)
-#   Wave 4: 2.4 (depends on 2.1 + 2.3)
-#   Wave 5: 3.1 + 3.2 (both depend on 2.3 + 2.4; 3.1 also needs 2.2)
-#   Wave 6: 4.1 + 4.2 + 4.3 (depend on 3.1)
-#   Wave 7: 4.4 (depends on 4.1 + 4.2 + 4.3)
+#   Wave 1: 1.1 + 1.2 (independentes)
+#   Wave 2: 2.1 + 2.2 (independentes, ambas dependem de 1.1)
+#   Wave 3: 3.1 + 3.2 (independentes entre si; 3.1 depende de 2.1+2.2, 3.2 depende de 1.2)
+#   Wave 4: 4.1 (depende de 3.1)
+#   Wave 5: 5.1 → 5.2 + 5.3 + 5.4 (typecheck primeiro, depois lint/grep/manual em paralelo)
 #
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -681,31 +739,52 @@ phases:
 
 risks:
   - id: "R1"
-    description: "Prisma interpreta rename de coluna como drop+create, perdendo dados"
-    severity: HIGH
-    mitigation: "Usar --create-only e editar migration SQL para ALTER RENAME COLUMN"
-    affectedSubtasks: ["1.2", "1.3"]
+    description: "Prisma interpreta DROP COLUMN como operação destrutiva — verificar migration"
+    severity: LOW
+    mitigation: "Usar --create-only, revisar SQL antes de aplicar. Dados de dev apenas."
+    affectedSubtasks: ["1.1"]
 
   - id: "R2"
-    description: "tiktoken pode ter issues de compatibilidade com WASM em ambiente Next.js"
+    description: "Código externo pode referenciar minBalanceCents ou X-Balance-Remaining"
     severity: MEDIUM
-    mitigation: "Verificar compatibilidade com Edge Runtime; se necessário, configurar webpack config ou usar server-only"
-    affectedSubtasks: ["1.1", "2.2"]
+    mitigation: "Grep completo em 5.3 valida zero referências residuais."
+    affectedSubtasks: ["2.2", "3.1", "4.1", "5.3"]
 
   - id: "R3"
-    description: "AwesomeAPI pode estar indisponível durante desenvolvimento/testes"
+    description: "MAX_OUTPUT_TOKENS=8192 aumenta custo real das chamadas OpenAI"
     severity: LOW
-    mitigation: "3-level fallback garante operação (hoje → última → env var). Testes usam mock."
-    affectedSubtasks: ["2.1"]
+    mitigation: |
+      max_tokens é um TETO, não gera output desnecessário.
+      Respostas reais continuam sendo do tamanho que o modelo decide.
+      Gate será mais conservador (estima pior caso 8192), mas custo real não muda.
+    affectedSubtasks: ["3.1"]
 
   - id: "R4"
-    description: "Checkout session metadata pode precisar de atualização (creditsAmount → amount_total)"
-    severity: MEDIUM
-    mitigation: "Verificar /api/payments/checkout e adaptar se necessário. amount_total é nativo do Stripe session."
+    description: "CREDIT_PERCENTAGE parseFloat pode gerar NaN se valor inválido no .env"
+    severity: LOW
+    mitigation: "Default '0.40' no fallback. Validação: if isNaN → usar 0.40."
     affectedSubtasks: ["3.2"]
 
-  - id: "R5"
-    description: "Breaking change na interface de deductCredits/addCredits pode quebrar código não mapeado"
-    severity: MEDIUM
-    mitigation: "Buscar todas as referências antes de refatorar. Grep por deductCredits e addCredits no projeto."
-    affectedSubtasks: ["2.3", "3.1", "3.2"]
+# ─── Files Summary ───────────────────────────────────────────────────────────
+#
+# MODIFY (7 arquivos):
+#   packages/db/prisma/schema.prisma .............. Phase 1 (remover minBalanceCents, add maxOutputTokens)
+#   packages/db/src/token-counter.ts .............. Phase 2 (MAX_OUTPUT_TOKENS, estimateMaxCost, calculateRealCost)
+#   packages/db/src/credits.ts .................... Phase 2 (WHERE >= 0, maxOutputTokens na metadata)
+#   apps/web/src/app/api/chat/route.ts ............ Phase 3 (gate, max_tokens, header, done event)
+#   apps/web/src/app/api/webhooks/stripe/route.ts . Phase 3 (CREDIT_PERCENTAGE)
+#   apps/web/src/app/chat/page.tsx ................ Phase 4 (X-Balance-Cents, balanceCents)
+#   .env.example .................................. Phase 1 (CREDIT_PERCENTAGE)
+#
+# CREATE (1 arquivo):
+#   packages/db/prisma/migrations/.../migration.sql  Phase 1 (gerado pelo Prisma)
+#
+# SEM ALTERAÇÕES (confirmado):
+#   packages/db/src/exchange-rate.ts .............. já correto
+#   packages/db/src/index.ts ...................... já exporta tudo necessário
+#   apps/web/src/lib/format-balance.ts ............ já correto
+#   apps/web/src/components/layout/CreditsProvider.tsx  já usa balanceCents
+#   apps/web/src/components/layout/AppLayout.tsx .. já usa balanceCents
+#   apps/web/src/components/dashboard/* ........... já usa formatBalance
+#
+# ─────────────────────────────────────────────────────────────────────────────

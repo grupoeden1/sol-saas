@@ -3,10 +3,10 @@ const nextConfig = {
   reactStrictMode: true,
   transpilePackages: ['@sol/db'],
 
-  // Exclude tiktoken from webpack bundling — it uses WASM and only runs server-side
-  // (imported via @sol/db/token-counter subpath, used only in /api/chat)
+  // Exclude native/WASM packages from webpack bundling — they only run server-side
+  // tiktoken: WASM (token counting), pdf-parse: pdfjs-dist, mammoth: DOCX, sharp: native C++
   experimental: {
-    serverComponentsExternalPackages: ['tiktoken'],
+    serverComponentsExternalPackages: ['tiktoken', 'pdf-parse', 'mammoth', 'sharp'],
   },
 
   webpack: (config, { isServer }) => {

@@ -15,7 +15,6 @@ model User {
   passwordHash    String
   role            Role      @default(USER)
   balanceCents    Int       @default(0)    // saldo interno em centavos de real
-  minBalanceCents Int       @default(-200) // limite de saldo negativo (-R$2,00)
 
   sessions      Session[]
   conversations Conversation[]
@@ -83,7 +82,11 @@ model CreditTransaction {
   outputTokens    Int?            // tokens de output consumidos
   modelUsed       String?         // modelo OpenAI (ex: "gpt-4o", "gpt-4o-mini")
   costUsd         Decimal?        // custo em USD da chamada OpenAI
-  user            User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  maxOutputTokens    Int?            // MAX_OUTPUT_TOKENS usado no gate (auditoria)
+  hasAttachments     Boolean         @default(false)  // mensagem incluiu anexos?
+  attachmentTypes    String[]        @default([])     // tipos MIME dos arquivos anexados
+  attachmentTokens   Int?            // tokens extras dos arquivos (Vision + documentos)
+  user               User            @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   createdAt       DateTime        @default(now())
 

@@ -1,0 +1,1051 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Story 2.5 — Suporte a Anexos de Arquivos no Chat
+# Implementation Plan v1 (Feature addition)
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# CONTEXTO: O chat (Story 2.3) e precificação (Story 3.6) estão implementados
+# e estáveis. Esta story ADICIONA suporte a anexos de arquivos ao chat,
+# mantendo retrocompatibilidade total — mensagens sem anexo continuam usando
+# application/json sem nenhuma alteração.
+#
+# Mudanças-chave:
+#   1. Migration: 3 campos de auditoria em CreditTransaction
+#   2. Dependências: pdf-parse, mammoth, sharp em apps/web
+#   3. calculateImageCost() em token-counter.ts (Vision API pricing)
+#   4. file-processor.ts (NOVO): validação, extração, processamento de arquivos
+#   5. POST /api/chat: dual Content-Type (JSON intocado, multipart com arquivos)
+#   6. ChatInput: botão de anexo, preview, envio via FormData
+#   7. MessageBubble: exibição de anexos na sessão atual
+#   8. runtime = 'nodejs' obrigatório (mammoth, sharp requerem Node.js)
+# ─────────────────────────────────────────────────────────────────────────────
+
+storyId: "story-2.5"
+createdAt: "2026-02-27T22:00:00Z"
+createdBy: "@architect"
+status: pending
+complexity: HIGH
+estimatedEffort: "5-7 days (new feature + file processing + frontend UX)"
+
+# ─── Dependencies ────────────────────────────────────────────────────────────
+
+dependencies:
+  - name: pdf-parse
+    version: "^1.1.1"
+    purpose: "Extração de texto de PDFs"
+    install: "pnpm --filter web add pdf-parse"
+  - name: "@types/pdf-parse"
+    version: "^1.1.4"
+    purpose: "Tipos TypeScript para pdf-parse"
+    install: "pnpm --filter web add -D @types/pdf-parse"
+  - name: mammoth
+    version: "^1.8.0"
+    purpose: "Extração de texto de DOCX"
+    install: "pnpm --filter web add mammoth"
+  - name: sharp
+    version: "latest"
+    purpose: "Leitura de dimensões de imagens (metadata only)"
+    install: "Verificar se já existe como dep do Next.js. Se não: pnpm --filter web add sharp"
+    notes: "Next.js 14 inclui sharp opcionalmente para Image Optimization. Verificar antes de instalar."
+
+# ─── Environment Variables ───────────────────────────────────────────────────
+
+envVars: []
+# Nenhuma nova variável de ambiente — todas as constantes são hardcoded no código.
+
+# ─── Constants ────────────────────────────────────────────────────────────────
+
+constants:
+  - name: MAX_FILE_SIZE
+    value: "10 * 1024 * 1024 (10MB)"
+    location: "apps/web/src/lib/file-processor.ts"
+    purpose: "Tamanho máximo por arquivo"
+    status: new
+  - name: MAX_FILES_PER_MSG
+    value: 3
+    location: "apps/web/src/lib/file-processor.ts"
+    purpose: "Máximo de arquivos por mensagem"
+    status: new
+  - name: MAX_DOC_CHARS
+    value: 50000
+    location: "apps/web/src/lib/file-processor.ts"
+    purpose: "Limite de caracteres por documento (rejeita, nunca trunca)"
+    status: new
+  - name: ALLOWED_MIME_TYPES
+    value: "image/jpeg, image/png, image/gif, image/webp, application/pdf, text/plain, text/markdown, application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    location: "apps/web/src/lib/file-processor.ts"
+    purpose: "Allowlist de tipos MIME"
+    status: new
+
+# ─── Phases ──────────────────────────────────────────────────────────────────
+
+phases:
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # PHASE 1 — Setup: Migration + Dependencies
+  # Schema e dependências. Tudo depende desta fase.
+  # Subtasks 1.1 e 1.2 podem ser executadas em PARALELO.
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  - id: "phase-1"
+    name: "Setup: Migration + Dependencies"
+    description: >
+      Migration Prisma para adicionar campos de auditoria de anexos em CreditTransaction.
+      Instalação de pdf-parse, mammoth, sharp em apps/web.
+      Toda implementação de código depende desta fase.
+
+    subtasks:
+
+      # ─── 1.1: Migration Prisma ────────────────────────────────────────────
+
+      - id: "1.1"
+        title: "Migration Prisma — Campos de auditoria de anexos"
+        service: database
+        files:
+          - path: "packages/db/prisma/schema.prisma"
+            action: MODIFY
+          - path: "packages/db/prisma/migrations/YYYYMMDD_add_attachment_fields/migration.sql"
+            action: CREATE
+        currentState: |
+          CreditTransaction (schema.prisma linhas 73-92):
+          - id, userId, amount, type, description, stripePaymentId
+          - exchangeRate (Decimal?), inputTokens (Int?), outputTokens (Int?)
+          - modelUsed (String?), costUsd (Decimal?), maxOutputTokens (Int?)
+          - NÃO tem: hasAttachments, attachmentTypes, attachmentTokens
+        targetState: |
+          CreditTransaction COM:
+          - `hasAttachments Boolean @default(false)` — indica se mensagem teve anexos
+          - `attachmentTypes String[] @default([])` — tipos MIME dos arquivos anexados
+          - `attachmentTokens Int?` — tokens extras dos arquivos (nullable para registros antigos)
+          - Campos com defaults: dados existentes NÃO impactados
+        actions:
+          - "Em schema.prisma: adicionar `hasAttachments Boolean @default(false)` ao model CreditTransaction (após maxOutputTokens)"
+          - "Em schema.prisma: adicionar `attachmentTypes String[] @default([])` ao model CreditTransaction"
+          - "Em schema.prisma: adicionar `attachmentTokens Int?` ao model CreditTransaction"
+          - "Criar migration: pnpm --filter db exec -- npx prisma migrate dev --create-only --name add_attachment_fields"
+          - "Verificar migration SQL gerada — deve conter ADD COLUMN apenas (não drop+create)"
+          - "Aplicar migration: pnpm --filter db exec -- npx prisma migrate dev"
+          - "Verificar: pnpm --filter db exec -- npx prisma generate"
+        verification:
+          type: command
+          command: "cd c:/Projetos/Sol/sol-saas && pnpm --filter db exec -- npx prisma validate"
+        status: pending
+        dependencies: []
+        notes: |
+          Migration SQL esperada:
+          ```sql
+          ALTER TABLE "CreditTransaction" ADD COLUMN "hasAttachments" BOOLEAN NOT NULL DEFAULT false;
+          ALTER TABLE "CreditTransaction" ADD COLUMN "attachmentTypes" TEXT[] DEFAULT ARRAY[]::TEXT[];
+          ALTER TABLE "CreditTransaction" ADD COLUMN "attachmentTokens" INTEGER;
+          ```
+
+          Dados existentes: registros antigos terão hasAttachments=false,
+          attachmentTypes=[], attachmentTokens=NULL — correto e esperado.
+
+          DeductMetadata em credits.ts será atualizado na Phase 3 (Subtask 5),
+          quando o chat route passar os novos campos.
+
+      # ─── 1.2: Instalar dependências ──────────────────────────────────────
+
+      - id: "1.2"
+        title: "Instalar pdf-parse, mammoth, sharp em apps/web"
+        service: infra
+        files:
+          - path: "apps/web/package.json"
+            action: MODIFY
+        currentState: |
+          apps/web/package.json NÃO contém:
+          - pdf-parse
+          - mammoth
+          - sharp pode já existir como dependência opcional do Next.js
+        targetState: |
+          apps/web/package.json COM:
+          - "pdf-parse": "^1.1.1" em dependencies
+          - "mammoth": "^1.8.0" em dependencies
+          - "sharp": versão compatível em dependencies (ou já existente)
+          - "@types/pdf-parse" em devDependencies (se tipos existirem no npm)
+        actions:
+          - "Verificar se sharp já é dependência: grep sharp apps/web/package.json"
+          - "Se sharp NÃO existir: pnpm --filter web add sharp"
+          - "pnpm --filter web add pdf-parse mammoth"
+          - "pnpm --filter web add -D @types/pdf-parse (verificar se existe no npm)"
+          - "pnpm install — resolver dependências"
+          - "pnpm build — verificar que Next.js build continua passando"
+        verification:
+          type: command
+          command: "cd c:/Projetos/Sol/sol-saas && pnpm --filter web exec -- node -e \"require('pdf-parse'); require('mammoth'); require('sharp'); console.log('OK')\""
+        status: pending
+        dependencies: []
+        notes: |
+          ATENÇÃO:
+          - mammoth e sharp requerem Node.js runtime (não edge). A API Route
+            será configurada com `export const runtime = 'nodejs'` na Phase 3.
+          - pdf-parse: PDFs escaneados retornam string vazia — código de extração
+            deve detectar e retornar erro (implementado na Phase 2, Subtask 4).
+          - Next.js 14 pode já incluir sharp para Image Optimization.
+            Verificar `pnpm --filter web list sharp` antes de instalar.
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # PHASE 2 — Core: calculateImageCost + file-processor
+  # Subtasks podem ser executadas em PARALELO (independentes entre si).
+  # Ambas dependem da Phase 1 (schema + deps instaladas).
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  - id: "phase-2"
+    name: "Core: calculateImageCost + file-processor"
+    description: >
+      Adicionar calculateImageCost ao token-counter (Vision API pricing).
+      Criar file-processor.ts com validação, extração e processamento de arquivos.
+      Subtasks 2.1 e 2.2 são independentes e podem ser executadas em paralelo.
+
+    subtasks:
+
+      # ─── 2.1: calculateImageCost ─────────────────────────────────────────
+
+      - id: "2.1"
+        title: "Adicionar calculateImageCost ao token-counter.ts"
+        service: backend
+        files:
+          - path: "packages/db/src/token-counter.ts"
+            action: MODIFY
+          - path: "packages/db/src/index.ts"
+            action: MODIFY
+        currentState: |
+          token-counter.ts (linhas 1-143):
+          - MODEL_PRICING: gpt-4o (2.50/10.00), gpt-4o-mini (0.15/0.60)
+          - DEFAULT_PRICING: 2.50/10.00
+          - MAX_OUTPUT_TOKENS = 8192, MIN_COST_CENTS = 100
+          - countTokens(), countRawTokens(), calculateCostCents()
+          - estimateMaxCost(), calculateRealCost()
+          - calculateImageCost NÃO existe
+
+          index.ts (linhas 1-27):
+          - Exporta: prisma, @prisma/client, conversations, credits, exchange-rate
+          - token-counter NÃO re-exportado (tiktoken WASM issue com webpack)
+          - Comentário explica: import direto via '@sol/db/token-counter'
+        targetState: |
+          token-counter.ts COM:
+          - calculateImageCost(width, height, detail) → number (tokens)
+          - Implementa 3 modos: low (85), high (tiles×170+85), auto (threshold 512)
+
+          index.ts:
+          - SEM mudança direta — calculateImageCost será importado via '@sol/db/token-counter'
+            pelo file-processor.ts (que roda no servidor, sem issue de webpack)
+          - NOTA: Se calculateImageCost for necessário fora de token-counter imports,
+            considerar export seletivo. Por ora, import direto é suficiente.
+        actions:
+          - "Adicionar função exportada calculateImageCost ao final de token-counter.ts"
+          - "Implementar lógica de detail modes (low, high, auto)"
+          - "Verificar com testes unitários (tabela de valores esperados)"
+        verification:
+          type: command
+          command: "cd c:/Projetos/Sol/sol-saas && packages/db/node_modules/.bin/tsc --noEmit -p packages/db/tsconfig.json"
+        status: pending
+        dependencies:
+          - "1.1"
+        notes: |
+          Código a adicionar (após calculateRealCost):
+
+          ```typescript
+          // ─── calculateImageCost ──────────────────────────────────────────────────
+
+          /**
+           * Calcula custo em tokens de uma imagem para a OpenAI Vision API.
+           *
+           * Modos:
+           *   - low: 85 tokens fixos (imagem redimensionada para 512×512 internamente pela API)
+           *   - high: tiles de 512×512 sobre imagem redimensionada + 85 base
+           *   - auto: high se qualquer dimensão > 512, low caso contrário
+           *
+           * @see https://platform.openai.com/docs/guides/vision
+           */
+          export function calculateImageCost(
+            width: number,
+            height: number,
+            detail: 'low' | 'high' | 'auto',
+          ): number {
+            // Auto: escolher baseado em threshold
+            if (detail === 'auto') {
+              return width > 512 || height > 512
+                ? calculateImageCost(width, height, 'high')
+                : 85
+            }
+
+            // Low: sempre 85 tokens
+            if (detail === 'low') return 85
+
+            // High: redimensionar + calcular tiles
+            // 1. Caber em 2048×2048
+            let w = width
+            let h = height
+            if (w > 2048 || h > 2048) {
+              const scale = 2048 / Math.max(w, h)
+              w = Math.floor(w * scale)
+              h = Math.floor(h * scale)
+            }
+
+            // 2. Escalar para que menor dimensão = 768
+            const shortSide = Math.min(w, h)
+            if (shortSide > 768) {
+              const scale = 768 / shortSide
+              w = Math.floor(w * scale)
+              h = Math.floor(h * scale)
+            }
+
+            // 3. Calcular tiles de 512×512
+            const tilesX = Math.ceil(w / 512)
+            const tilesY = Math.ceil(h / 512)
+            const tokens = (tilesX * tilesY * 170) + 85
+
+            return tokens
+          }
+          ```
+
+          Testes de validação (da Story 2.5):
+          | Input       | Detail | Expected                                        |
+          |-------------|--------|-------------------------------------------------|
+          | 512×512     | low    | 85                                              |
+          | 1024×1024   | high   | (2×2×170)+85 = 765                              |
+          | 2048×4096   | high   | 1024×2048 → 768×1536 → (2×3×170)+85 = 1105     |
+          | 256×256     | auto   | 85 (ambas ≤512 → low)                           |
+          | 1920×1080   | auto   | high detail (>512)                               |
+
+      # ─── 2.2: file-processor.ts ──────────────────────────────────────────
+
+      - id: "2.2"
+        title: "Criar file-processor.ts — validação, extração e processamento"
+        service: backend
+        files:
+          - path: "apps/web/src/lib/file-processor.ts"
+            action: CREATE
+        currentState: |
+          Arquivo NÃO existe.
+          Funções necessárias para processar arquivos de chat não existem em nenhum lugar.
+          Dependências (pdf-parse, mammoth, sharp) serão instaladas na Phase 1.
+          calculateImageCost será adicionada ao token-counter na Subtask 2.1.
+          countRawTokens já existe em '@sol/db/token-counter'.
+        targetState: |
+          apps/web/src/lib/file-processor.ts COM:
+          - Constantes: MAX_FILE_SIZE (10MB), MAX_FILES_PER_MSG (3), MAX_DOC_CHARS (50k), ALLOWED_MIME_TYPES
+          - Tipo ProcessedFile (union: image | document)
+          - validateFile(file) → { valid, error? }
+          - extractTextFromPDF(buffer) → { text, isEmpty }
+          - extractTextFromDOCX(buffer) → string
+          - extractTextFromPlain(buffer) → string
+          - getImageDimensions(buffer) → { width, height }
+          - processFile(file) → ProcessedFile
+          - processFiles(files) → ProcessedFile[]
+          - Mensagens de erro em português
+        actions:
+          - "Criar arquivo apps/web/src/lib/file-processor.ts"
+          - "Definir constantes: MAX_FILE_SIZE, MAX_FILES_PER_MSG, MAX_DOC_CHARS, ALLOWED_MIME_TYPES"
+          - "Definir tipo ProcessedFile (union type para image e document)"
+          - "Implementar validateFile: verifica MIME type e tamanho"
+          - "Implementar extractTextFromPDF: usa pdf-parse, detecta PDFs escaneados (texto vazio)"
+          - "Implementar extractTextFromDOCX: usa mammoth (extractRawText, não HTML)"
+          - "Implementar extractTextFromPlain: leitura direta do buffer como UTF-8"
+          - "Implementar getImageDimensions: usa sharp.metadata() apenas para dimensões"
+          - "Implementar processFile: orquestra validação → buffer → extração → contagem de tokens"
+          - "Implementar processFiles: valida max 3, processa cada via processFile"
+          - "Documentos > 50.000 chars → rejeitar (NUNCA truncar)"
+          - "PDFs escaneados → detectar e rejeitar com mensagem clara"
+          - "Todas as mensagens de erro em português"
+        verification:
+          type: command
+          command: "cd c:/Projetos/Sol/sol-saas && pnpm --filter web exec tsc --noEmit"
+        status: pending
+        dependencies:
+          - "1.2"
+          - "2.1"
+        notes: |
+          Estrutura do arquivo:
+
+          ```typescript
+          import pdfParse from 'pdf-parse'
+          import mammoth from 'mammoth'
+          import sharp from 'sharp'
+          import { countRawTokens } from '@sol/db/token-counter'
+          import { calculateImageCost } from '@sol/db/token-counter'
+
+          // ─── Constants ──────────────────────────────────────────────
+          export const MAX_FILE_SIZE = 10 * 1024 * 1024  // 10MB
+          export const MAX_FILES_PER_MSG = 3
+          export const MAX_DOC_CHARS = 50_000
+
+          export const ALLOWED_MIME_TYPES = [
+            'image/jpeg', 'image/png', 'image/gif', 'image/webp',
+            'application/pdf', 'text/plain', 'text/markdown',
+            'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+          ] as const
+
+          // ─── Types ──────────────────────────────────────────────────
+          export type ProcessedFile =
+            | { type: 'image'; width: number; height: number; base64: string; mimeType: string; tokens: number }
+            | { type: 'document'; text: string; filename: string; tokens: number }
+          ```
+
+          Mensagens de erro (em português):
+          - MIME inválido: "Tipo de arquivo não suportado: {mime}. Tipos aceitos: JPEG, PNG, GIF, WEBP, PDF, TXT, MD, DOCX."
+          - Tamanho > 10MB: "Arquivo '{filename}' excede o limite de 10MB ({size}MB)."
+          - PDF escaneado: "Este PDF não contém texto legível. Envie como imagem ou digite o conteúdo."
+          - Documento > 50k chars: "Documento '{filename}' muito grande ({chars} caracteres). Máximo: 50.000 caracteres (~25 páginas)."
+          - Mais de 3 arquivos: "Máximo de 3 arquivos por mensagem."
+
+          IMPORTANTE:
+          - processFile usa countRawTokens (tiktoken) para documentos e calculateImageCost para imagens
+          - Modelo 'gpt-4o' hardcoded para countRawTokens de documentos (será usado com Vision de qualquer forma)
+          - Para imagens: detail='auto' (threshold 512px)
+          - Buffer de imagem convertido para base64 (data URI)
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # PHASE 3 — Backend: Refatorar POST /api/chat
+  # Aceitar multipart/form-data mantendo retrocompatibilidade total com JSON.
+  # Depende das Phases 1 e 2 completas.
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  - id: "phase-3"
+    name: "Backend: Refatorar POST /api/chat"
+    description: >
+      Adicionar runtime='nodejs', dual Content-Type parsing, processamento de
+      arquivos, model forcing para gpt-4o com imagens, tokens de anexos no gate
+      e dedução, campos de auditoria de anexos no deductCredits.
+      Fluxo JSON existente INTOCADO quando não há arquivos.
+
+    subtasks:
+
+      # ─── 3.1: Refatorar POST /api/chat ─────────────────────────────────
+
+      - id: "3.1"
+        title: "Refatorar chat route: runtime nodejs, dual Content-Type, file processing"
+        service: backend
+        files:
+          - path: "apps/web/src/app/api/chat/route.ts"
+            action: MODIFY
+          - path: "packages/db/src/credits.ts"
+            action: MODIFY
+        currentState: |
+          chat/route.ts (286 linhas):
+          - NÃO tem `export const runtime = 'nodejs'` (usa default — pode ser edge)
+          - Linha 55: parse exclusivo via `req.json()` (application/json)
+          - Linhas 19-22: chatSchema Zod com conversationId + message
+          - Linhas 104-107: model selection: detectFinalOutputIntent → gpt-4o ou gpt-4o-mini
+          - Linha 128: inputTokens = countTokens(tokenMessages, model)
+          - Linha 134: maxCostCents = estimateMaxCost(inputTokens, model, exchangeRate)
+          - Linhas 191-199: deductCredits metadata SEM hasAttachments/attachmentTypes/attachmentTokens
+          - Linhas 211-225: audit trail SEM campos de anexo
+
+          credits.ts (136 linhas):
+          - Linhas 6-14: DeductMetadata interface:
+            exchangeRate, inputTokens, outputTokens, modelUsed, costUsd, conversationTitle, maxOutputTokens
+          - NÃO tem: hasAttachments, attachmentTypes, attachmentTokens
+          - Linhas 115-128: creditTransaction.create com metadata existente
+        targetState: |
+          chat/route.ts COM:
+          - `export const runtime = 'nodejs'` no topo (obrigatório para mammoth/sharp)
+          - Detecção de Content-Type: multipart/form-data vs application/json
+          - Se JSON → fluxo existente intocado (zero mudanças no código path)
+          - Se multipart:
+            - Parse FormData (message, conversationId, files)
+            - processFiles(files) → ProcessedFile[] (importa de file-processor)
+            - Se falhar → 400, sem OpenAI, sem dedução
+            - Separar imageFiles[] e documentFiles[]
+            - attachmentTokens = sum de tokens de todos os ProcessedFile
+            - totalInputTokens = countTokens(messages, model) + attachmentTokens
+            - Se imageFiles.length > 0 → model = 'gpt-4o' (forçar Vision)
+            - Gate com totalInputTokens
+            - Montar payload OpenAI:
+              - Imagens: content array com image_url (data URI + detail auto)
+              - Documentos: prefixo na mensagem do user
+            - Stream → deductCredits COM hasAttachments, attachmentTypes, attachmentTokens
+            - Audit trail COM campos de anexo
+
+          credits.ts COM:
+          - DeductMetadata interface expandida com campos opcionais:
+            hasAttachments?: boolean, attachmentTypes?: string[], attachmentTokens?: number
+          - creditTransaction.create: inclui novos campos quando presentes
+        actions:
+          - "Adicionar `export const runtime = 'nodejs'` antes do export async function POST"
+          - "Adicionar import de processFiles, ProcessedFile de '@/lib/file-processor'"
+          - "Refatorar início do POST: detectar Content-Type"
+          - "Bloco JSON: manter req.json() + chatSchema.safeParse (INTOCADO)"
+          - "Bloco multipart: req.formData() → parse message, conversationId, files"
+          - "Chamar processFiles(files) em try/catch → 400 se falhar"
+          - "Separar imageFiles e documentFiles do resultado"
+          - "Calcular attachmentTokens = sum(file.tokens)"
+          - "Model forcing: se imageFiles.length > 0 → model = 'gpt-4o'"
+          - "totalInputTokens = countTokens(tokenMessages, model) + attachmentTokens"
+          - "Montar payload OpenAI com content array para imagens e texto prefixado para docs"
+          - "Expandir deductCredits metadata: hasAttachments, attachmentTypes, attachmentTokens"
+          - "Expandir audit trail: incluir campos de anexo"
+          - "Em credits.ts: adicionar campos opcionais ao DeductMetadata"
+          - "Em credits.ts: adicionar campos ao creditTransaction.create"
+        verification:
+          type: command
+          command: "cd c:/Projetos/Sol/sol-saas && pnpm --filter web exec tsc --noEmit && pnpm --filter db exec tsc --noEmit"
+        status: pending
+        dependencies:
+          - "1.1"
+          - "2.1"
+          - "2.2"
+        notes: |
+          DELTA detalhado para credits.ts:
+
+          1. DeductMetadata (linhas 6-14):
+             ANTES:
+             ```typescript
+             export interface DeductMetadata {
+               exchangeRate: Prisma.Decimal
+               inputTokens: number
+               outputTokens: number
+               modelUsed: string
+               costUsd: Prisma.Decimal
+               conversationTitle: string
+               maxOutputTokens: number
+             }
+             ```
+             DEPOIS:
+             ```typescript
+             export interface DeductMetadata {
+               exchangeRate: Prisma.Decimal
+               inputTokens: number
+               outputTokens: number
+               modelUsed: string
+               costUsd: Prisma.Decimal
+               conversationTitle: string
+               maxOutputTokens: number
+               hasAttachments?: boolean
+               attachmentTypes?: string[]
+               attachmentTokens?: number
+             }
+             ```
+             NOTA: Campos opcionais (?) para não quebrar chamadas existentes sem anexos.
+
+          2. creditTransaction.create (linhas 115-128):
+             ANTES: sem hasAttachments, attachmentTypes, attachmentTokens
+             DEPOIS: adicionar os 3 campos (usar metadata.hasAttachments ?? false, etc.)
+
+          DELTA detalhado para chat/route.ts:
+
+          1. Runtime (topo do arquivo, antes de exports):
+             ```typescript
+             export const runtime = 'nodejs'
+             ```
+
+          2. Content-Type detection (substituir linhas 54-56):
+             ```typescript
+             const contentType = req.headers.get('content-type') ?? ''
+             const isMultipart = contentType.includes('multipart/form-data')
+             ```
+
+          3. Se isMultipart:
+             ```typescript
+             const formData = await req.formData()
+             const message = formData.get('message') as string
+             const conversationId = formData.get('conversationId') as string | null
+             const files = formData.getAll('files') as File[]
+
+             if (!message?.trim()) {
+               return new Response('Message is required', { status: 400 })
+             }
+
+             let processedFiles: ProcessedFile[] = []
+             if (files.length > 0) {
+               try {
+                 processedFiles = await processFiles(files)
+               } catch (error) {
+                 return new Response(JSON.stringify({
+                   error: error instanceof Error ? error.message : 'Erro ao processar arquivos'
+                 }), { status: 400, headers: { 'Content-Type': 'application/json' } })
+               }
+             }
+             ```
+
+          4. Se !isMultipart → fluxo JSON existente INTOCADO.
+
+          5. Model forcing (após detectar model):
+             ```typescript
+             const imageFiles = processedFiles.filter(f => f.type === 'image')
+             const documentFiles = processedFiles.filter(f => f.type === 'document')
+             if (imageFiles.length > 0) {
+               model = 'gpt-4o'  // Vision API requer modelo completo
+             }
+             ```
+
+          6. Token counting expandido:
+             ```typescript
+             const attachmentTokens = processedFiles.reduce((sum, f) => sum + f.tokens, 0)
+             const totalInputTokens = inputTokens + attachmentTokens
+             // Usar totalInputTokens no gate e na dedução
+             ```
+
+          7. Payload OpenAI com imagens (content array):
+             ```typescript
+             // Para a mensagem do user, montar content array
+             const userContent: OpenAI.Chat.Completions.ChatCompletionContentPart[] = []
+
+             // Documentos como texto prefixado
+             for (const doc of documentFiles) {
+               userContent.push({
+                 type: 'text',
+                 text: `[Documento: ${doc.filename}]\n${doc.text}\n\n`,
+               })
+             }
+
+             // Texto da mensagem do user
+             userContent.push({ type: 'text', text: message })
+
+             // Imagens como image_url
+             for (const img of imageFiles) {
+               userContent.push({
+                 type: 'image_url',
+                 image_url: {
+                   url: `data:${img.mimeType};base64,${img.base64}`,
+                   detail: 'auto',
+                 },
+               })
+             }
+             ```
+
+          8. deductCredits metadata expandido:
+             ```typescript
+             const result = await deductCredits(user.id, realCost.costCents, {
+               exchangeRate,
+               inputTokens: totalInputTokens,
+               outputTokens,
+               modelUsed: model,
+               costUsd: realCost.costUsd,
+               conversationTitle: conversation.title,
+               maxOutputTokens: MAX_OUTPUT_TOKENS,
+               hasAttachments: processedFiles.length > 0,
+               attachmentTypes: processedFiles.map(f =>
+                 f.type === 'image' ? f.mimeType : 'text/plain'
+               ),
+               attachmentTokens: attachmentTokens > 0 ? attachmentTokens : undefined,
+             })
+             ```
+
+          PRESERVAR: streaming SSE, conversation management, error handling existente,
+          audit trail no catch do deductCredits, getErrorMessage function.
+
+          RETROCOMPATIBILIDADE: quando isMultipart=false, NENHUM código novo é executado.
+          O fluxo JSON existente permanece byte-a-byte idêntico ao estado atual.
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # PHASE 4 — Frontend: ChatInput + MessageBubble
+  # Subtasks podem ser executadas em PARALELO (independentes entre si).
+  # Ambas dependem da Phase 3 (API route pronta).
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  - id: "phase-4"
+    name: "Frontend: ChatInput + MessageBubble"
+    description: >
+      Adicionar botão de anexo, preview de arquivos e envio via FormData ao ChatInput.
+      Adicionar exibição de anexos (sessão atual) ao MessageBubble.
+      Subtasks 4.1 e 4.2 podem ser executadas em paralelo.
+
+    subtasks:
+
+      # ─── 4.1: ChatInput com anexos ────────────────────────────────────────
+
+      - id: "4.1"
+        title: "ChatInput: botão de anexo, preview, envio via FormData"
+        service: frontend
+        files:
+          - path: "apps/web/src/app/chat/page.tsx"
+            action: MODIFY
+        currentState: |
+          ChatInput (linhas 197-266):
+          - Props: onSend(msg: string), disabled, noCredits
+          - Estado: value (string), textareaRef
+          - handleSend: envia string pura via onSend(trimmed)
+          - Textarea + botão enviar (solar-500)
+          - NÃO tem: botão de anexo, input file, preview de arquivos, estado de arquivos
+
+          handleSendMessage (linhas 351-479):
+          - Sempre envia JSON: fetch('/api/chat', { headers: {'Content-Type': 'application/json'}, body: JSON.stringify(...) })
+          - NÃO suporta FormData/multipart
+        targetState: |
+          ChatInput COM:
+          - Props expandidas: onSend(msg: string, files?: File[])
+          - Estado: files (File[]), previewUrls (string[])
+          - Botão paperclip SVG à esquerda do textarea
+          - <input type="file" /> hidden com accept para tipos suportados, multiple
+          - Limite de 3 arquivos no frontend (desabilitar botão após 3)
+          - Preview area entre textarea e messages:
+            - Imagens: thumbnail 48×48 com object-fit cover
+            - Documentos: ícone + nome truncado (20 chars) + tamanho
+            - Botão × para remover cada anexo
+          - Validação client-side: rejeitar > 10MB e MIME inválido (mensagem inline)
+          - handleSend passa files para onSend
+          - Após envio: limpar files e previewUrls
+
+          handleSendMessage COM:
+          - Se files presentes → FormData com message, conversationId, files
+          - Se sem files → JSON (comportamento atual preservado)
+
+          Visual (design system):
+          - Botão paperclip: text-foreground-muted/50, hover text-foreground-muted
+          - Preview area: bg-background-secondary/50, border border-solar-800/20, rounded
+          - Thumbnail: border border-solar-800/30, rounded-lg
+          - Remove button: text-foreground-muted/50, hover text-red-400
+        actions:
+          - "Expandir interface de ChatInput: onSend(msg: string, files?: File[])"
+          - "Adicionar estado files (File[]) e error (string | null) ao ChatInput"
+          - "Adicionar <input type='file' hidden /> com ref, accept para ALLOWED_MIME_TYPES, multiple"
+          - "Adicionar botão paperclip (SVG inline) à esquerda do textarea"
+          - "Implementar handleFileChange: validar MIME type e tamanho, acumular até MAX_FILES_PER_MSG"
+          - "Implementar removeFile(index): remover arquivo do estado"
+          - "Renderizar preview area (condicional: só quando files.length > 0)"
+          - "Imagens: URL.createObjectURL para thumbnail, revogar no cleanup"
+          - "Documentos: ícone de arquivo + nome truncado + tamanho formatado"
+          - "handleSend: passa files para onSend"
+          - "Após envio: limpar files, revogar blob URLs"
+          - "Refatorar handleSendMessage no ChatPage: aceitar files opcionais"
+          - "Se files → FormData (append message, conversationId, each file)"
+          - "Se !files → JSON (manter fetch existente INTOCADO)"
+        verification:
+          type: command
+          command: "cd c:/Projetos/Sol/sol-saas && pnpm --filter web exec tsc --noEmit"
+        status: pending
+        dependencies:
+          - "3.1"
+        notes: |
+          DELTA para handleSendMessage no ChatPage:
+
+          ```typescript
+          // ANTES (linha 366-373):
+          const res = await fetch('/api/chat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              conversationId: currentConversationId,
+              message: content,
+            }),
+          });
+
+          // DEPOIS:
+          let res: Response
+          if (files && files.length > 0) {
+            const formData = new FormData()
+            formData.append('message', content)
+            if (currentConversationId) {
+              formData.append('conversationId', currentConversationId)
+            }
+            for (const file of files) {
+              formData.append('files', file)
+            }
+            res = await fetch('/api/chat', {
+              method: 'POST',
+              body: formData,
+              // NÃO setar Content-Type — browser adiciona boundary automaticamente
+            })
+          } else {
+            res = await fetch('/api/chat', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                conversationId: currentConversationId,
+                message: content,
+              }),
+            })
+          }
+          ```
+
+          IMPORTANTE: Não setar Content-Type manualmente para FormData.
+          O browser adiciona multipart/form-data com boundary automaticamente.
+
+          Validação client-side (constantes replicadas no frontend):
+          - MAX_FILE_SIZE: 10 * 1024 * 1024
+          - MAX_FILES_PER_MSG: 3
+          - MIME types: mesma lista do file-processor
+
+      # ─── 4.2: MessageBubble com exibição de anexos ────────────────────────
+
+      - id: "4.2"
+        title: "MessageBubble: exibição de anexos da sessão atual"
+        service: frontend
+        files:
+          - path: "apps/web/src/app/chat/page.tsx"
+            action: MODIFY
+        currentState: |
+          Message interface (linhas 14-19):
+          - { id, role, content, createdAt }
+          - NÃO tem campo attachments
+
+          MessageBubble (linhas 110-172):
+          - Exibe apenas content como texto
+          - Copy button para mensagens do assistant
+          - NÃO exibe indicação de anexos
+        targetState: |
+          Message interface COM campo opcional:
+          - attachments?: Array<{ type: 'image' | 'document'; name: string; previewUrl?: string }>
+          - previewUrl: blob URL para imagens (sessão atual apenas, não persiste)
+
+          MessageBubble COM:
+          - Imagens: thumbnail clicável acima do texto (sessão atual)
+          - Documentos: badge com ícone de arquivo + nome
+          - Após reload: sem preview (arquivos não persistidos) — texto já contém contexto
+
+          Visual:
+          - Badge documento: bg-solar-500/10, border border-solar-500/30, text-solar-300, rounded-lg
+          - Thumbnail imagem: max-w-[200px], rounded-lg, border border-solar-800/30, cursor-pointer
+        actions:
+          - "Expandir interface Message: adicionar attachments? opcional"
+          - "Em MessageBubble: renderizar attachments se existirem"
+          - "Imagens (previewUrl): thumbnail max-w-[200px] acima do texto"
+          - "Documentos: badge inline com ícone de arquivo SVG + nome"
+          - "Em handleSendMessage: popular attachments no userMessage quando files presentes"
+          - "Criar blob URLs para imagens: URL.createObjectURL(file)"
+        verification:
+          type: command
+          command: "cd c:/Projetos/Sol/sol-saas && pnpm --filter web exec tsc --noEmit"
+        status: pending
+        dependencies:
+          - "3.1"
+        notes: |
+          DELTA para interface Message:
+
+          ```typescript
+          // ANTES:
+          interface Message {
+            id: string;
+            role: 'user' | 'assistant';
+            content: string;
+            createdAt: Date;
+          }
+
+          // DEPOIS:
+          interface Message {
+            id: string;
+            role: 'user' | 'assistant';
+            content: string;
+            createdAt: Date;
+            attachments?: Array<{
+              type: 'image' | 'document';
+              name: string;
+              previewUrl?: string;  // blob URL, sessão atual apenas
+            }>;
+          }
+          ```
+
+          IMPORTANTE:
+          - Arquivos NÃO são persistidos. Ao recarregar a página, attachments será undefined.
+          - Previews existem apenas na sessão atual (estado React local).
+          - Mensagens históricas não terão attachments — o texto da mensagem já contém
+            os prefixos [Documento: filename] inseridos pelo backend.
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # PHASE 5 — Validation: typecheck + build + testes integração
+  # Verificação end-to-end. Depende de todas as fases anteriores.
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  - id: "phase-5"
+    name: "Validation: typecheck + build + testes integração"
+    description: >
+      Verificação completa: TypeScript strict, Next.js build, e testes de integração
+      do fluxo com e sem anexos.
+
+    subtasks:
+
+      # ─── 5.1: TypeScript typecheck + build ───────────────────────────────
+
+      - id: "5.1"
+        title: "TypeScript typecheck + Next.js build — zero errors"
+        service: infra
+        files: []
+        actions:
+          - "pnpm --filter db exec tsc --noEmit → zero errors"
+          - "pnpm --filter web exec tsc --noEmit → zero errors"
+          - "pnpm build → zero errors"
+        verification:
+          type: command
+          command: "cd c:/Projetos/Sol/sol-saas && pnpm --filter db exec tsc --noEmit && pnpm --filter web exec tsc --noEmit && pnpm build"
+        status: pending
+        dependencies:
+          - "4.1"
+          - "4.2"
+        notes: |
+          Pontos de atenção para erros de tipo:
+          - ProcessedFile union type: discriminated union via 'type' field
+          - DeductMetadata: novos campos opcionais (?) — não quebra chamadas existentes
+          - OpenAI ChatCompletionContentPart: import correto do tipo
+          - FormData.getAll('files') retorna FormDataEntryValue[] — cast para File[]
+          - calculateImageCost: verificar que parâmetros são number, não string
+          - runtime = 'nodejs': deve ser exportado como const literal
+
+      # ─── 5.2: Testes de integração ───────────────────────────────────────
+
+      - id: "5.2"
+        title: "Testes de integração — fluxos com e sem anexo"
+        service: qa
+        files: []
+        actions:
+          - "Migration aplica sem erros"
+          - "POST /api/chat com JSON (sem arquivo) → fluxo antigo intocado (retrocompatibilidade)"
+          - "POST /api/chat com multipart + PDF (texto legível) → texto extraído como contexto"
+          - "POST /api/chat com multipart + imagem JPEG → Vision API, modelo forçado para gpt-4o"
+          - "POST /api/chat com multipart + DOCX → texto extraído como contexto"
+          - "POST /api/chat com 4 arquivos → 400 'Máximo de 3 arquivos por mensagem.'"
+          - "POST /api/chat com arquivo > 10MB → 400 com mensagem clara"
+          - "POST /api/chat com PDF escaneado → 400 com mensagem clara"
+          - "POST /api/chat com documento > 50k chars → 400 (não truncado)"
+          - "POST /api/chat com MIME inválido → 400 com mensagem clara"
+          - "Gate bloqueando com anexo grande + saldo baixo → 402"
+          - "CreditTransaction registra hasAttachments=true, attachmentTypes, attachmentTokens"
+          - "CreditTransaction registra hasAttachments=false para mensagem sem anexo"
+          - "Badge de créditos atualiza após mensagem com anexo"
+          - "Modelo forçado para gpt-4o quando imagem anexada"
+          - "Frontend: botão de anexo funcional, preview, remoção individual"
+          - "Frontend: validação client-side (10MB, MIME type)"
+        verification:
+          type: manual
+          description: "Todos os cenários passam sem regressões"
+        status: pending
+        dependencies:
+          - "5.1"
+        notes: |
+          Cenários de teste prioritários:
+
+          1. Retrocompatibilidade:
+             - Enviar mensagem sem anexo via JSON → stream funciona → custos corretos
+             - ZERO mudanças no comportamento existente
+
+          2. PDF com texto:
+             - Anexar PDF de 2-3 páginas com texto legível
+             - IA responde com contexto do PDF → tokens de documento contabilizados
+
+          3. Imagem JPEG:
+             - Anexar foto JPEG → modelo forçado para gpt-4o
+             - IA descreve/analisa a imagem → tokens de Vision contabilizados
+             - CreditTransaction.modelUsed = 'gpt-4o'
+
+          4. Validações:
+             - Arquivo > 10MB → erro client-side imediato
+             - Tipo inválido (.zip) → erro client-side imediato
+             - 4 arquivos → erro antes do upload
+             - PDF escaneado → 400 do servidor
+
+          5. Gate com anexos:
+             - Saldo baixo + imagem grande → 402 com required incluindo tokens de Vision
+             - Verificar que required é maior que sem anexo (tokens extras)
+
+          6. Auditoria:
+             - Verificar CreditTransaction no banco após mensagem com anexo:
+               hasAttachments=true, attachmentTypes=['image/jpeg'], attachmentTokens=765
+
+# ─── Execution Graph ─────────────────────────────────────────────────────────
+#
+#   Phase 1 (Setup)
+#   ├── 1.1 (migration) ──────┐
+#   │                         ├──── 2.1 (calculateImageCost) ──────┐
+#   └── 1.2 (dependencies) ──┘                                    │
+#                              └──── 2.2 (file-processor) ─────────┤
+#                                    (depends on 1.2 + 2.1)        │
+#   Phase 2 (Core)                                                 │
+#                                                                  │
+#   Phase 3 (Backend)                                              │
+#   └── 3.1 (chat route + credits.ts) ────────────────────────────┘
+#         (depends on 1.1, 2.1, 2.2)        │
+#                                            │
+#   Phase 4 (Frontend)                       │
+#   ├── 4.1 (ChatInput) ───────────────────┘
+#   │    (depends on 3.1)                    │
+#   └── 4.2 (MessageBubble) ────────────────┤
+#        (depends on 3.1)                    │
+#                                            │
+#   Phase 5 (Validation)                     │
+#   ├── 5.1 (typecheck + build) ────────────┘
+#   │    (depends on 4.1, 4.2)
+#   └── 5.2 (integration tests)
+#        (depends on 5.1)
+#
+# ─── Parallel Execution Opportunities ────────────────────────────────────────
+#
+#   Wave 1: 1.1 + 1.2 (independentes — migration e deps podem rodar em paralelo)
+#   Wave 2: 2.1 (calculateImageCost, depende de 1.1) — 2.2 aguarda 2.1 + 1.2
+#   Wave 2b: 2.2 (file-processor, depende de 1.2 + 2.1)
+#   Wave 3: 3.1 (chat route, depende de 1.1 + 2.1 + 2.2)
+#   Wave 4: 4.1 + 4.2 (independentes entre si, ambas dependem de 3.1)
+#   Wave 5: 5.1 (typecheck + build, depende de 4.1 + 4.2)
+#   Wave 6: 5.2 (integration tests, depende de 5.1)
+#
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ─── Risk Assessment ─────────────────────────────────────────────────────────
+
+risks:
+  - id: "R1"
+    description: "pdf-parse retorna string vazia para PDFs escaneados (imagens sem OCR)"
+    severity: MEDIUM
+    mitigation: >
+      file-processor.ts detecta texto vazio (<10 chars) e retorna 400 com mensagem
+      clara orientando o aluno a enviar como imagem ou digitar o conteúdo.
+    affectedSubtasks: ["2.2"]
+
+  - id: "R2"
+    description: "mammoth e sharp requerem runtime Node.js (não edge)"
+    severity: LOW
+    mitigation: >
+      API Route configurada com `export const runtime = 'nodejs'`.
+      Validado que Next.js 14 suporta runtime='nodejs' em API Routes.
+    affectedSubtasks: ["3.1"]
+
+  - id: "R3"
+    description: "Pico de memória com 3 arquivos × 10MB simultâneos"
+    severity: MEDIUM
+    mitigation: >
+      30MB max por request. Com 200 concorrentes (NFR8), ~6GB pior caso teórico
+      — improvável em uso normal. Buffers descartados após montar payload OpenAI.
+      Monitorar em produção.
+    affectedSubtasks: ["2.2", "3.1"]
+
+  - id: "R4"
+    description: "Vision API com GPT-4o tem custo significativamente maior que gpt-4o-mini"
+    severity: LOW
+    mitigation: >
+      Gate calcula com pricing de gpt-4o quando imagem presente. Aluno vê
+      custo refletido (via 402 se insuficiente). Custo é transparente.
+    affectedSubtasks: ["3.1"]
+
+  - id: "R5"
+    description: "sharp pode conflitar com versão do Next.js"
+    severity: LOW
+    mitigation: >
+      Verificar se sharp já é dependência do Next.js antes de instalar.
+      Usar versão compatível se necessário.
+    affectedSubtasks: ["1.2"]
+
+  - id: "R6"
+    description: "FormData.getAll('files') retorna FormDataEntryValue[], não File[]"
+    severity: LOW
+    mitigation: >
+      Cast explícito com validação: filtrar apenas entries que são instanceof File.
+      Rejeitar com 400 se algum não for File.
+    affectedSubtasks: ["3.1"]
+
+# ─── Files Summary ───────────────────────────────────────────────────────────
+#
+# MODIFY (5 arquivos):
+#   packages/db/prisma/schema.prisma .............. Phase 1 (3 novos campos em CreditTransaction)
+#   packages/db/src/token-counter.ts .............. Phase 2 (calculateImageCost)
+#   packages/db/src/credits.ts .................... Phase 3 (DeductMetadata expandida, 3 campos no create)
+#   apps/web/src/app/api/chat/route.ts ............ Phase 3 (runtime nodejs, dual Content-Type, file processing)
+#   apps/web/src/app/chat/page.tsx ................ Phase 4 (ChatInput anexos, MessageBubble anexos)
+#
+# CREATE (1 arquivo):
+#   apps/web/src/lib/file-processor.ts ............. Phase 2 (validação, extração, processamento)
+#
+# AUTO-GENERATED (1 arquivo):
+#   packages/db/prisma/migrations/.../migration.sql  Phase 1 (gerado pelo Prisma)
+#
+# MODIFY (dependências):
+#   apps/web/package.json ......................... Phase 1 (pdf-parse, mammoth, sharp)
+#
+# SEM ALTERAÇÕES (confirmado):
+#   packages/db/src/exchange-rate.ts .............. já correto
+#   packages/db/src/index.ts ...................... sem mudanças necessárias
+#   apps/web/src/app/api/webhooks/stripe/route.ts . não impactado
+#   apps/web/src/components/layout/* .............. não impactados
+#   apps/web/src/lib/prompts.ts ................... não impactado
+#   .env.example .................................. sem novas variáveis
+#
+# ─────────────────────────────────────────────────────────────────────────────

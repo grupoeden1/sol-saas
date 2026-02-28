@@ -1,0 +1,285 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Story 3.5 — Painel do Usuário
+# Implementation Plan
+# ─────────────────────────────────────────────────────────────────────────────
+
+storyId: "story-3.5"
+createdAt: "2026-02-27T18:00:00Z"
+createdBy: "@architect"
+status: completed
+complexity: SIMPLE
+estimatedEffort: "1-2 days"
+
+# ─── Dependencies ────────────────────────────────────────────────────────────
+
+dependencies:
+  - name: "@sol/db"
+    version: "workspace"
+    purpose: "Prisma client para queries diretas em Server Components (User, CreditTransaction, Conversation)"
+  - name: "next"
+    version: "14.x"
+    purpose: "Server Components, searchParams API, Link navigation"
+
+# ─── Environment Variables ───────────────────────────────────────────────────
+
+envVars: []
+  # Nenhuma variável nova — story usa infraestrutura existente
+
+# ─── Phases ──────────────────────────────────────────────────────────────────
+
+phases:
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # PHASE 1 — Dashboard Components
+  # Componentes RSC isolados e reutilizáveis. Todos independentes entre si.
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  - id: "phase-1"
+    name: "Dashboard Components"
+    description: >
+      Criar os componentes RSC do dashboard: card de saldo com CTA condicional,
+      tabela de transações com layout responsivo, lista de conversas com links,
+      e componente de paginação server-side. Todos são independentes e podem
+      ser implementados em paralelo.
+
+    subtasks:
+
+      - id: "1.1"
+        description: "Criar componente CreditSummary com saldo formatado e CTA condicional"
+        service: frontend
+        files:
+          - "apps/web/src/components/dashboard/CreditSummary.tsx"
+        actions:
+          - "Criar diretório apps/web/src/components/dashboard/"
+          - "Implementar CreditSummary recebendo balanceCents como prop"
+          - "Exibir saldo via formatBalance() do CreditsProvider"
+          - "Renderizar CTA 'Comprar mais créditos' quando balanceCents < 1000 (< 10 créditos)"
+          - "Estilizar com padrão solar (border-solar-800/20, bg-background-secondary)"
+          - "Ícone de estrela consistente com CreditsBadge"
+        verification:
+          type: command
+          command: "cd c:/Projetos/Sol/sol-saas && pnpm --filter @sol/web exec tsc --noEmit"
+        status: completed
+        dependencies: []
+        notes: >
+          CTA condicional baseado no mesmo threshold que o PRD define:
+          "Link 'Comprar mais créditos' em destaque quando saldo < 10".
+          Como formatBalance divide por 100, threshold = balanceCents < 1000.
+
+          O componente importa formatBalance de CreditsProvider.tsx (módulo 'use client').
+          Funciona em RSC porque formatBalance é uma função pura sem hooks.
+
+      - id: "1.2"
+        description: "Criar componente Pagination server-side via search params"
+        service: frontend
+        files:
+          - "apps/web/src/components/dashboard/Pagination.tsx"
+        actions:
+          - "Implementar Pagination recebendo currentPage, totalPages e basePath"
+          - "Renderizar links <Link> com href={basePath}?page={N} (soft navigation)"
+          - "Mostrar first/last page always, ellipsis para gaps, +-1 around current"
+          - "Arrows ← → para prev/next"
+          - "aria-label para acessibilidade, aria-current='page' na página ativa"
+          - "Retornar null se totalPages <= 1"
+        verification:
+          type: command
+          command: "cd c:/Projetos/Sol/sol-saas && pnpm --filter @sol/web exec tsc --noEmit"
+        status: completed
+        dependencies: []
+        notes: >
+          Paginação 100% server-side — sem useState, sem client state.
+          Next.js Links fazem soft navigation preservando scroll e layout.
+          Pattern: /dashboard?page=1, /dashboard?page=2, etc.
+
+      - id: "1.3"
+        description: "Criar componente TransactionHistory com tabela paginada e layout responsivo"
+        service: frontend
+        files:
+          - "apps/web/src/components/dashboard/TransactionHistory.tsx"
+        actions:
+          - "Implementar TransactionHistory recebendo transactions[], currentPage e totalPages"
+          - "Desktop: tabela com colunas Tipo, Descrição, Valor, Data"
+          - "Mobile: cards empilhados com as mesmas informações"
+          - "Tipo purchase → badge verde 'Compra'; consumption → badge muted 'Uso'"
+          - "Valor positivo → verde com +; negativo → muted"
+          - "Formatação via formatBalance(Math.abs(amount))"
+          - "Data via Intl.DateTimeFormat('pt-BR') com hora"
+          - "Integrar Pagination no footer"
+          - "Estado vazio: 'Nenhuma transação ainda'"
+        verification:
+          type: command
+          command: "cd c:/Projetos/Sol/sol-saas && pnpm --filter @sol/web exec tsc --noEmit"
+        status: completed
+        dependencies:
+          - "1.2"
+        notes: >
+          Interface Transaction alinhada com select do Prisma:
+          { id, amount, type, description, createdAt }
+
+          Não expõe campos sensíveis (exchangeRate, costUsd, inputTokens, outputTokens)
+          conforme PRD FR7: "O aluno NÃO visualiza custo por mensagem, cotação ou saldo em reais."
+
+      - id: "1.4"
+        description: "Criar componente ConversationList com links para /chat?id="
+        service: frontend
+        files:
+          - "apps/web/src/components/dashboard/ConversationList.tsx"
+        actions:
+          - "Implementar ConversationList recebendo conversations[]"
+          - "Cada conversa: Link para /chat?id={conversationId}"
+          - "Exibir título (truncado) e data (dd/mm/yyyy)"
+          - "Chevron → como affordance de navegação"
+          - "Estado vazio: 'Nenhuma conversa ainda' + link 'Iniciar uma conversa'"
+          - "divide-y para separação visual entre items"
+        verification:
+          type: command
+          command: "cd c:/Projetos/Sol/sol-saas && pnpm --filter @sol/web exec tsc --noEmit"
+        status: completed
+        dependencies: []
+        notes: >
+          Link target: /chat?id={conversationId}
+          Requer suporte a query param no chat page (subtask 2.2).
+          Lista limitada a 10 conversas mais recentes (query no page.tsx).
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # PHASE 2 — Page Integration & Verification
+  # Compor os componentes na página e garantir que tudo funciona end-to-end.
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  - id: "phase-2"
+    name: "Page Integration & Verification"
+    description: >
+      Reescrever a dashboard page para compor os componentes RSC com dados reais
+      do Prisma, adicionar suporte a query param no chat, e validar build completo.
+
+    subtasks:
+
+      - id: "2.1"
+        description: "Reescrever /dashboard/page.tsx com Server Components e queries Prisma paralelas"
+        service: frontend
+        files:
+          - "apps/web/src/app/dashboard/page.tsx"
+        actions:
+          - "Remover welcome page existente (cards de features + CTA)"
+          - "Implementar como async Server Component"
+          - "Auth check: session?.user?.email → redirect('/login')"
+          - "User query: prisma.user.findUnique({ select: { id, balanceCents } })"
+          - "Resolver searchParams.page para paginação (await searchParams, Math.max(1, ...))"
+          - "Promise.all com 3 queries paralelas: count, transactions (take 20, skip), conversations (take 10)"
+          - "Layout: header com título + CTA chat, CreditSummary, grid 2+1 (TransactionHistory + ConversationList)"
+          - "Responsivo: stack em mobile, grid em desktop (lg:grid-cols-3)"
+        verification:
+          type: command
+          command: "cd c:/Projetos/Sol/sol-saas && pnpm --filter @sol/web exec tsc --noEmit"
+        status: completed
+        dependencies:
+          - "1.1"
+          - "1.2"
+          - "1.3"
+          - "1.4"
+        notes: >
+          Page é async Server Component — queries Prisma executam diretamente no RSC.
+          Zero client-side fetch, zero API routes dedicadas para o dashboard.
+
+          searchParams em Next.js 14 App Router é Promise — precisa de await.
+          Interface: { searchParams: Promise<{ page?: string }> }
+
+          Promise.all garante que as 3 queries rodam em paralelo:
+          1. prisma.creditTransaction.count (para paginação)
+          2. prisma.creditTransaction.findMany (página atual)
+          3. prisma.conversation.findMany (últimas 10)
+
+          Performance: usa índices existentes @@index([userId]) em ambas tabelas.
+
+      - id: "2.2"
+        description: "Adicionar suporte a query param ?id= no chat page para deep linking"
+        service: frontend
+        files:
+          - "apps/web/src/app/chat/page.tsx"
+        actions:
+          - "Importar useSearchParams de next/navigation"
+          - "Adicionar state initialIdHandled para evitar re-trigger"
+          - "Mover handleSelectConversation (useCallback) antes do effect que o referencia"
+          - "Adicionar useEffect: se ?id=xxx presente e conversations carregadas, chamar handleSelectConversation(id)"
+          - "Marcar initialIdHandled=true após primeira execução"
+        verification:
+          type: command
+          command: "cd c:/Projetos/Sol/sol-saas && pnpm --filter @sol/web exec tsc --noEmit"
+        status: completed
+        dependencies: []
+        notes: >
+          Mudança backward-compatible: sem ?id=, comportamento idêntico ao anterior.
+          Com ?id=, auto-seleciona a conversa após conversations serem carregadas.
+
+          IMPORTANTE: handleSelectConversation (useCallback) DEVE ser declarado
+          ANTES do useEffect que o referencia — const declarations não são hoisted.
+
+          Dependency array do effect: [initialIdHandled, isLoadingConversations, searchParams, handleSelectConversation]
+          Guard: if (initialIdHandled || isLoadingConversations) return;
+
+      - id: "2.3"
+        description: "Validação final: typecheck + build"
+        service: infra
+        files: []
+        actions:
+          - "pnpm --filter @sol/web exec tsc --noEmit (zero errors)"
+          - "pnpm --filter @sol/web build (success, /dashboard como Dynamic route)"
+          - "Verificar que /dashboard aparece como ƒ (Dynamic) no build output"
+          - "Verificar que /chat mantém tamanho de bundle similar"
+        verification:
+          type: command
+          command: "cd c:/Projetos/Sol/sol-saas && pnpm --filter @sol/web exec tsc --noEmit && pnpm --filter @sol/web build"
+        status: completed
+        dependencies:
+          - "2.1"
+          - "2.2"
+        notes: >
+          Checklist de verificação final:
+          - [x] Zero TypeScript errors
+          - [x] Build completo sem warnings
+          - [x] /dashboard renderiza como ƒ (Dynamic) — correto para RSC com Prisma
+          - [x] /chat mantém bundle size (~10.8 kB → similar)
+          - [x] Nenhum import quebrado
+          - [x] Nenhuma regressão em auth, chat ou fluxo de créditos
+
+# ─── Execution Graph ─────────────────────────────────────────────────────────
+#
+#   1.1 (CreditSummary)  ──────────────────────────┐
+#                                                   │
+#   1.2 (Pagination) ─── 1.3 (TransactionHistory)  ├── 2.1 (dashboard page)
+#                                                   │
+#   1.4 (ConversationList) ────────────────────────┘
+#
+#   2.2 (chat ?id= support) ──────────────────────── independent
+#
+#                                    2.1 + 2.2 ─── 2.3 (verify)
+#
+# ─── Parallel Execution Opportunities ────────────────────────────────────────
+#
+#   Wave 1: 1.1 + 1.2 + 1.4 + 2.2 (all independent)
+#   Wave 2: 1.3 (depends on 1.2 for Pagination import)
+#   Wave 3: 2.1 (depends on all phase-1 components)
+#   Wave 4: 2.3 (depends on 2.1 + 2.2)
+#
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ─── Risk Assessment ─────────────────────────────────────────────────────────
+
+risks:
+  - id: "R1"
+    description: "formatBalance importada de módulo 'use client' (CreditsProvider) em Server Components"
+    severity: LOW
+    mitigation: "formatBalance é função pura sem hooks. Next.js resolve corretamente. Build confirma."
+    affectedSubtasks: ["1.1", "1.3"]
+
+  - id: "R2"
+    description: "Chat page pode não suportar query param ?id= para deep linking"
+    severity: MEDIUM
+    mitigation: "Subtask 2.2 adiciona suporte via useSearchParams. Backward-compatible."
+    affectedSubtasks: ["1.4", "2.2"]
+
+  - id: "R3"
+    description: "Performance com alto volume de transações"
+    severity: LOW
+    mitigation: "Paginação server-side (20/pg), índice @@index([userId]) já existe, Promise.all para queries paralelas."
+    affectedSubtasks: ["2.1"]

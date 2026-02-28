@@ -39,14 +39,14 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Incomplete metadata' }, { status: 400 });
     }
 
-    // Calcular créditos em centavos com margem configurável
-    const marginPercent = parseInt(process.env.CREDIT_MARGIN_PERCENT ?? '40', 10) || 40;
-    const amountCents = Math.floor(amountTotal * (marginPercent / 100));
+    // Calcular créditos em centavos com CREDIT_PERCENTAGE (fração decimal)
+    const creditPercentage = parseFloat(process.env.CREDIT_PERCENTAGE ?? '0.40');
+    const amountCents = Math.floor(amountTotal * (isNaN(creditPercentage) ? 0.40 : creditPercentage));
 
     if (amountCents <= 0) {
       console.error('[Webhook] amountCents calculado é zero ou negativo', {
         amountTotal,
-        marginPercent,
+        creditPercentage,
         amountCents,
         sessionId: session.id,
       });
@@ -59,7 +59,7 @@ export async function POST(req: NextRequest) {
 
       await addCredits(userId, amountCents, stripePaymentId, exchangeRate);
       console.log(
-        `[Webhook] Créditos adicionados amountCents=${amountCents} margin=${marginPercent}%`
+        `[Webhook] Créditos adicionados amountCents=${amountCents} percentage=${creditPercentage}`
       );
     } catch (err: unknown) {
       // Idempotência: unique constraint em stripePaymentId rejeita webhook duplicado

@@ -1,17 +1,26 @@
 import { auth } from '@/lib/auth';
 import { SYSTEM_PROMPT, detectFinalOutputIntent } from '@/lib/prompts';
+import { processFiles, type ProcessedFile } from '@/lib/file-processor';
 import {
   prisma,
   deductCredits,
   ensureTodayRate,
   InsufficientBalanceError,
 } from '@sol/db';
-import { countTokens, countRawTokens, calculateCostCents } from '@sol/db/token-counter';
+import {
+  countTokens,
+  countRawTokens,
+  estimateMaxCost,
+  calculateRealCost,
+  MAX_OUTPUT_TOKENS,
+} from '@sol/db/token-counter';
 import OpenAI from 'openai';
 import { z } from 'zod';
 
+export const runtime = 'nodejs';
+
 const chatSchema = z.object({
-  conversationId: z.string().optional(),
+  conversationId: z.string().nullish(),
   message: z.string().min(1).max(2000),
 });
 
@@ -38,7 +47,6 @@ export async function POST(req: Request) {
       select: {
         id: true,
         balanceCents: true,
-        minBalanceCents: true,
       },
     });
 
@@ -46,15 +54,63 @@ export async function POST(req: Request) {
       return new Response('User not found', { status: 404 });
     }
 
-    // Parse e validar body com Zod
-    const body = await req.json();
-    const parsed = chatSchema.safeParse(body);
+    // ── Detecção de Content-Type ──────────────────────────────────────────
+    const contentType = req.headers.get('content-type') ?? '';
+    const isMultipart = contentType.includes('multipart/form-data');
 
-    if (!parsed.success) {
-      return new Response(parsed.error.issues[0]?.message ?? 'Invalid input', { status: 400 });
+    let message: string;
+    let conversationId: string | null | undefined;
+    let processedFiles: ProcessedFile[] = [];
+
+    if (isMultipart) {
+      // ── NOVO fluxo: multipart/form-data com arquivos ──────────────────
+      const formData = await req.formData();
+      const rawMessage = formData.get('message');
+      const rawConversationId = formData.get('conversationId');
+      const files = formData.getAll('files').filter((f): f is File => f instanceof File);
+
+      // Validar campos com Zod
+      const parsed = chatSchema.safeParse({
+        message: typeof rawMessage === 'string' ? rawMessage : '',
+        conversationId: typeof rawConversationId === 'string' ? rawConversationId : null,
+      });
+
+      if (!parsed.success) {
+        return new Response(parsed.error.issues[0]?.message ?? 'Invalid input', { status: 400 });
+      }
+
+      message = parsed.data.message;
+      conversationId = parsed.data.conversationId;
+
+      // Processar arquivos (se houver)
+      if (files.length > 0) {
+        try {
+          processedFiles = await processFiles(files);
+        } catch (error) {
+          return new Response(JSON.stringify({
+            error: error instanceof Error ? error.message : 'Erro ao processar arquivos',
+          }), { status: 400, headers: { 'Content-Type': 'application/json' } });
+        }
+      }
+    } else {
+      // ── FLUXO EXISTENTE: application/json — intocado ──────────────────
+      const body = await req.json();
+      const parsed = chatSchema.safeParse(body);
+
+      if (!parsed.success) {
+        return new Response(parsed.error.issues[0]?.message ?? 'Invalid input', { status: 400 });
+      }
+
+      message = parsed.data.message;
+      conversationId = parsed.data.conversationId;
     }
 
-    const { conversationId, message } = parsed.data;
+    // ── Daqui para baixo: fluxo unificado ─────────────────────────────────
+
+    // Separar arquivos processados por tipo
+    const imageFiles = processedFiles.filter((f): f is ProcessedFile & { type: 'image' } => f.type === 'image');
+    const documentFiles = processedFiles.filter((f): f is ProcessedFile & { type: 'document' } => f.type === 'document');
+    const hasAttachments = processedFiles.length > 0;
 
     // Criar ou validar conversa
     let conversation;
@@ -79,12 +135,25 @@ export async function POST(req: Request) {
       });
     }
 
+    // Montar conteúdo da mensagem do usuário para salvar no banco
+    // Documentos: prefixar [Documento: filename] para histórico
+    // Imagens: marcar [Imagem: filename] para histórico
+    const contentParts: string[] = [];
+    for (const doc of documentFiles) {
+      contentParts.push(`[Documento: ${doc.filename}]`);
+    }
+    for (const img of imageFiles) {
+      contentParts.push(`[Imagem: ${img.mimeType}]`);
+    }
+    contentParts.push(message);
+    const savedContent = contentParts.join('\n');
+
     // Salvar mensagem do usuário no banco
     const userMessage = await prisma.message.create({
       data: {
         conversationId: conversation.id,
         role: 'user',
-        content: message,
+        content: savedContent,
       },
     });
 
@@ -97,14 +166,19 @@ export async function POST(req: Request) {
 
     // Detectar se deve usar modelo final ou iterativo
     const useFinalModel = detectFinalOutputIntent(message);
-    const model = useFinalModel
+    let model = useFinalModel
       ? (process.env.OPENAI_MODEL_FINAL || 'gpt-4o')
       : (process.env.OPENAI_MODEL_DEFAULT || 'gpt-4o-mini');
 
-    console.log(`[Chat API] model=${model} finalIntent=${useFinalModel}`);
+    // Model forcing: imagem → gpt-4o (Vision API requer modelo completo)
+    if (imageFiles.length > 0) {
+      model = 'gpt-4o';
+    }
+
+    console.log(`[Chat API] model=${model} finalIntent=${useFinalModel} attachments=${processedFiles.length}`);
 
     // Preparar mensagens para OpenAI
-    const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
+    const historyMessages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
       { role: 'system', content: SYSTEM_PROMPT },
       ...previousMessages
         .filter((m) => m.id !== userMessage.id)
@@ -112,27 +186,76 @@ export async function POST(req: Request) {
           role: m.role as 'user' | 'assistant',
           content: m.content,
         })),
-      { role: 'user', content: message },
     ];
 
-    // ── Token counting & cost estimation (Story 3.6) ──────────────────────
-    const tokenMessages = messages.map((m) => ({
+    // Montar mensagem do usuário para OpenAI (com anexos se houver)
+    let userOpenAIMessage: OpenAI.Chat.Completions.ChatCompletionMessageParam;
+
+    if (hasAttachments) {
+      // Content array com documentos, texto e imagens
+      const userContent: OpenAI.Chat.Completions.ChatCompletionContentPart[] = [];
+
+      // Documentos como texto prefixado
+      for (const doc of documentFiles) {
+        userContent.push({
+          type: 'text',
+          text: `[Documento: ${doc.filename}]\n${doc.text}`,
+        });
+      }
+
+      // Texto da mensagem do usuário
+      userContent.push({ type: 'text', text: message });
+
+      // Imagens como image_url
+      for (const img of imageFiles) {
+        userContent.push({
+          type: 'image_url',
+          image_url: {
+            url: `data:${img.mimeType};base64,${img.base64}`,
+            detail: 'auto',
+          },
+        });
+      }
+
+      userOpenAIMessage = { role: 'user', content: userContent };
+    } else {
+      // Sem anexos: content é string (comportamento original)
+      userOpenAIMessage = { role: 'user', content: message };
+    }
+
+    const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
+      ...historyMessages,
+      userOpenAIMessage,
+    ];
+
+    // ── Token counting & gate pré-chamada ─────────────────────────────────
+    const tokenMessages = historyMessages.map((m) => ({
       role: String(m.role),
       content: typeof m.content === 'string' ? m.content : '',
     }));
-    const inputTokens = countTokens(tokenMessages, model);
+    // Contar tokens do histórico + mensagem de texto do user
+    tokenMessages.push({ role: 'user', content: message });
+    const textInputTokens = countTokens(tokenMessages, model);
+
+    // Tokens de anexos (documentos via tiktoken + imagens via Vision pricing)
+    const attachmentTokens = processedFiles.reduce((sum, f) => sum + f.tokens, 0);
+    const totalInputTokens = textInputTokens + attachmentTokens;
 
     // Buscar cotação do dia (lazy refresh)
     const exchangeRate = await ensureTodayRate('USD-BRL');
 
-    // Calcular custo estimado do input (sem output ainda)
-    const estimated = calculateCostCents(inputTokens, 0, model, exchangeRate);
+    // Gate: estimar custo máximo (input real + MAX_OUTPUT_TOKENS de output)
+    const maxCostCents = estimateMaxCost(totalInputTokens, model, exchangeRate);
 
-    console.log(`[Chat API] inputTokens=${inputTokens} estimatedCost=${estimated.costCents}`);
+    console.log(`[Chat API] inputTokens=${totalInputTokens} (text=${textInputTokens} attachments=${attachmentTokens}) maxCostCents=${maxCostCents} (gate: input + ${MAX_OUTPUT_TOKENS} output tokens)`);
 
-    // Pré-check: saldo suficiente para cobrir ao menos o custo do input
-    if (user.balanceCents - estimated.costCents < user.minBalanceCents) {
-      return new Response(JSON.stringify({ error: 'insufficient_credits' }), {
+    // Pré-check: saldo suficiente para cobrir custo máximo estimado
+    if (user.balanceCents < maxCostCents) {
+      return new Response(JSON.stringify({
+        error: 'insufficient_credits',
+        required: maxCostCents,
+        available: user.balanceCents,
+      }), {
         status: 402,
         headers: { 'Content-Type': 'application/json' },
       });
@@ -144,7 +267,7 @@ export async function POST(req: Request) {
       messages,
       stream: true,
       temperature: 0.7,
-      max_tokens: 1000,
+      max_tokens: MAX_OUTPUT_TOKENS,
     });
 
     // Criar ReadableStream para Server-Sent Events
@@ -173,20 +296,27 @@ export async function POST(req: Request) {
 
           // ── Calcular custo real (input + output) e deduzir ────────────
           const outputTokens = countRawTokens(fullResponse, model);
-          const realCost = calculateCostCents(inputTokens, outputTokens, model, exchangeRate);
+          const realCost = calculateRealCost(totalInputTokens, outputTokens, model, exchangeRate);
 
           console.log(`[Chat API] outputTokens=${outputTokens} realCost=${realCost.costCents}`);
 
-          let balanceRemaining = user.balanceCents;
+          let balanceAfterDeduction = user.balanceCents;
           try {
             const result = await deductCredits(user.id, realCost.costCents, {
               exchangeRate,
-              inputTokens,
+              inputTokens: totalInputTokens,
               outputTokens,
               modelUsed: model,
               costUsd: realCost.costUsd,
+              conversationTitle: conversation.title,
+              maxOutputTokens: MAX_OUTPUT_TOKENS,
+              hasAttachments,
+              attachmentTypes: processedFiles.map(f =>
+                f.type === 'image' ? f.mimeType : 'text/plain'
+              ),
+              attachmentTokens: attachmentTokens > 0 ? attachmentTokens : undefined,
             });
-            balanceRemaining = result.balanceCents;
+            balanceAfterDeduction = result.balanceCents;
           } catch (deductError) {
             // Race condition: saldo insuficiente após stream.
             // Resposta já entregue — registrar audit trail para visibilidade.
@@ -203,25 +333,31 @@ export async function POST(req: Request) {
                   userId: user.id,
                   amount: 0,
                   type: 'consumption',
-                  description: `Dedução falha: ${realCost.costCents} centavos (${inputTokens + outputTokens} tokens, ${model}) — saldo insuficiente pós-stream`,
+                  description: `[Falha] ${conversation.title}`,
                   exchangeRate,
-                  inputTokens,
+                  inputTokens: totalInputTokens,
                   outputTokens,
                   modelUsed: model,
                   costUsd: realCost.costUsd,
+                  maxOutputTokens: MAX_OUTPUT_TOKENS,
+                  hasAttachments,
+                  attachmentTypes: processedFiles.map(f =>
+                    f.type === 'image' ? f.mimeType : 'text/plain'
+                  ),
+                  attachmentTokens: attachmentTokens > 0 ? attachmentTokens : undefined,
                 },
               });
             } catch (auditError) {
               console.error('[Chat API] Failed to write audit trail:', auditError);
             }
 
-            balanceRemaining = 0;
+            balanceAfterDeduction = 0;
           }
 
           // Enviar evento de conclusão com saldo pós-dedução
           controller.enqueue(
             encoder.encode(
-              `data: ${JSON.stringify({ done: true, conversationId: conversation.id, balanceRemaining })}\n\n`
+              `data: ${JSON.stringify({ done: true, conversationId: conversation.id, balanceCents: balanceAfterDeduction })}\n\n`
             )
           );
           controller.close();
@@ -244,7 +380,7 @@ export async function POST(req: Request) {
         'Content-Type': 'text/event-stream',
         'Cache-Control': 'no-cache',
         'Connection': 'keep-alive',
-        'X-Balance-Remaining': String(user.balanceCents),
+        'X-Balance-Cents': String(user.balanceCents),
       },
     });
   } catch (error) {
