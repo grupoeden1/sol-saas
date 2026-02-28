@@ -29,7 +29,8 @@ export async function POST(req: NextRequest) {
   if (event.type === 'checkout.session.completed') {
     const session = event.data.object as Stripe.Checkout.Session;
 
-    const { userId } = session.metadata ?? {};
+    const userId =
+      typeof session.metadata?.userId === 'string' ? session.metadata.userId : null;
     const stripePaymentId =
       typeof session.payment_intent === 'string' ? session.payment_intent : null;
     const amountTotal = session.amount_total;
@@ -39,9 +40,13 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Incomplete metadata' }, { status: 400 });
     }
 
-    // Calcular créditos em centavos com CREDIT_PERCENTAGE (fração decimal)
-    const creditPercentage = parseFloat(process.env.CREDIT_PERCENTAGE ?? '0.40');
-    const amountCents = Math.floor(amountTotal * (isNaN(creditPercentage) ? 0.40 : creditPercentage));
+    // Calcular créditos em centavos com CREDIT_PERCENTAGE (fração decimal, range 0.01–1.0)
+    const rawPercentage = parseFloat(process.env.CREDIT_PERCENTAGE ?? '0.40');
+    const creditPercentage =
+      isNaN(rawPercentage) || rawPercentage <= 0 || rawPercentage > 1.0
+        ? 0.40
+        : rawPercentage;
+    const amountCents = Math.floor(amountTotal * creditPercentage);
 
     if (amountCents <= 0) {
       console.error('[Webhook] amountCents calculado é zero ou negativo', {
@@ -57,7 +62,12 @@ export async function POST(req: NextRequest) {
       // Buscar cotação para registro de auditoria
       const exchangeRate = await getExchangeRate('USD-BRL');
 
-      await addCredits(userId, amountCents, stripePaymentId, exchangeRate);
+      await addCredits(userId, amountCents, {
+        type: 'purchase',
+        stripePaymentId,
+        exchangeRate,
+        grossAmountCents: amountTotal,
+      });
       console.log(
         `[Webhook] Créditos adicionados amountCents=${amountCents} percentage=${creditPercentage}`
       );

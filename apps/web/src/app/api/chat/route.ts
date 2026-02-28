@@ -63,6 +63,15 @@ export async function POST(req: Request) {
     let processedFiles: ProcessedFile[] = [];
 
     if (isMultipart) {
+      // ── Guard: limite de payload (30 MB) ──────────────────────────────
+      const contentLength = req.headers.get('content-length');
+      if (contentLength && parseInt(contentLength, 10) > 30 * 1024 * 1024) {
+        return new Response(
+          JSON.stringify({ error: 'Payload excede o limite de 30 MB.' }),
+          { status: 413, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+
       // ── NOVO fluxo: multipart/form-data com arquivos ──────────────────
       const formData = await req.formData();
       const rawMessage = formData.get('message');

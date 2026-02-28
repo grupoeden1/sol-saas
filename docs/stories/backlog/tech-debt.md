@@ -1,6 +1,6 @@
 # Tech Debt Backlog — SOL SaaS
 
-Last updated: 2026-02-27 (Quality Audit v2)
+Last updated: 2026-02-28 (Quality Audit v3)
 Items registered by @dev after quality-audit workflow.
 
 ---
@@ -193,3 +193,12 @@ Items registered by @dev after quality-audit workflow.
 | QA-108 | Register: não revelar email existente | **CORRIGIDO** |
 | QA-110 / SA-324 | Role type `'USER' \| 'ADMIN'` | **CORRIGIDO** |
 | QA-104 / SA-208 | Webhook error reveals config state | **CORRIGIDO** (audit v1) |
+
+## CORRIGIDOS (Audit v3 — 2026-02-28)
+
+| ID | Descrição | Status |
+|----|-----------|--------|
+| SEC-1 | Webhook userId: typeof validation em vez de destructuring cego | **CORRIGIDO** |
+| SEC-2 | CREDIT_PERCENTAGE: range validation (0, 1.0] | **CORRIGIDO** |
+| SEC-3 | Auth session: typeof guards em vez de `as string` | **CORRIGIDO** |
+| SEC-4 | Chat API: Content-Length check (30 MB) antes de formData() | **CORRIGIDO** |
