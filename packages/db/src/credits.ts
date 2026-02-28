@@ -27,23 +27,37 @@ export class InsufficientBalanceError extends Error {
   }
 }
 
-// ─── Adicionar créditos (compra via Stripe) ────────────────────────────────
+// ─── Adicionar créditos (compra via Stripe ou ajuste manual) ───────────────
+
+export type AddCreditOptions =
+  | {
+      type: 'purchase'
+      stripePaymentId: string
+      exchangeRate: Prisma.Decimal
+      grossAmountCents: number
+    }
+  | {
+      type: 'adjustment'
+      exchangeRate: Prisma.Decimal
+      adminEmail: string
+      description: string
+    }
 
 /**
  * Incrementa o saldo do usuário em centavos e registra a transação atomicamente.
- * Usado pelo webhook do Stripe (Story 3.4/3.6).
  *
- * @param userId          ID do usuário
- * @param amountCents     Centavos de real a adicionar (positivo)
- * @param stripePaymentId ID do pagamento Stripe (obrigatório — idempotência via UNIQUE)
- * @param exchangeRate    Cotação USD-BRL no momento da compra
- * @returns               Novo saldo em centavos
+ * - type='purchase' : compra via Stripe (idempotente via stripePaymentId UNIQUE)
+ * - type='adjustment': crédito manual por admin (auditado via adminEmail)
+ *
+ * @param userId      ID do usuário
+ * @param amountCents Centavos de real a adicionar (positivo)
+ * @param options     Discriminated union com dados específicos do tipo
+ * @returns           Novo saldo em centavos
  */
 export async function addCredits(
   userId: string,
   amountCents: number,
-  stripePaymentId: string,
-  exchangeRate: Prisma.Decimal,
+  options: AddCreditOptions,
 ): Promise<{ balanceCents: number }> {
   const result = await prisma.$transaction(async (tx) => {
     const updated = await tx.user.update({
@@ -52,21 +66,35 @@ export async function addCredits(
       select: { balanceCents: true },
     })
 
-    await tx.creditTransaction.create({
-      data: {
-        userId,
-        amount: amountCents,
-        type: 'purchase',
-        description: `Compra de créditos via Stripe`,
-        stripePaymentId,
-        exchangeRate,
-      },
-    })
+    if (options.type === 'purchase') {
+      await tx.creditTransaction.create({
+        data: {
+          userId,
+          amount: amountCents,
+          type: 'purchase',
+          description: 'Compra de créditos via Stripe',
+          stripePaymentId: options.stripePaymentId,
+          exchangeRate: options.exchangeRate,
+          grossAmountCents: options.grossAmountCents,
+        },
+      })
+    } else {
+      await tx.creditTransaction.create({
+        data: {
+          userId,
+          amount: amountCents,
+          type: 'adjustment',
+          description: options.description,
+          exchangeRate: options.exchangeRate,
+          adminEmail: options.adminEmail,
+        },
+      })
+    }
 
     return updated.balanceCents
   })
 
-  console.log(`[Credits] addCredits completed amountCents=${amountCents}`)
+  console.log(`[Credits] addCredits type=${options.type} amountCents=${amountCents}`)
   return { balanceCents: result }
 }
 

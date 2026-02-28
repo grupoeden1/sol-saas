@@ -1,0 +1,1296 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Story 4.2 — Admin Console: Métricas Operacionais e Financeiras
+# Implementation Plan
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# CONTEXTO: Story 4.1 (autenticação admin + tabela básica de usuários) está
+# concluída. Este plano implementa o DELTA para o Admin Console completo:
+#
+# Delta-chave:
+#   1. Schema: 'adjustment' no enum, grossAmountCents e adminEmail no CreditTransaction
+#   2. addCredits(): refatorar para discriminated union (purchase | adjustment)
+#   3. Webhook Stripe: passar grossAmountCents via session.amount_total (já extraído)
+#   4. packages/db/src/admin.ts: novo módulo com todas as queries de métricas
+#   5. POST /api/admin/add-credits: nova rota com validação Zod + auditoria
+#   6. /admin page.tsx: rewrite com métricas reais completas
+#   7. AddCreditsForm: Client Component com dialog de confirmação
+#
+# O que NÃO muda: chat, streaming SSE, autenticação, painel do aluno,
+# Stripe Checkout. A experiência do aluno é intocada.
+#
+# Estado atual crítico:
+#   - admin/page.tsx: JÁ usa Promise.all e dados reais, MAS usa `amount` para
+#     receita (precisa ser grossAmountCents) e falta métricas completas
+#   - webhook: JÁ extrai `amountTotal = session.amount_total` (linha 35),
+#     MAS chama addCredits() com assinatura antiga (linha 60)
+#   - addCredits(): assinatura posicional → precisa virar discriminated union
+# ─────────────────────────────────────────────────────────────────────────────
+
+storyId: "story-4.2"
+createdAt: "2026-02-28T00:00:00Z"
+createdBy: "@architect"
+status: in_progress
+complexity: STANDARD
+estimatedEffort: "2-3 days"
+
+# ─── Dependencies (pacotes já instalados) ────────────────────────────────────
+
+dependencies:
+  - name: zod
+    status: exists
+    purpose: "Validação do body em POST /api/admin/add-credits"
+    location: "apps/web/package.json"
+  - name: "@prisma/client"
+    status: exists
+    purpose: "ORM — queries de métricas e schema atualizado"
+  - name: "sonner ou toast existente"
+    status: verify
+    purpose: "Toast de sucesso/erro no AddCreditsForm"
+    note: "Verificar qual lib de toast o projeto usa antes de implementar"
+
+# ─── Environment Variables ───────────────────────────────────────────────────
+
+envVars:
+  - name: CREDIT_PERCENTAGE
+    status: exists
+    default: "0.40"
+    description: "Usado no backfill: grossAmountCents = ROUND(amount / 0.40)"
+  - name: STRIPE_WEBHOOK_SECRET
+    status: exists
+    description: "Sem alteração — webhook continua validando assinatura"
+
+# ─── Phases ──────────────────────────────────────────────────────────────────
+
+phases:
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # PHASE 1 — Database
+  # Pré-requisito bloqueante para todas as demais fases.
+  # Subtasks desta fase: apenas 1.1 (sequencial).
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  - id: "phase-1"
+    name: "Database: Migration + Backfill"
+    description: >
+      Adicionar 'adjustment' ao enum TransactionType, campos grossAmountCents e
+      adminEmail ao CreditTransaction. Backfill de grossAmountCents em purchases
+      existentes. Bloqueante para todas as demais fases.
+    canParallelize: false
+
+    subtasks:
+
+      # ─── 1.1: Migration Prisma ────────────────────────────────────────────
+
+      - id: "1.1"
+        title: "Migration: adjustment, grossAmountCents, adminEmail + backfill"
+        service: database
+        files:
+          - path: "packages/db/prisma/schema.prisma"
+            action: MODIFY
+          - path: "packages/db/prisma/migrations/TIMESTAMP_admin_console/migration.sql"
+            action: CREATE
+
+        currentState: |
+          enum TransactionType {
+            purchase
+            consumption
+          }
+
+          model CreditTransaction {
+            // ... sem grossAmountCents e sem adminEmail
+            stripePaymentId String? @unique
+            exchangeRate    Decimal?
+            // ...
+          }
+
+        targetState: |
+          enum TransactionType {
+            purchase
+            consumption
+            adjustment   // NOVO — adição manual pelo admin (sem Stripe)
+          }
+
+          model CreditTransaction {
+            // ... campos existentes intocados ...
+            grossAmountCents Int?    // NOVO — valor bruto pago no Stripe (apenas purchase)
+            adminEmail       String? // NOVO — email do admin executor (apenas adjustment)
+            // Adicionar também índice no type para queries de métricas financeiras:
+            @@index([type])
+          }
+
+        actions:
+          - "Em schema.prisma: adicionar `adjustment` ao enum TransactionType"
+          - "Em schema.prisma: adicionar `grossAmountCents Int?` ao model CreditTransaction (após stripePaymentId)"
+          - "Em schema.prisma: adicionar `adminEmail String?` ao model CreditTransaction (após grossAmountCents)"
+          - "Em schema.prisma: adicionar `@@index([type])` ao model CreditTransaction"
+          - "Criar migration interativa: cd packages/db && npx prisma migrate dev --name admin_console"
+          - "Se o ambiente não suportar migrate dev interativo: usar migrate deploy após create-only"
+          - "Verificar migration SQL gerada: deve conter apenas ALTER TABLE ADD COLUMN (não drop+recreate)"
+          - "Executar backfill SQL manualmente ou incluir na migration como step adicional"
+          - "Rodar: npx prisma generate para atualizar tipos"
+
+        migrationSql: |
+          -- Adicionar 'adjustment' ao enum TransactionType
+          ALTER TYPE "TransactionType" ADD VALUE 'adjustment';
+
+          -- Adicionar grossAmountCents (valor bruto pago no Stripe, nullable)
+          ALTER TABLE "credit_transactions" ADD COLUMN "gross_amount_cents" INTEGER;
+
+          -- Adicionar adminEmail (email do admin, apenas para adjustments, nullable)
+          ALTER TABLE "credit_transactions" ADD COLUMN "admin_email" TEXT;
+
+          -- Índice para queries financeiras (type filter frequente)
+          CREATE INDEX "credit_transactions_type_idx" ON "credit_transactions"("type");
+
+          -- Backfill: purchases existentes recebem grossAmountCents aproximado
+          -- (amount = valor creditado = valor_bruto * CREDIT_PERCENTAGE)
+          -- Inverso: valor_bruto = amount / CREDIT_PERCENTAGE (0.40)
+          UPDATE "credit_transactions"
+          SET "gross_amount_cents" = ROUND("amount"::numeric / 0.40)
+          WHERE "type" = 'purchase'
+            AND "gross_amount_cents" IS NULL;
+
+        verification:
+          type: command
+          command: "cd packages/db && npx prisma validate && npx prisma generate"
+
+        status: pending
+        dependencies: []
+        notes: |
+          IMPORTANTE: O backfill usa CREDIT_PERCENTAGE=0.40 fixo. É uma
+          aproximação do valor bruto original — suficiente para consistência
+          histórica. Compras futuras terão o valor exato via session.amount_total.
+
+          Campos nullable → zero impacto em dados existentes: purchases antigas
+          não terão adminEmail (correto), consumptions não terão grossAmountCents
+          (correto). Apenas o backfill preenche grossAmountCents em purchases.
+
+          O enum PostgreSQL não suporta remoção de valores. Adicionar 'adjustment'
+          é seguro e irreversível — aceitável para produção.
+
+          Verificar no Prisma Studio após migration:
+          - CreditTransaction tem colunas gross_amount_cents e admin_email
+          - Purchases existentes têm gross_amount_cents preenchido (não null)
+          - TransactionType aceita 'adjustment'
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # PHASE 2 — Backend Core
+  # Ordem obrigatória: 2.1 PRIMEIRO (addCredits refatorado).
+  # Depois: 2.2 e 2.3 podem rodar em PARALELO (independentes entre si).
+  # 2.4 (admin.ts) é independente de 2.1, 2.2 e 2.3 — pode rodar em paralelo.
+  # TODAS dependem da Phase 1 (schema atualizado e tipos Prisma gerados).
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  - id: "phase-2"
+    name: "Backend Core: addCredits, webhook, admin.ts, add-credits route"
+    description: >
+      Refatorar addCredits() para discriminated union (2.1 — bloqueante para 2.2 e 2.3).
+      Atualizar webhook Stripe para grossAmountCents (2.2 — depende de 2.1).
+      Criar módulo admin.ts com queries de métricas (2.3 — independente).
+      Criar rota POST /api/admin/add-credits (2.4 — depende de 2.1).
+    canParallelize: true  # 2.3 pode ser feito em paralelo com 2.1
+
+    subtasks:
+
+      # ─── 2.1: Refatorar addCredits() ─────────────────────────────────────
+
+      - id: "2.1"
+        title: "Refatorar addCredits() — discriminated union (purchase | adjustment)"
+        service: backend
+        files:
+          - path: "packages/db/src/credits.ts"
+            action: MODIFY
+
+        currentState: |
+          export async function addCredits(
+            userId: string,
+            amountCents: number,
+            stripePaymentId: string,   // posicional — apenas purchase
+            exchangeRate: Prisma.Decimal,
+          ): Promise<{ balanceCents: number }>
+
+          // Implementação: cria CreditTransaction com type: 'purchase',
+          // description: 'Compra de créditos via Stripe', stripePaymentId, exchangeRate.
+          // NÃO registra grossAmountCents.
+
+        targetState: |
+          export type AddCreditOptions =
+            | {
+                type: 'purchase'
+                stripePaymentId: string
+                exchangeRate: Prisma.Decimal
+                grossAmountCents: number
+              }
+            | {
+                type: 'adjustment'
+                exchangeRate: Prisma.Decimal
+                adminEmail: string
+                description: string
+              }
+
+          export async function addCredits(
+            userId: string,
+            amountCents: number,
+            options: AddCreditOptions,
+          ): Promise<{ balanceCents: number }>
+
+          // purchase: description auto, stripePaymentId, grossAmountCents preenchidos
+          // adjustment: adminEmail, description do motivo, stripePaymentId/grossAmountCents null
+
+        actions:
+          - "Adicionar type export `AddCreditOptions` com discriminated union"
+          - "Alterar assinatura de addCredits() para (userId, amountCents, options: AddCreditOptions)"
+          - "Implementação purchase: manter $transaction existente, adicionar grossAmountCents ao create"
+          - "Implementação adjustment: novo branch — sem stripePaymentId, com adminEmail e description"
+          - "Garantir que idempotência via stripePaymentId UNIQUE permanece para purchases"
+
+        implementation: |
+          export type AddCreditOptions =
+            | {
+                type: 'purchase'
+                stripePaymentId: string
+                exchangeRate: Prisma.Decimal
+                grossAmountCents: number
+              }
+            | {
+                type: 'adjustment'
+                exchangeRate: Prisma.Decimal
+                adminEmail: string
+                description: string
+              }
+
+          export async function addCredits(
+            userId: string,
+            amountCents: number,
+            options: AddCreditOptions,
+          ): Promise<{ balanceCents: number }> {
+            const result = await prisma.$transaction(async (tx) => {
+              const updated = await tx.user.update({
+                where: { id: userId },
+                data: { balanceCents: { increment: amountCents } },
+                select: { balanceCents: true },
+              })
+
+              if (options.type === 'purchase') {
+                await tx.creditTransaction.create({
+                  data: {
+                    userId,
+                    amount: amountCents,
+                    type: 'purchase',
+                    description: 'Compra de créditos via Stripe',
+                    stripePaymentId: options.stripePaymentId,
+                    grossAmountCents: options.grossAmountCents,
+                    exchangeRate: options.exchangeRate,
+                  },
+                })
+              } else {
+                await tx.creditTransaction.create({
+                  data: {
+                    userId,
+                    amount: amountCents,
+                    type: 'adjustment',
+                    description: options.description,
+                    adminEmail: options.adminEmail,
+                    exchangeRate: options.exchangeRate,
+                    stripePaymentId: null,
+                    grossAmountCents: null,
+                  },
+                })
+              }
+
+              return updated.balanceCents
+            })
+
+            const label = options.type === 'purchase' ? 'purchase' : 'adjustment'
+            console.log(`[Credits] addCredits(${label}) completed amountCents=${amountCents}`)
+            return { balanceCents: result }
+          }
+
+        verification:
+          type: command
+          command: "pnpm typecheck"
+
+        status: pending
+        dependencies:
+          - "1.1"
+        notes: |
+          ATENÇÃO: Após esta subtask, o webhook vai quebrar a build porque ainda
+          chama addCredits() com a assinatura posicional antiga. Implementar
+          subtask 2.2 imediatamente após — ou na mesma sessão de trabalho.
+
+          O único caller atual de addCredits() é o webhook (route.ts linha 60).
+          Não há outros callers no codebase.
+
+      # ─── 2.2: Atualizar Webhook Stripe ───────────────────────────────────
+
+      - id: "2.2"
+        title: "Atualizar webhook Stripe — passar grossAmountCents com nova assinatura"
+        service: backend
+        files:
+          - path: "apps/web/src/app/api/webhooks/stripe/route.ts"
+            action: MODIFY
+
+        currentState: |
+          // Linha 35: amountTotal = session.amount_total  ← JÁ extraído ✓
+          // Linha 60: await addCredits(userId, amountCents, stripePaymentId, exchangeRate)
+          //           ← assinatura posicional ANTIGA — vai quebrar após 2.1
+
+        targetState: |
+          // Linha 35: amountTotal = session.amount_total  ← mantido
+          // Chamada atualizada para nova assinatura:
+          await addCredits(userId, amountCents, {
+            type: 'purchase',
+            stripePaymentId,
+            exchangeRate,
+            grossAmountCents: amountTotal,  // session.amount_total (já validado como not null)
+          })
+
+        actions:
+          - "Substituir a chamada addCredits() posicional pela nova assinatura com options object"
+          - "amountTotal já está extraído e validado (linha 37: if (!userId || !stripePaymentId || !amountTotal))"
+          - "grossAmountCents = amountTotal — valor bruto que o Stripe cobrou do cliente"
+          - "Nenhuma outra mudança no arquivo — validação, idempotência e logs mantidos"
+
+        implementation: |
+          // ANTES (linha 60):
+          await addCredits(userId, amountCents, stripePaymentId, exchangeRate);
+
+          // DEPOIS:
+          await addCredits(userId, amountCents, {
+            type: 'purchase',
+            stripePaymentId,
+            exchangeRate,
+            grossAmountCents: amountTotal,
+          });
+
+        verification:
+          type: command
+          command: "pnpm typecheck"
+
+        status: pending
+        dependencies:
+          - "2.1"
+        notes: |
+          amountTotal já é validado como not null (linha 37 do webhook atual).
+          Não é necessário fallback adicional — o webhook já rejeita o evento
+          com 400 se amount_total for null.
+
+          Idempotência: a constraint UNIQUE em stripePaymentId permanece intacta.
+          O catch P2002 no webhook não muda.
+
+      # ─── 2.3: Criar packages/db/src/admin.ts ────────────────────────────
+
+      - id: "2.3"
+        title: "Criar admin.ts — módulo de queries de métricas"
+        service: backend
+        files:
+          - path: "packages/db/src/admin.ts"
+            action: CREATE
+          - path: "packages/db/src/index.ts"
+            action: MODIFY
+
+        currentState: |
+          packages/db/src/admin.ts: NÃO EXISTE
+          packages/db/src/index.ts: exporta prisma, conversations, credits, exchange-rate
+          // admin.ts não está exportado
+
+        targetState: |
+          packages/db/src/admin.ts: CRIADO com funções tipadas:
+            - getUserMetrics()
+            - getUsageMetrics()
+            - getUsersList(page, pageSize)
+            - getFinancialMetrics()
+            - getExchangeMetrics()
+
+          packages/db/src/index.ts: adicionar linha:
+            export * from './admin'
+
+        actions:
+          - "Criar packages/db/src/admin.ts com todas as funções e interfaces exportadas"
+          - "Implementar getUserMetrics() com 4 queries em Promise.all"
+          - "Implementar getUsageMetrics() com 6 queries em Promise.all + cálculos no servidor"
+          - "Implementar getUsersList(page, pageSize) com findMany + _count messages"
+          - "Implementar getFinancialMetrics() com 6 queries (5 Prisma + 1 raw para custo OpenAI)"
+          - "Implementar getExchangeMetrics() com 2 queries em Promise.all"
+          - "Em index.ts: adicionar `export * from './admin'` ao final"
+
+        implementation: |
+          // packages/db/src/admin.ts
+          import { prisma } from './index'
+
+          const MIN_COST_CENTS = 100
+
+          // ─── Types ──────────────────────────────────────────────────────
+
+          export interface UserMetrics {
+            totalUsers: number
+            activeUsers7d: number         // ≥1 mensagem de role=user nos últimos 7 dias
+            lowBalanceUsers: number       // balanceCents < MIN_COST_CENTS (100)
+            newUsers30d: number
+          }
+
+          export interface UsageMetrics {
+            totalMessages: number
+            messagesToday: number
+            messages7d: number
+            totalInputTokens: number
+            totalOutputTokens: number
+            topModel: string              // ex: "gpt-4o"
+            topModelPercent: number       // ex: 73.5
+            avgTokensPerMessage: number
+            messagesWithAttachments: number
+            messagesWithoutAttachments: number
+          }
+
+          export interface FinancialMetrics {
+            totalRevenueCents: number       // SUM(grossAmountCents) WHERE type='purchase'
+            revenue30dCents: number
+            totalOpenAICostBRL: number      // SUM(costUsd * exchangeRate) por transação
+            grossProfitBRL: number          // revenue/100 - totalOpenAICostBRL
+            grossMarginPercent: number      // profit/revenue*100
+            markupPercent: number           // revenue/cost*100
+            creditsSoldCents: number        // SUM(amount) WHERE type='purchase'
+            creditsConsumedCents: number    // SUM(ABS(amount)) WHERE type='consumption'
+            totalRetainedBalanceCents: number
+          }
+
+          export interface ExchangeMetrics {
+            currentRate: number
+            minRate30d: number
+            maxRate30d: number
+          }
+
+          export interface UserRow {
+            id: string
+            email: string
+            balanceCents: number
+            totalMessages: number         // COUNT mensagens role=user
+            createdAt: Date
+          }
+
+          export interface UsersPage {
+            users: UserRow[]
+            total: number
+          }
+
+          // ─── getUserMetrics ──────────────────────────────────────────────
+
+          export async function getUserMetrics(): Promise<UserMetrics> {
+            const now = new Date()
+            const ago7d = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000)
+            const ago30d = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000)
+
+            const [totalUsers, activeUsers7d, lowBalanceUsers, newUsers30d] = await Promise.all([
+              prisma.user.count(),
+              prisma.user.count({
+                where: {
+                  conversations: {
+                    some: {
+                      messages: {
+                        some: { role: 'user', createdAt: { gte: ago7d } },
+                      },
+                    },
+                  },
+                },
+              }),
+              prisma.user.count({ where: { balanceCents: { lt: MIN_COST_CENTS } } }),
+              prisma.user.count({ where: { createdAt: { gte: ago30d } } }),
+            ])
+
+            return { totalUsers, activeUsers7d, lowBalanceUsers, newUsers30d }
+          }
+
+          // ─── getUsageMetrics ─────────────────────────────────────────────
+
+          export async function getUsageMetrics(): Promise<UsageMetrics> {
+            const now = new Date()
+            const startOfToday = new Date(now); startOfToday.setHours(0,0,0,0)
+            const ago7d = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000)
+
+            const [
+              totalMessages, messagesToday, messages7d,
+              tokenStats, modelGroups, withAttachments, totalConsumptions,
+            ] = await Promise.all([
+              prisma.message.count({ where: { role: 'user' } }),
+              prisma.message.count({ where: { role: 'user', createdAt: { gte: startOfToday } } }),
+              prisma.message.count({ where: { role: 'user', createdAt: { gte: ago7d } } }),
+              prisma.creditTransaction.aggregate({
+                where: { type: 'consumption' },
+                _sum: { inputTokens: true, outputTokens: true },
+              }),
+              prisma.creditTransaction.groupBy({
+                by: ['modelUsed'],
+                where: { type: 'consumption', modelUsed: { not: null } },
+                _count: { id: true },
+                orderBy: { _count: { id: 'desc' } },
+              }),
+              prisma.creditTransaction.count({
+                where: { type: 'consumption', hasAttachments: true },
+              }),
+              prisma.creditTransaction.count({ where: { type: 'consumption' } }),
+            ])
+
+            const totalInput = tokenStats._sum.inputTokens ?? 0
+            const totalOutput = tokenStats._sum.outputTokens ?? 0
+            const topModelEntry = modelGroups[0]
+            const topModel = topModelEntry?.modelUsed ?? 'N/A'
+            const topModelCount = topModelEntry?._count.id ?? 0
+            const topModelPercent = totalConsumptions > 0
+              ? Math.round((topModelCount / totalConsumptions) * 100 * 10) / 10
+              : 0
+            const avgTokens = totalConsumptions > 0
+              ? Math.round((totalInput + totalOutput) / totalConsumptions)
+              : 0
+
+            return {
+              totalMessages,
+              messagesToday,
+              messages7d,
+              totalInputTokens: totalInput,
+              totalOutputTokens: totalOutput,
+              topModel,
+              topModelPercent,
+              avgTokensPerMessage: avgTokens,
+              messagesWithAttachments: withAttachments,
+              messagesWithoutAttachments: totalConsumptions - withAttachments,
+            }
+          }
+
+          // ─── getUsersList ────────────────────────────────────────────────
+
+          export async function getUsersList(
+            page: number,
+            pageSize: number = 20,
+          ): Promise<UsersPage> {
+            const [rawUsers, total] = await Promise.all([
+              prisma.user.findMany({
+                skip: (page - 1) * pageSize,
+                take: pageSize,
+                orderBy: { createdAt: 'desc' },
+                select: {
+                  id: true,
+                  email: true,
+                  balanceCents: true,
+                  createdAt: true,
+                  _count: {
+                    select: {
+                      conversations: {
+                        where: {
+                          messages: { some: { role: 'user' } },
+                        },
+                      },
+                    },
+                  },
+                },
+              }),
+              prisma.user.count(),
+            ])
+
+            // Total de mensagens por usuário nesta página
+            const userIds = rawUsers.map((u) => u.id)
+            const messageCounts = userIds.length > 0
+              ? await prisma.message.groupBy({
+                  by: ['conversationId'],
+                  where: {
+                    role: 'user',
+                    conversation: { userId: { in: userIds } },
+                  },
+                  _count: { id: true },
+                })
+              : []
+
+            // Alternativa mais simples se groupBy por userId não for suportado diretamente:
+            // usar $queryRaw para COUNT(messages) GROUP BY conversations.user_id
+            // Ver nota de implementação abaixo.
+
+            const users: UserRow[] = rawUsers.map((u) => ({
+              id: u.id,
+              email: u.email,
+              balanceCents: u.balanceCents,
+              totalMessages: 0, // placeholder — ver nota
+              createdAt: u.createdAt,
+            }))
+
+            return { users, total }
+          }
+
+          // NOTA getUsersList:
+          // Prisma não suporta groupBy em relações aninhadas diretamente.
+          // Alternativa recomendada para totalMessages por usuário:
+          //
+          // const msgCounts = await prisma.$queryRaw<Array<{userId: string, cnt: bigint}>>`
+          //   SELECT c.user_id as "userId", COUNT(m.id) as cnt
+          //   FROM messages m
+          //   JOIN conversations c ON m.conversation_id = c.id
+          //   WHERE m.role = 'user' AND c.user_id = ANY(${userIds}::text[])
+          //   GROUP BY c.user_id
+          // `
+          // const msgMap = new Map(msgCounts.map(r => [r.userId, Number(r.cnt)]))
+          // Usar Number(r.cnt) para converter bigint do PostgreSQL.
+
+          // ─── getFinancialMetrics ─────────────────────────────────────────
+
+          export async function getFinancialMetrics(): Promise<FinancialMetrics> {
+            const ago30d = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)
+
+            const [
+              revenueAll,
+              revenue30d,
+              costResult,
+              creditsSold,
+              creditsConsumed,
+              retainedBalance,
+            ] = await Promise.all([
+              prisma.creditTransaction.aggregate({
+                where: { type: 'purchase' },
+                _sum: { grossAmountCents: true },   // IMPORTANTE: grossAmountCents, não amount
+              }),
+              prisma.creditTransaction.aggregate({
+                where: { type: 'purchase', createdAt: { gte: ago30d } },
+                _sum: { grossAmountCents: true },
+              }),
+              // RAW QUERY: Prisma aggregate não suporta multiplicação de campos
+              prisma.$queryRaw<[{ total_cost_brl: number }]>`
+                SELECT COALESCE(
+                  SUM(CAST("costUsd" AS FLOAT) * CAST("exchangeRate" AS FLOAT)), 0
+                ) AS total_cost_brl
+                FROM "CreditTransaction"
+                WHERE "type" = 'consumption'
+                  AND "costUsd" IS NOT NULL
+                  AND "exchangeRate" IS NOT NULL
+              `,
+              prisma.creditTransaction.aggregate({
+                where: { type: 'purchase' },
+                _sum: { amount: true },
+              }),
+              prisma.creditTransaction.aggregate({
+                where: { type: 'consumption' },
+                _sum: { amount: true },  // negativo → Math.abs()
+              }),
+              prisma.user.aggregate({ _sum: { balanceCents: true } }),
+            ])
+
+            const totalRevenueCents = revenueAll._sum.grossAmountCents ?? 0
+            const revenue30dCents = revenue30d._sum.grossAmountCents ?? 0
+            const totalOpenAICostBRL = Number(costResult[0]?.total_cost_brl ?? 0)
+            const revenueBRL = totalRevenueCents / 100
+            const grossProfitBRL = revenueBRL - totalOpenAICostBRL
+            const grossMarginPercent = revenueBRL > 0
+              ? Math.round((grossProfitBRL / revenueBRL) * 100 * 10) / 10
+              : 0
+            const markupPercent = totalOpenAICostBRL > 0
+              ? Math.round((revenueBRL / totalOpenAICostBRL) * 100 * 10) / 10
+              : 0
+
+            return {
+              totalRevenueCents,
+              revenue30dCents,
+              totalOpenAICostBRL,
+              grossProfitBRL,
+              grossMarginPercent,
+              markupPercent,
+              creditsSoldCents: creditsSold._sum.amount ?? 0,
+              creditsConsumedCents: Math.abs(creditsConsumed._sum.amount ?? 0),
+              totalRetainedBalanceCents: retainedBalance._sum.balanceCents ?? 0,
+            }
+          }
+
+          // ─── getExchangeMetrics ──────────────────────────────────────────
+
+          export async function getExchangeMetrics(): Promise<ExchangeMetrics> {
+            const ago30d = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)
+
+            const [latest, range] = await Promise.all([
+              prisma.exchangeRate.findFirst({
+                where: { currency: 'USD-BRL' },
+                orderBy: { date: 'desc' },
+              }),
+              prisma.exchangeRate.aggregate({
+                where: { currency: 'USD-BRL', date: { gte: ago30d } },
+                _min: { rate: true },
+                _max: { rate: true },
+              }),
+            ])
+
+            return {
+              currentRate: Number(latest?.rate ?? 0),
+              minRate30d: Number(range._min.rate ?? 0),
+              maxRate30d: Number(range._max.rate ?? 0),
+            }
+          }
+
+        rawQueryNote: |
+          NOME DA TABELA no raw query: verificar se Prisma usa "CreditTransaction" (PascalCase)
+          ou "credit_transactions" (snake_case) — depende da configuração do datasource.
+          Se o schema não tem @@map, Prisma usa o nome do model em PascalCase.
+          Verificar no Prisma Studio ou via: SELECT tablename FROM pg_tables WHERE schemaname='public'
+
+          COLUNAS: Prisma usa camelCase no TypeScript, mas snake_case no PostgreSQL por padrão.
+          Verificar nomes reais das colunas: costUsd → "cost_usd", exchangeRate → "exchange_rate".
+          Ajustar o raw query conforme necessário.
+
+        verification:
+          type: command
+          command: "pnpm typecheck"
+
+        status: pending
+        dependencies:
+          - "1.1"
+        notes: |
+          admin.ts NÃO deve importar tiktoken (WASM — não pode ser importado em
+          Server Components via barrel export). Apenas queries Prisma e cálculos
+          aritméticos puros.
+
+          Exportar em index.ts com `export * from './admin'` — verificar se há
+          conflito de nomes com outros módulos exportados.
+
+      # ─── 2.4: Rota POST /api/admin/add-credits ───────────────────────────
+
+      - id: "2.4"
+        title: "Criar POST /api/admin/add-credits"
+        service: backend
+        files:
+          - path: "apps/web/src/app/api/admin/add-credits/route.ts"
+            action: CREATE
+
+        currentState: |
+          apps/web/src/app/api/admin/: NÃO EXISTE
+          Pasta precisa ser criada junto com o arquivo.
+
+        targetState: |
+          apps/web/src/app/api/admin/add-credits/route.ts com:
+          - Verificação de session + role ADMIN (403 se não)
+          - Validação Zod: { userEmail: email, amountBRL: positive number, reason: min(3) }
+          - Busca usuário por email (404 se não encontrado)
+          - Conversão: amountCents = Math.round(amountBRL * 100)
+          - Cotação via getExchangeRate("USD-BRL")
+          - addCredits com type: 'adjustment'
+          - Response: { success, userEmail, addedCents, newBalanceCents }
+
+        actions:
+          - "Criar diretório apps/web/src/app/api/admin/add-credits/"
+          - "Criar route.ts com export async function POST(req: NextRequest)"
+          - "Importar auth de @/lib/auth (verificar caminho exato — pode ser @/auth)"
+          - "Importar z de zod para validação do body"
+          - "Importar prisma de @sol/db para busca do usuário"
+          - "Importar addCredits e getExchangeRate de @sol/db"
+          - "Implementar verificação role ADMIN antes de qualquer lógica"
+          - "Tratar erro de usuário não encontrado com 404 claro"
+
+        implementation: |
+          import { NextRequest, NextResponse } from 'next/server'
+          import { z } from 'zod'
+          import { auth } from '@/lib/auth'    // verificar caminho: pode ser '@/auth'
+          import { prisma, addCredits, getExchangeRate } from '@sol/db'
+
+          const bodySchema = z.object({
+            userEmail: z.string().email('Email inválido'),
+            amountBRL: z.number().positive('Valor deve ser positivo'),
+            reason: z.string().min(3, 'Motivo deve ter pelo menos 3 caracteres').max(200),
+          })
+
+          export async function POST(req: NextRequest) {
+            // 1. Auth + role check
+            const session = await auth()
+            if (!session?.user || (session.user as { role?: string }).role !== 'ADMIN') {
+              return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+            }
+
+            // 2. Validação Zod
+            let body: unknown
+            try {
+              body = await req.json()
+            } catch {
+              return NextResponse.json({ error: 'Body inválido' }, { status: 400 })
+            }
+            const parsed = bodySchema.safeParse(body)
+            if (!parsed.success) {
+              return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 })
+            }
+            const { userEmail, amountBRL, reason } = parsed.data
+
+            // 3. Buscar usuário pelo email
+            const user = await prisma.user.findUnique({ where: { email: userEmail } })
+            if (!user) {
+              return NextResponse.json({ error: `Usuário não encontrado: ${userEmail}` }, { status: 404 })
+            }
+
+            // 4. Converter e obter cotação
+            const amountCents = Math.round(amountBRL * 100)
+            const exchangeRate = await getExchangeRate('USD-BRL')
+
+            // 5. Adicionar créditos com auditoria
+            const adminEmail = (session.user as { email?: string }).email ?? 'unknown'
+            const { balanceCents } = await addCredits(user.id, amountCents, {
+              type: 'adjustment',
+              exchangeRate,
+              adminEmail,
+              description: `Ajuste manual por ${adminEmail}: ${reason}`,
+            })
+
+            console.log(
+              `[Admin] addCredits(adjustment) admin=${adminEmail} target=${userEmail} cents=${amountCents}`
+            )
+
+            return NextResponse.json({
+              success: true,
+              userEmail,
+              addedCents: amountCents,
+              newBalanceCents: balanceCents,
+            })
+          }
+
+        authImportNote: |
+          VERIFICAR o caminho correto do import de auth:
+          - Se admin/page.tsx usa `import { auth } from '@/lib/auth'` → usar o mesmo
+          - Se usa `import { auth } from '@/auth'` → usar o mesmo
+          Consistência com o padrão do projeto.
+
+          O campo role na session pode requerer cast:
+          `(session.user as { role?: string }).role`
+          Verificar a tipagem do NextAuth no projeto (auth.ts ou types/next-auth.d.ts).
+
+        verification:
+          type: command
+          command: "pnpm typecheck"
+
+        status: pending
+        dependencies:
+          - "2.1"  # addCredits com nova assinatura
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # PHASE 3 — Frontend
+  # Ordem: 3.1 (page.tsx) PRIMEIRO.
+  # 3.2 (AddCreditsForm) pode ser desenvolvido em paralelo com 3.1 se necessário,
+  # mas a integração final na page.tsx depende de 3.1 estar pronta.
+  # TODAS dependem de Phase 2 completa (admin.ts e add-credits route existindo).
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  - id: "phase-3"
+    name: "Frontend: /admin page rewrite + AddCreditsForm"
+    description: >
+      Rewrite de admin/page.tsx com métricas reais completas via Promise.all.
+      Criação de AddCreditsForm Client Component com dialog de confirmação.
+      MetricCard e UsersTable atualizados conforme spec.
+    canParallelize: false
+
+    subtasks:
+
+      # ─── 3.1: Rewrite /admin page.tsx ────────────────────────────────────
+
+      - id: "3.1"
+        title: "Rewrite /admin page.tsx — métricas completas e novas seções"
+        service: frontend
+        files:
+          - path: "apps/web/src/app/admin/page.tsx"
+            action: REWRITE
+          - path: "apps/web/src/components/admin/MetricCard.tsx"
+            action: MODIFY
+          - path: "apps/web/src/components/admin/UsersTable.tsx"
+            action: MODIFY
+
+        currentState: |
+          admin/page.tsx:
+          - Promise.all com 11 queries — JÁ paralelo ✓
+          - Métricas: total users, receita (usa `amount` incorreto), tokens total
+          - 3 MetricCards (total users, receita, tokens)
+          - UsersTable com colunas: email, role, créditos, tokens, conversas, cadastro
+          - Sem seções: ativos 7d, saldo insuficiente, uso detalhado, financeiro, cotação, adição de créditos
+
+          MetricCard.tsx:
+          - Props: { label, value, change: string | null }
+          - Sem suporte a variante (amber para financeiro)
+
+          UsersTable.tsx:
+          - Interface UserRow com: id, email, role, balanceCents, totalTokens, conversationCount, createdAt
+          - Colunas: email, role, créditos, tokens, conversas, cadastro
+
+        targetState: |
+          admin/page.tsx:
+          - Verificação role ADMIN → redirect('/chat') [atualmente redireciona para /dashboard]
+          - Promise.all com funções do admin.ts (getUserMetrics, getUsageMetrics, etc.)
+          - 6 seções no layout:
+            1. Visão Geral (4 cards): total, ativos 7d, sem saldo, novos 30d
+            2. Uso (6 cards): mensagens total/hoje/7d, tokens input/output, modelo top%
+            3. Financeiro (amber): receita, custo OpenAI, lucro, margem%, markup%, saldo retido
+            4. Cotação: atual, min 30d, max 30d
+            5. Usuários: tabela paginada
+            6. Adicionar Créditos: AddCreditsForm
+
+          MetricCard.tsx:
+          - Adicionar prop `variant?: 'default' | 'amber'`
+          - variant='amber': borda e texto em âmbar/dourado (financeiro)
+
+          UsersTable.tsx:
+          - Interface UserRow atualizada: { id, email, balanceCents, totalMessages, createdAt }
+          - Colunas: email, saldo R$, mensagens, data cadastro
+          - Remover: role, tokens, conversas (ou manter como dados extras)
+
+        actions:
+          - "admin/page.tsx: atualizar redirect de /dashboard para /chat (consistência com arquitetura)"
+          - "admin/page.tsx: substituir queries inline por chamadas às funções do admin.ts"
+          - "admin/page.tsx: adicionar importação de AddCreditsForm (Client Component)"
+          - "admin/page.tsx: estruturar 6 seções com grid responsivo"
+          - "admin/page.tsx: formatar valores financeiros em R$ (receita, custo, lucro, saldo)"
+          - "admin/page.tsx: formatar percentuais (margem, markup)"
+          - "MetricCard.tsx: adicionar prop variant e aplicar classes condicionais"
+          - "UsersTable.tsx: atualizar UserRow interface para spec (totalMessages)"
+          - "UsersTable.tsx: adaptar colunas conforme spec"
+
+        formatHelpers: |
+          // Reaproveitar funções já existentes na página ou criar helpers:
+          function formatBRL(cents: number): string {
+            return `R$ ${(cents / 100).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`
+          }
+          function formatPercent(pct: number): string {
+            return `${pct.toFixed(1)}%`
+          }
+          function formatTokensShort(tokens: number): string {
+            if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M`
+            if (tokens >= 1_000) return `${(tokens / 1_000).toFixed(1)}k`
+            return String(tokens)
+          }
+          function formatBRLDecimal(brl: number): string {
+            return `R$ ${brl.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`
+          }
+
+        verification:
+          type: command
+          command: "pnpm build 2>&1 | tail -20"
+
+        status: pending
+        dependencies:
+          - "2.3"  # admin.ts deve existir com as funções
+
+      # ─── 3.2: AddCreditsForm (Client Component) ──────────────────────────
+
+      - id: "3.2"
+        title: "Criar AddCreditsForm — Client Component com dialog de confirmação"
+        service: frontend
+        files:
+          - path: "apps/web/src/components/admin/AddCreditsForm.tsx"
+            action: CREATE
+
+        currentState: |
+          apps/web/src/components/admin/AddCreditsForm.tsx: NÃO EXISTE
+
+        targetState: |
+          Client Component 'use client' com:
+          - Form: email (text), valor em R$ (number step=0.01), motivo (text)
+          - Ao submeter: abre Dialog de confirmação (Shadcn/UI)
+          - Dialog exibe: "Adicionar R$ X,XX ao saldo de [email]? Motivo: [motivo]"
+          - Botões: Cancelar | Confirmar (loading state durante fetch)
+          - Fetch: POST /api/admin/add-credits
+          - Sucesso: toast + limpa form + router.refresh()
+          - Erro: toast com mensagem do erro
+
+        actions:
+          - "Verificar se Shadcn Dialog está instalado: ls apps/web/src/components/ui/dialog.tsx"
+          - "Verificar qual lib de toast o projeto usa (sonner, react-hot-toast, etc.)"
+          - "Criar AddCreditsForm.tsx com 'use client'"
+          - "Implementar estado do form e dialog"
+          - "Implementar handleConfirm com fetch + loading state"
+          - "Integrar com sistema de toast existente no projeto"
+          - "Usar router.refresh() após sucesso para revalidar dados do Server Component"
+
+        implementation: |
+          'use client'
+
+          import { useState } from 'react'
+          import { useRouter } from 'next/navigation'
+          // Ajustar imports conforme libs disponíveis no projeto:
+          import {
+            Dialog, DialogContent, DialogHeader, DialogTitle,
+            DialogDescription, DialogFooter,
+          } from '@/components/ui/dialog'
+          import { Button } from '@/components/ui/button'
+          import { Input } from '@/components/ui/input'
+          import { Label } from '@/components/ui/label'
+
+          export function AddCreditsForm() {
+            const router = useRouter()
+            const [open, setOpen] = useState(false)
+            const [loading, setLoading] = useState(false)
+            const [error, setError] = useState<string | null>(null)
+            const [form, setForm] = useState({ userEmail: '', amountBRL: '', reason: '' })
+
+            function handleChange(e: React.ChangeEvent<HTMLInputElement>) {
+              setForm((prev) => ({ ...prev, [e.target.name]: e.target.value }))
+            }
+
+            function handleSubmit(e: React.FormEvent) {
+              e.preventDefault()
+              setError(null)
+              if (!form.userEmail || !form.amountBRL || !form.reason) {
+                setError('Preencha todos os campos')
+                return
+              }
+              setOpen(true)
+            }
+
+            async function handleConfirm() {
+              setLoading(true)
+              setError(null)
+              try {
+                const res = await fetch('/api/admin/add-credits', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    userEmail: form.userEmail,
+                    amountBRL: parseFloat(form.amountBRL),
+                    reason: form.reason,
+                  }),
+                })
+                const data = await res.json()
+                if (!res.ok) {
+                  throw new Error(
+                    typeof data.error === 'string'
+                      ? data.error
+                      : 'Erro ao adicionar créditos'
+                  )
+                }
+                // Toast de sucesso — adaptar à lib disponível:
+                alert(`R$ ${form.amountBRL} adicionados ao saldo de ${form.userEmail}`)
+                setForm({ userEmail: '', amountBRL: '', reason: '' })
+                setOpen(false)
+                router.refresh()
+              } catch (err) {
+                setError(err instanceof Error ? err.message : 'Erro inesperado')
+              } finally {
+                setLoading(false)
+              }
+            }
+
+            const amountBRL = parseFloat(form.amountBRL) || 0
+
+            return (
+              <div className="rounded-2xl border border-solar-800/20 bg-background-secondary/40 p-6 backdrop-blur-md">
+                <h2 className="mb-4 text-lg font-semibold text-foreground">Adicionar Créditos</h2>
+                <form onSubmit={handleSubmit} className="space-y-4">
+                  <div>
+                    <Label htmlFor="userEmail">Email do Usuário</Label>
+                    <Input
+                      id="userEmail" name="userEmail" type="email"
+                      value={form.userEmail} onChange={handleChange}
+                      placeholder="aluno@exemplo.com"
+                    />
+                  </div>
+                  <div>
+                    <Label htmlFor="amountBRL">Valor em R$ (reais)</Label>
+                    <Input
+                      id="amountBRL" name="amountBRL" type="number"
+                      min="0.01" step="0.01"
+                      value={form.amountBRL} onChange={handleChange}
+                      placeholder="10.00"
+                    />
+                  </div>
+                  <div>
+                    <Label htmlFor="reason">Motivo</Label>
+                    <Input
+                      id="reason" name="reason" type="text"
+                      value={form.reason} onChange={handleChange}
+                      placeholder="Bônus de boas-vindas"
+                    />
+                  </div>
+                  {error && (
+                    <p className="text-sm text-red-400">{error}</p>
+                  )}
+                  <Button type="submit" className="w-full">
+                    Adicionar Créditos
+                  </Button>
+                </form>
+
+                <Dialog open={open} onOpenChange={setOpen}>
+                  <DialogContent>
+                    <DialogHeader>
+                      <DialogTitle>Confirmar adição de créditos</DialogTitle>
+                      <DialogDescription>
+                        Esta ação adicionará créditos diretamente ao saldo do aluno,
+                        sem passar pelo Stripe.
+                      </DialogDescription>
+                    </DialogHeader>
+                    <div className="py-4 text-sm text-foreground">
+                      <p>
+                        Adicionar <strong>R$ {amountBRL.toFixed(2)}</strong> ao saldo de{' '}
+                        <strong>{form.userEmail}</strong>?
+                      </p>
+                      <p className="mt-2 text-foreground-muted">
+                        Motivo: {form.reason}
+                      </p>
+                    </div>
+                    {error && (
+                      <p className="text-sm text-red-400">{error}</p>
+                    )}
+                    <DialogFooter>
+                      <Button
+                        variant="outline"
+                        onClick={() => setOpen(false)}
+                        disabled={loading}
+                      >
+                        Cancelar
+                      </Button>
+                      <Button onClick={handleConfirm} disabled={loading}>
+                        {loading ? 'Adicionando...' : 'Confirmar'}
+                      </Button>
+                    </DialogFooter>
+                  </DialogContent>
+                </Dialog>
+              </div>
+            )
+          }
+
+        uiComponentsNote: |
+          VERIFICAR antes de implementar:
+          1. Dialog: ls apps/web/src/components/ui/dialog.tsx
+             Se não existir: npx shadcn-ui add dialog
+          2. Label: ls apps/web/src/components/ui/label.tsx
+             Se não existir: usar <label> HTML nativo
+          3. Toast: verificar se projeto usa sonner, react-hot-toast ou outro
+             Substituir o alert() pelo sistema de toast existente
+
+        verification:
+          type: command
+          command: "pnpm typecheck && pnpm build 2>&1 | tail -30"
+
+        status: pending
+        dependencies:
+          - "3.1"  # integrado na page.tsx
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # PHASE 4 — Validação
+  # Executar após Phase 3 completa. Todos os testes em sequência.
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  - id: "phase-4"
+    name: "Validação: typecheck, build e testes manuais"
+    description: >
+      Verificação completa: typecheck, build, testes manuais dos fluxos críticos.
+      Zero regressões em chat, créditos, webhook e autenticação.
+    canParallelize: false
+
+    subtasks:
+
+      # ─── 4.1: TypeScript + Build ──────────────────────────────────────────
+
+      - id: "4.1"
+        title: "Validação: pnpm typecheck + pnpm build"
+        service: ci
+        files: []
+
+        actions:
+          - "Rodar: pnpm typecheck (deve passar sem erros)"
+          - "Rodar: pnpm build (deve passar sem erros)"
+          - "Verificar output do build: nenhuma warning de tipo ou módulo faltando"
+
+        commands:
+          - "pnpm typecheck"
+          - "pnpm build"
+
+        commonErrors:
+          - error: "Type '...' is not assignable to type 'AddCreditOptions'"
+            fix: "Verificar discriminated union — garantir que type: 'purchase' ou 'adjustment' está presente"
+          - error: "Module '@sol/db' has no exported member 'getUserMetrics'"
+            fix: "Verificar se export * from './admin' foi adicionado ao index.ts"
+          - error: "Cannot find name 'adjustment' in TransactionType"
+            fix: "Verificar se npx prisma generate foi executado após a migration"
+          - error: "Property 'grossAmountCents' does not exist"
+            fix: "Executar npx prisma generate para regenerar os tipos"
+
+        verification:
+          type: command
+          command: "pnpm typecheck && pnpm build"
+
+        status: pending
+        dependencies:
+          - "3.2"
+
+      # ─── 4.2: Testes Manuais ─────────────────────────────────────────────
+
+      - id: "4.2"
+        title: "Testes manuais — fluxos críticos"
+        service: qa
+        files: []
+
+        testCases:
+          - id: "T1"
+            description: "Schema: verificar novos campos no banco"
+            steps:
+              - "Abrir Prisma Studio: cd packages/db && npx prisma studio"
+              - "Verificar tabela CreditTransaction: colunas grossAmountCents e adminEmail existem"
+              - "Verificar enum TransactionType: valor adjustment disponível"
+              - "Verificar purchases existentes: grossAmountCents preenchido (não null)"
+
+          - id: "T2"
+            description: "Admin console: métricas reais"
+            steps:
+              - "Acessar http://localhost:3001/admin com usuário ADMIN"
+              - "Verificar que todas as seções carregam sem erro"
+              - "Verificar que receita usa grossAmountCents (não amount)"
+              - "Se houver purchases, confirmar que valor de receita está correto"
+              - "Verificar cotação atual exibida"
+
+          - id: "T3"
+            description: "Adição manual de créditos"
+            steps:
+              - "No painel /admin, preencher form: email de aluno existente, R$ 10.00, motivo 'Teste'"
+              - "Clicar Adicionar → verificar que dialog de confirmação abre"
+              - "Confirmar → verificar toast de sucesso"
+              - "Abrir Prisma Studio → verificar CreditTransaction com type=adjustment, adminEmail e description corretos"
+              - "Verificar que balanceCents do usuário foi incrementado em 1000 (R$10)"
+
+          - id: "T4"
+            description: "Adição manual: validações de erro"
+            steps:
+              - "Tentar com email inexistente → verificar mensagem de erro clara (404)"
+              - "Tentar com amountBRL=0 → verificar erro de validação Zod (400)"
+              - "Tentar com reason de 1 char → verificar erro de validação (400)"
+              - "Como usuário com role=USER: GET /api/admin/add-credits → deve retornar 403"
+
+          - id: "T5"
+            description: "Zero regressões"
+            steps:
+              - "Enviar mensagem no chat → verificar streaming funcional"
+              - "Verificar que crédito foi deduzido corretamente"
+              - "Acessar /dashboard → verificar histórico de transações"
+              - "Verificar webhook (se disponível): simular com stripe CLI"
+
+        status: pending
+        dependencies:
+          - "4.1"
+
+# ─── Definition of Done ──────────────────────────────────────────────────────
+
+definitionOfDone:
+  - "[ ] Migration aplicada — adjustment no enum, grossAmountCents e adminEmail no schema"
+  - "[ ] Backfill populou grossAmountCents em purchases existentes (verificar Prisma Studio)"
+  - "[ ] addCredits() refatorado — purchase e adjustment compilam sem erro"
+  - "[ ] Webhook Stripe registra grossAmountCents via session.amount_total"
+  - "[ ] packages/db/src/admin.ts criado e exportado via index.ts"
+  - "[ ] POST /api/admin/add-credits — 200/400/403/404 funcionando"
+  - "[ ] /admin page.tsx com 6 seções e dados reais"
+  - "[ ] AddCreditsForm com dialog de confirmação e router.refresh()"
+  - "[ ] Receita usa grossAmountCents (verificar no banco)"
+  - "[ ] Custo OpenAI via raw query por transação individual"
+  - "[ ] pnpm typecheck passa sem erros"
+  - "[ ] pnpm build passa sem erros"
+  - "[ ] Nenhuma regressão em chat, streaming SSE, webhook, auth, dashboard"
+
+# ─── Execution Order Summary ─────────────────────────────────────────────────
+
+executionOrder: |
+  SEQUÊNCIA OBRIGATÓRIA:
+  1.1 → 2.1 → [2.2 + 2.4 em paralelo] + [2.3 independente] → 3.1 → 3.2 → 4.1 → 4.2
+
+  DETALHADO:
+  Step 1: 1.1 (migration + npx prisma generate)
+  Step 2: 2.1 (addCredits refactor) — IMEDIATAMENTE seguido de:
+  Step 3: 2.2 (webhook update) — evitar build quebrado entre 2.1 e 2.2
+  Step 4: 2.3 (admin.ts) — pode ser feito a partir do Step 1 (independente de 2.1)
+  Step 5: 2.4 (add-credits route) — depende de 2.1
+  Step 6: 3.1 (admin page rewrite) — depende de 2.3
+  Step 7: 3.2 (AddCreditsForm) — depende de 3.1
+  Step 8: 4.1 (typecheck + build)
+  Step 9: 4.2 (testes manuais)
+
+  ATENÇÃO: 2.1 e 2.2 devem ser feitos NA MESMA SESSÃO para evitar build quebrado.
+  Após 2.1, o webhook não compila mais com a assinatura antiga.

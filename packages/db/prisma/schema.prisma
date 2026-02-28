@@ -77,11 +77,13 @@ model CreditTransaction {
   type            TransactionType
   description     String?
   stripePaymentId String?         @unique
-  exchangeRate    Decimal?        // cotação USD-BRL no momento da transação
-  inputTokens     Int?            // tokens de input consumidos
-  outputTokens    Int?            // tokens de output consumidos
-  modelUsed       String?         // modelo OpenAI (ex: "gpt-4o", "gpt-4o-mini")
-  costUsd         Decimal?        // custo em USD da chamada OpenAI
+  exchangeRate       Decimal?        // cotação USD-BRL no momento da transação
+  grossAmountCents   Int?            // valor bruto pago pelo aluno no Stripe (em centavos)
+  adminEmail         String?         // email do admin que realizou ajuste manual (auditoria)
+  inputTokens        Int?            // tokens de input consumidos
+  outputTokens       Int?            // tokens de output consumidos
+  modelUsed          String?         // modelo OpenAI (ex: "gpt-4o", "gpt-4o-mini")
+  costUsd            Decimal?        // custo em USD da chamada OpenAI
   maxOutputTokens    Int?            // MAX_OUTPUT_TOKENS usado no gate (auditoria)
   hasAttachments     Boolean         @default(false)  // mensagem incluiu anexos?
   attachmentTypes    String[]        @default([])     // tipos MIME dos arquivos anexados
@@ -92,11 +94,13 @@ model CreditTransaction {
 
   @@index([userId])
   @@index([stripePaymentId])
+  @@index([type])
 }
 
 enum TransactionType {
   purchase
   consumption
+  adjustment
 }
 
 model ExchangeRate {

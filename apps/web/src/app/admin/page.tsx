@@ -1,12 +1,19 @@
 import { redirect } from 'next/navigation';
 import Link from 'next/link';
 import { auth } from '@/lib/auth';
-import { prisma } from '@sol/db';
+import {
+  getUserMetrics,
+  getUsageMetrics,
+  getFinancialMetrics,
+  getExchangeMetrics,
+  getUsersList,
+} from '@sol/db';
 import Logo from '@/components/Logo';
 import LogoWithText from '@/components/LogoWithText';
 import LogoutButton from '@/components/LogoutButton';
 import MetricCard from '@/components/admin/MetricCard';
 import UsersTable from '@/components/admin/UsersTable';
+import AddCreditsForm from '@/components/admin/AddCreditsForm';
 
 const PAGE_SIZE = 20;
 
@@ -14,7 +21,7 @@ interface AdminPageProps {
   searchParams: Promise<{ page?: string }>;
 }
 
-function formatRevenue(cents: number): string {
+function formatBRL(cents: number): string {
   return `R$ ${(cents / 100).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`;
 }
 
@@ -25,10 +32,14 @@ function formatTokensShort(tokens: number): string {
 }
 
 function calcChange(current: number, previous: number): string | null {
-  if (previous === 0) return current > 0 ? '+100% este mês' : null;
+  if (previous === 0) return current > 0 ? '+100% vs mês anterior' : null;
   const pct = Math.round(((current - previous) / previous) * 100);
   const sign = pct >= 0 ? '+' : '';
-  return `${sign}${pct}% este mês`;
+  return `${sign}${pct}% vs mês anterior`;
+}
+
+function formatCostBRL(brl: number): string {
+  return `R$ ${brl.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
 export default async function AdminDashboardPage({ searchParams }: AdminPageProps) {
@@ -39,150 +50,98 @@ export default async function AdminDashboardPage({ searchParams }: AdminPageProp
   }
 
   if (session.user.role !== 'ADMIN') {
-    redirect('/dashboard');
+    redirect('/chat');
   }
 
   const resolvedParams = await searchParams;
   const page = Math.max(1, Number(resolvedParams?.page) || 1);
 
-  // Date boundaries for month-over-month metrics
-  const now = new Date();
-  const firstDayThisMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-  const firstDayLastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  // Todas as métricas em paralelo
+  const [userMetrics, usageMetrics, financialMetrics, exchangeMetrics, userListResult] =
+    await Promise.all([
+      getUserMetrics(),
+      getUsageMetrics(),
+      getFinancialMetrics(),
+      getExchangeMetrics(),
+      getUsersList(page, PAGE_SIZE),
+    ]);
 
-  // All metrics in parallel
-  const [
-    totalUsers,
-    usersThisMonth,
-    usersLastMonth,
-    revenueAll,
-    revenueThisMonth,
-    revenueLastMonth,
-    tokensAll,
-    tokensThisMonth,
-    tokensLastMonth,
-    userCount,
-    usersPage,
-  ] = await Promise.all([
-    // Total users
-    prisma.user.count(),
-    // Users this month
-    prisma.user.count({ where: { createdAt: { gte: firstDayThisMonth } } }),
-    // Users last month
-    prisma.user.count({
-      where: { createdAt: { gte: firstDayLastMonth, lt: firstDayThisMonth } },
-    }),
-    // Total revenue (purchases)
-    prisma.creditTransaction.aggregate({
-      where: { type: 'purchase' },
-      _sum: { amount: true },
-    }),
-    // Revenue this month
-    prisma.creditTransaction.aggregate({
-      where: { type: 'purchase', createdAt: { gte: firstDayThisMonth } },
-      _sum: { amount: true },
-    }),
-    // Revenue last month
-    prisma.creditTransaction.aggregate({
-      where: {
-        type: 'purchase',
-        createdAt: { gte: firstDayLastMonth, lt: firstDayThisMonth },
-      },
-      _sum: { amount: true },
-    }),
-    // Total tokens consumed
-    prisma.creditTransaction.aggregate({
-      where: { type: 'consumption' },
-      _sum: { inputTokens: true, outputTokens: true },
-    }),
-    // Tokens this month
-    prisma.creditTransaction.aggregate({
-      where: { type: 'consumption', createdAt: { gte: firstDayThisMonth } },
-      _sum: { inputTokens: true, outputTokens: true },
-    }),
-    // Tokens last month
-    prisma.creditTransaction.aggregate({
-      where: {
-        type: 'consumption',
-        createdAt: { gte: firstDayLastMonth, lt: firstDayThisMonth },
-      },
-      _sum: { inputTokens: true, outputTokens: true },
-    }),
-    // Users count for pagination
-    prisma.user.count(),
-    // Users page with conversation count
-    prisma.user.findMany({
-      take: PAGE_SIZE,
-      skip: (page - 1) * PAGE_SIZE,
-      orderBy: { createdAt: 'desc' },
-      select: {
-        id: true,
-        email: true,
-        role: true,
-        balanceCents: true,
-        createdAt: true,
-        _count: { select: { conversations: true } },
-      },
-    }),
-  ]);
+  const totalPages = Math.ceil(userListResult.total / PAGE_SIZE);
 
-  // Aggregate tokens per user (for users on this page)
-  const userIds = usersPage.map((u) => u.id);
-  const tokensByUser = userIds.length > 0
-    ? await prisma.creditTransaction.groupBy({
-        by: ['userId'],
-        where: { userId: { in: userIds }, type: 'consumption' },
-        _sum: { inputTokens: true, outputTokens: true },
-      })
-    : [];
-
-  const tokenMap = new Map(
-    tokensByUser.map((t) => [
-      t.userId,
-      (t._sum.inputTokens ?? 0) + (t._sum.outputTokens ?? 0),
-    ])
-  );
-
-  // Build user rows
-  const userRows = usersPage.map((u) => ({
-    id: u.id,
-    email: u.email,
-    role: u.role as 'USER' | 'ADMIN',
-    balanceCents: u.balanceCents,
-    totalTokens: tokenMap.get(u.id) ?? 0,
-    conversationCount: u._count.conversations,
-    createdAt: u.createdAt,
-  }));
-
-  const totalPages = Math.ceil(userCount / PAGE_SIZE);
-
-  // Metrics values
-  const totalRevenueCents = revenueAll._sum.amount ?? 0;
-  const revenueThisMonthCents = revenueThisMonth._sum.amount ?? 0;
-  const revenueLastMonthCents = revenueLastMonth._sum.amount ?? 0;
-
-  const totalTokensConsumed =
-    (tokensAll._sum.inputTokens ?? 0) + (tokensAll._sum.outputTokens ?? 0);
-  const tokensThisMonthTotal =
-    (tokensThisMonth._sum.inputTokens ?? 0) + (tokensThisMonth._sum.outputTokens ?? 0);
-  const tokensLastMonthTotal =
-    (tokensLastMonth._sum.inputTokens ?? 0) + (tokensLastMonth._sum.outputTokens ?? 0);
-
-  const metrics = [
+  // Blocos de métricas
+  const userCards = [
     {
       label: 'Total de Usuários',
-      value: String(totalUsers),
-      change: calcChange(usersThisMonth, usersLastMonth),
+      value: String(userMetrics.totalUsers),
+      change: calcChange(userMetrics.newUsersThisMonth, userMetrics.newUsersLastMonth),
     },
     {
-      label: 'Receita Total',
-      value: formatRevenue(totalRevenueCents),
-      change: calcChange(revenueThisMonthCents, revenueLastMonthCents),
+      label: 'Ativos (7 dias)',
+      value: String(userMetrics.activeUsers7d),
+      change: null,
+    },
+    {
+      label: 'Saldo Baixo',
+      value: String(userMetrics.lowBalanceUsers),
+      change: null,
+      variant: 'amber' as const,
+    },
+  ];
+
+  const usageCards = [
+    {
+      label: 'Total de Mensagens',
+      value: String(usageMetrics.totalMessages),
+      change: null,
     },
     {
       label: 'Tokens Consumidos',
-      value: formatTokensShort(totalTokensConsumed),
-      change: calcChange(tokensThisMonthTotal, tokensLastMonthTotal),
+      value: formatTokensShort(usageMetrics.totalTokens),
+      change: calcChange(usageMetrics.tokensThisMonth, usageMetrics.tokensLastMonth),
+    },
+  ];
+
+  // Lucro e Margem derivados dos dados financeiros
+  const revenueBRL = financialMetrics.totalRevenueCents / 100;
+  const profitBRL = revenueBRL - financialMetrics.totalOpenAICostBRL;
+  const marginPct =
+    revenueBRL > 0 ? Math.round((profitBRL / revenueBRL) * 1000) / 10 : 0;
+
+  const financialCards = [
+    {
+      label: 'Receita Bruta Total',
+      value: formatBRL(financialMetrics.totalRevenueCents),
+      change: calcChange(
+        financialMetrics.revenueThisMonthCents,
+        financialMetrics.revenueLastMonthCents,
+      ),
+      variant: 'default' as const,
+    },
+    {
+      label: 'Receita Este Mês',
+      value: formatBRL(financialMetrics.revenueThisMonthCents),
+      change: null,
+    },
+    {
+      label: 'Custo OpenAI (BRL)',
+      value: formatCostBRL(financialMetrics.totalOpenAICostBRL),
+      change: null,
+      variant: 'amber' as const,
+    },
+    {
+      label: 'Lucro Estimado',
+      value: formatCostBRL(profitBRL),
+      change: null,
+    },
+    {
+      label: 'Margem Estimada',
+      value: revenueBRL > 0 ? `${marginPct.toFixed(1)}%` : '—',
+      change: null,
+    },
+    {
+      label: 'Ajustes Manuais',
+      value: formatBRL(financialMetrics.totalAdjustmentsCents),
+      change: null,
     },
   ];
 
@@ -192,7 +151,7 @@ export default async function AdminDashboardPage({ searchParams }: AdminPageProp
 
       <header className="fixed left-0 right-0 top-4 z-50 mx-auto flex h-14 w-[calc(100%-2rem)] max-w-6xl items-center justify-between rounded-full border border-solar-800/30 bg-background-secondary/70 px-4 backdrop-blur-xl md:px-6">
         <div className="flex items-center gap-4">
-          <Link href="/dashboard" className="flex items-center gap-2 text-solar-300 transition-all hover:opacity-80">
+          <Link href="/chat" className="flex items-center gap-2 text-solar-300 transition-all hover:opacity-80">
             <Logo size={24} />
             <LogoWithText height={14} className="hidden sm:block" />
           </Link>
@@ -206,23 +165,103 @@ export default async function AdminDashboardPage({ searchParams }: AdminPageProp
       </header>
 
       <main className="relative z-10 flex-1 px-4 pb-12 pt-28 md:px-8">
-        <div className="mx-auto max-w-6xl">
-          <div className="mb-8 flex items-end justify-between">
+        <div className="mx-auto max-w-6xl space-y-10">
+
+          {/* Título */}
+          <div className="flex items-end justify-between">
             <div>
               <h1 className="text-3xl font-bold text-foreground">Painel de Controle</h1>
               <p className="mt-1 text-sm text-foreground-muted">
-                {totalUsers} usuário{totalUsers !== 1 ? 's' : ''} cadastrado{totalUsers !== 1 ? 's' : ''}
+                {userMetrics.totalUsers} usuário{userMetrics.totalUsers !== 1 ? 's' : ''} cadastrado{userMetrics.totalUsers !== 1 ? 's' : ''}
               </p>
             </div>
           </div>
 
-          <div className="mb-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {metrics.map((metric, i) => (
-              <MetricCard key={i} label={metric.label} value={metric.value} change={metric.change} />
-            ))}
-          </div>
+          {/* Bloco: Usuários */}
+          <section>
+            <h2 className="mb-4 text-sm font-semibold uppercase tracking-widest text-foreground-muted">
+              Usuários
+            </h2>
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              {userCards.map((card, i) => (
+                <MetricCard
+                  key={i}
+                  label={card.label}
+                  value={card.value}
+                  change={card.change}
+                  variant={card.variant}
+                />
+              ))}
+            </div>
+          </section>
 
-          <UsersTable users={userRows} currentPage={page} totalPages={totalPages} />
+          {/* Bloco: Uso */}
+          <section>
+            <h2 className="mb-4 text-sm font-semibold uppercase tracking-widest text-foreground-muted">
+              Uso
+            </h2>
+            <div className="grid gap-4 sm:grid-cols-2">
+              {usageCards.map((card, i) => (
+                <MetricCard key={i} label={card.label} value={card.value} change={card.change} />
+              ))}
+            </div>
+          </section>
+
+          {/* Bloco: Financeiro */}
+          <section>
+            <h2 className="mb-4 text-sm font-semibold uppercase tracking-widest text-foreground-muted">
+              Financeiro
+            </h2>
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              {financialCards.map((card, i) => (
+                <MetricCard
+                  key={i}
+                  label={card.label}
+                  value={card.value}
+                  change={card.change}
+                  variant={card.variant}
+                />
+              ))}
+            </div>
+          </section>
+
+          {/* Bloco: Câmbio */}
+          <section>
+            <h2 className="mb-4 text-sm font-semibold uppercase tracking-widest text-foreground-muted">
+              Câmbio
+            </h2>
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              <MetricCard
+                label="USD-BRL (última cotação)"
+                value={
+                  exchangeMetrics.lastRateBRL > 0
+                    ? `R$ ${exchangeMetrics.lastRateBRL.toFixed(4)}`
+                    : '—'
+                }
+                change={
+                  exchangeMetrics.lastRateDate
+                    ? new Intl.DateTimeFormat('pt-BR').format(exchangeMetrics.lastRateDate)
+                    : null
+                }
+              />
+            </div>
+          </section>
+
+          {/* Bloco: Lista de usuários */}
+          <UsersTable
+            users={userListResult.users}
+            currentPage={page}
+            totalPages={totalPages}
+          />
+
+          {/* Bloco: Adicionar créditos manualmente */}
+          <section>
+            <h2 className="mb-4 text-sm font-semibold uppercase tracking-widest text-foreground-muted">
+              Créditos Manuais
+            </h2>
+            <AddCreditsForm />
+          </section>
+
         </div>
       </main>
     </div>

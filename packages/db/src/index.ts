@@ -21,6 +21,7 @@ export * from '@prisma/client'
 export * from './conversations'
 export * from './credits'
 export * from './exchange-rate'
+export * from './admin'
 // token-counter re-export removed from barrel — tiktoken uses WASM and cannot
 // be bundled by webpack for client components. Import directly:
 //   import { countTokens, ... } from '@sol/db/token-counter'

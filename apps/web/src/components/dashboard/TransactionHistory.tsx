@@ -4,7 +4,7 @@ import Pagination from './Pagination';
 interface Transaction {
   id: string;
   amount: number;
-  type: 'purchase' | 'consumption';
+  type: 'purchase' | 'consumption' | 'adjustment';
   description: string | null;
   createdAt: Date;
 }
