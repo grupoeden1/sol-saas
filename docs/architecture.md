@@ -17,6 +17,7 @@ O projeto é baseado em uma estrutura proprietária da Eden Corporate, já inici
 | 2026-02-26 | 2.1     | Refinamento de schema: User.credits → balanceCents + minBalanceCents, CreditTransaction com inputTokens/outputTokens/costUsd, ExchangeRate com currency+date (@@unique), funções packages/db com assinaturas refinadas | Aria (Architect) |
 | 2026-02-27 | 3.0     | Novo modelo de precificação com gate pré-chamada: estimativa de custo máximo (input + MAX_OUTPUT_TOKENS=8192), saldo nunca negativo, remoção de minBalanceCents. Lazy exchange rate (on-demand via AwesomeAPI). CREDIT_PERCENTAGE substitui CREDIT_MARGIN_PERCENT. Funções estimateMaxCost/calculateRealCost. Campo maxOutputTokens em CreditTransaction. Constante MAX_OUTPUT_TOKENS=8192, MIN_COST_CENTS=100. | Aria (Architect) |
 | 2026-02-27 | 4.0     | Suporte a anexos no chat (FR11/Story 2.5). Novas dependências: pdf-parse, mammoth, sharp. CreditTransaction com hasAttachments/attachmentTypes/attachmentTokens. POST /api/chat aceita multipart/form-data (retrocompatível com JSON). calculateImageCost() em token-counter.ts. Workflow atualizado com file processing. Runtime nodejs obrigatório. addCredits exchangeRate tornado obrigatório. | Aria (Architect) |
+| 2026-02-28 | 5.0     | Admin Console (FR12/Story 4.2). Enum TransactionType adiciona `adjustment`. CreditTransaction ganha `grossAmountCents` (Int?) e `adminEmail` (String?). addCredits() refatorado para union type (purchase | adjustment). Webhook Stripe atualizado para registrar grossAmountCents. Novo módulo packages/db/src/admin.ts com queries de métricas (usuários, uso, financeiras, cotação). Nova rota POST /api/admin/add-credits. Workflow de adição manual de créditos documentado. | Aria (Architect) |
 
 ---
 
@@ -24,7 +25,7 @@ O projeto é baseado em uma estrutura proprietária da Eden Corporate, já inici
 
 ### Technical Summary
 
-O SOL é um SaaS monolítico fullstack construído sobre Next.js 14 com App Router, hospedado em VPS própria via Docker Compose. Frontend e backend coexistem no mesmo processo — páginas server-rendered em React Server Components e lógica de negócio em API Routes dentro de `apps/web/app/api/`. A camada de dados usa Prisma com PostgreSQL, ambos containerizados. Integrações externas incluem OpenAI (chat via SSE streaming, incluindo Vision API para imagens), Stripe (pagamentos via Checkout + Webhooks) e AwesomeAPI (cotação USD-BRL lazy on-demand para cálculo de custo por mensagem). O chat suporta anexos de arquivos (imagens, PDFs, DOCX, TXT, MD) processados em memória sem persistência — imagens via Vision API (forçando GPT-4o), documentos via extração de texto (pdf-parse, mammoth). O modelo de precificação usa um gate pré-chamada: antes de cada chamada à OpenAI, o backend estima o custo máximo (input real + tokens de anexos + MAX_OUTPUT_TOKENS=8192 tokens de output × taxa do modelo × cotação USD-BRL) e verifica se o saldo cobre. Se cobrir, executa a chamada e deduz o custo real após streaming. O saldo nunca fica negativo — o gate garante cobertura do pior caso. O monorepo Turborepo com `packages/db` garante tipagem compartilhada e permite extrair serviços no futuro sem refatoração significativa.
+O SOL é um SaaS monolítico fullstack construído sobre Next.js 14 com App Router, hospedado em VPS própria via Docker Compose. Frontend e backend coexistem no mesmo processo — páginas server-rendered em React Server Components e lógica de negócio em API Routes dentro de `apps/web/app/api/`. A camada de dados usa Prisma com PostgreSQL, ambos containerizados. Integrações externas incluem OpenAI (chat via SSE streaming, incluindo Vision API para imagens), Stripe (pagamentos via Checkout + Webhooks) e AwesomeAPI (cotação USD-BRL lazy on-demand para cálculo de custo por mensagem). O chat suporta anexos de arquivos (imagens, PDFs, DOCX, TXT, MD) processados em memória sem persistência — imagens via Vision API (forçando GPT-4o), documentos via extração de texto (pdf-parse, mammoth). O modelo de precificação usa um gate pré-chamada: antes de cada chamada à OpenAI, o backend estima o custo máximo (input real + tokens de anexos + MAX_OUTPUT_TOKENS=8192 tokens de output × taxa do modelo × cotação USD-BRL) e verifica se o saldo cobre. Se cobrir, executa a chamada e deduz o custo real após streaming. O saldo nunca fica negativo — o gate garante cobertura do pior caso. O painel administrativo em `/admin` (restrito a `role: ADMIN`) exibe métricas reais de usuários, uso e financeiras diretamente via Server Components, com capacidade de adição manual de créditos em reais com auditoria completa. O monorepo Turborepo com `packages/db` garante tipagem compartilhada e permite extrair serviços no futuro sem refatoração significativa.
 
 ### Platform and Infrastructure Choice
 
@@ -174,21 +175,34 @@ interface CreditTransaction {
   id: string;
   userId: string;
   amount: number; // centavos de real (positivo = crédito, negativo = débito)
-  type: 'purchase' | 'consumption';
-  description: string | null; // título da conversa (consumption) ou descrição da compra (purchase)
-  stripePaymentId: string | null; // unique — idempotência de webhook
+  type: 'purchase' | 'consumption' | 'adjustment'; // adjustment = adição manual pelo admin
+  description: string | null; // título da conversa (consumption), descrição da compra (purchase) ou "Ajuste manual por [adminEmail]: [motivo]" (adjustment)
+  stripePaymentId: string | null; // unique — idempotência de webhook (apenas purchase)
+  grossAmountCents: number | null; // valor bruto pago pelo aluno no Stripe em centavos (apenas purchase) — base para cálculo de receita
+  adminEmail: string | null; // email do admin executor (apenas adjustment) — auditoria
   exchangeRate: number | null; // Decimal — cotação USD-BRL no momento da transação
-  inputTokens: number | null; // tokens de input consumidos (apenas para consumption)
-  outputTokens: number | null; // tokens de output consumidos (apenas para consumption)
+  inputTokens: number | null; // tokens de input consumidos (apenas consumption)
+  outputTokens: number | null; // tokens de output consumidos (apenas consumption)
   modelUsed: string | null; // modelo OpenAI utilizado (ex: "gpt-4o", "gpt-4o-mini")
-  costUsd: number | null; // Decimal — custo em dólar da chamada OpenAI (apenas para consumption)
-  maxOutputTokens: number | null; // max_tokens usado no gate para auditoria (apenas para consumption)
+  costUsd: number | null; // Decimal — custo em dólar da chamada OpenAI (apenas consumption)
+  maxOutputTokens: number | null; // max_tokens usado no gate para auditoria (apenas consumption)
   hasAttachments: boolean; // se a mensagem incluiu arquivos (default false)
   attachmentTypes: string[]; // tipos MIME dos arquivos (ex: ["image/jpeg", "application/pdf"]) (default [])
-  attachmentTokens: number | null; // tokens adicionais gerados pelos arquivos (apenas para consumption)
+  attachmentTokens: number | null; // tokens adicionais gerados pelos arquivos (apenas consumption)
   createdAt: Date;
 }
 ```
+
+**Invariantes por tipo:**
+
+| Campo | `purchase` | `consumption` | `adjustment` |
+|---|---|---|---|
+| `stripePaymentId` | ✅ obrigatório (idempotência) | null | null |
+| `grossAmountCents` | ✅ valor bruto Stripe | null | null |
+| `adminEmail` | null | null | ✅ obrigatório (auditoria) |
+| `inputTokens/outputTokens` | null | ✅ | null |
+| `costUsd/modelUsed` | null | ✅ | null |
+| `exchangeRate` | ✅ cotação do dia | ✅ cotação do dia | ✅ cotação do dia |
 
 ### ExchangeRate
 
@@ -285,20 +299,33 @@ deductCredits(
 - Saldo nunca fica negativo — o gate pré-chamada já garantiu cobertura do pior caso
 - Lança `InsufficientBalanceError` se UPDATE não afeta nenhuma row
 
-**`addCredits(userId, amountCents, stripePaymentId, exchangeRate)`**
+**`addCredits(userId, amountCents, options)`**
 
 ```typescript
+type AddCreditsOptions =
+  | {
+      type: 'purchase'
+      stripePaymentId: string   // obrigatório — idempotência via UNIQUE
+      exchangeRate: Prisma.Decimal
+      grossAmountCents: number  // valor bruto pago no Stripe em centavos
+    }
+  | {
+      type: 'adjustment'
+      exchangeRate: Prisma.Decimal
+      adminEmail: string        // obrigatório — auditoria
+      description: string       // motivo do ajuste
+    }
+
 addCredits(
   userId: string,
   amountCents: number,
-  stripePaymentId: string,
-  exchangeRate: Decimal
+  options: AddCreditsOptions
 ): Promise<{ balanceCents: number }>
 ```
 
 - Executa em `$transaction` atômica: increment `balanceCents`, insert `CreditTransaction`
-- `amountCents = valor_pago_centavos × CREDIT_PERCENTAGE` (ex: R$69,90 × 0.40 = R$27,96 = 2796 centavos)
-- Idempotente via `stripePaymentId` UNIQUE
+- **`purchase`:** `amountCents = grossAmountCents × CREDIT_PERCENTAGE` (ex: R$69,90 × 0.40 = 2796 centavos). Idempotente via `stripePaymentId` UNIQUE. Registra `grossAmountCents` para rastreio de receita bruta
+- **`adjustment`:** adição manual pelo admin. Sem `stripePaymentId`. Registra `adminEmail` e `description: "Ajuste manual por [adminEmail]: [motivo]"`. Sem idempotência por design (admin confirma antes de executar)
 
 **`estimateMaxCost(inputTokens, model, exchangeRate)`**
 
@@ -357,6 +384,96 @@ _Nota: Esta função é adicionada em `packages/db/src/token-counter.ts` junto c
 - **Request:** `{ packageId: string }`
 - **Response:** `{ sessionUrl: string }`
 
+### Admin API
+
+#### `POST /api/admin/add-credits`
+
+- **Auth:** Requerido + `role: ADMIN` (verificado server-side — 403 se ausente ou insuficiente)
+- **Request:** `{ userEmail: string, amountBRL: number, reason: string }` (validação Zod)
+  - `userEmail`: string email válido
+  - `amountBRL`: número positivo (valor em reais, não centavos)
+  - `reason`: string mínimo 3 caracteres
+- **Lógica:**
+  1. Verificar session e `role: ADMIN` → 403 se não
+  2. Buscar usuário pelo `userEmail` → 404 se não encontrado
+  3. `amountCents = Math.round(amountBRL × 100)`
+  4. `exchangeRate = getExchangeRate("USD-BRL")`
+  5. `addCredits(userId, amountCents, { type: 'adjustment', exchangeRate, adminEmail, description: "Ajuste manual por [adminEmail]: [reason]" })`
+- **Response 200:** `{ success: true, userEmail, addedCents, newBalanceCents }`
+- **Response 403:** Admin não autenticado
+- **Response 404:** Usuário não encontrado
+
+#### `/admin` (Server Component Page)
+
+- **Auth:** Verificação de `role: ADMIN` no Server Component → redirect `/chat` se não autorizado
+- **Carregamento de dados:** `Promise.all([...queries])` para carregar todas as métricas em paralelo
+- **Módulo de queries:** `packages/db/src/admin.ts` (novo arquivo)
+
+### Admin Metrics Queries (packages/db/src/admin.ts)
+
+**Módulo novo** — funções tipadas para alimentar o painel `/admin` via Server Components.
+
+```typescript
+// Métricas de Usuários
+getUserMetrics(): Promise<{
+  totalUsers: number
+  activeUsers7d: number           // ≥1 mensagem nos últimos 7 dias
+  usersWithoutUsableBalance: number // balanceCents < MIN_COST_CENTS (100)
+  newUsers30d: number
+}>
+
+getUsersPage(page: number, pageSize: 20): Promise<{
+  users: Array<{ email, balanceCents, totalMessages, createdAt }>
+  total: number
+}>
+
+// Métricas de Uso
+getUsageMetrics(): Promise<{
+  totalMessages: number
+  messagesToday: number
+  messages7d: number
+  totalInputTokens: number
+  totalOutputTokens: number
+  topModel: string
+  topModelPercent: number
+  avgTokensPerMessage: number
+  messagesWithAttachments: number
+  messagesWithoutAttachments: number
+}>
+
+// Métricas Financeiras
+// ATENÇÃO: receita usa grossAmountCents (não amount) — evita dependência do CREDIT_PERCENTAGE
+// ATENÇÃO: custo OpenAI usa raw query (SUM(cost_usd * exchange_rate) — Prisma não suporta multiplicação em aggregate
+getFinancialMetrics(): Promise<{
+  totalRevenueCents: number      // SUM(grossAmountCents) WHERE type = 'purchase'
+  revenue30dCents: number
+  totalOpenAICostBRL: number     // raw: SUM(cost_usd * exchange_rate) WHERE type = 'consumption'
+  grossProfitCents: number       // revenue - openAICost (convertido para centavos)
+  grossMarginPercent: number     // (profit / revenue) × 100
+  markupPercent: number          // (revenue / cost) × 100
+  creditsSoldCents: number       // SUM(amount) WHERE type = 'purchase'
+  creditsConsumedCents: number   // SUM(ABS(amount)) WHERE type = 'consumption'
+  totalRetainedBalanceCents: number // SUM(balanceCents) todos os usuários
+}>
+
+// Métricas de Cotação
+getExchangeRateMetrics(): Promise<{
+  currentRate: number
+  minRate30d: number
+  maxRate30d: number
+}>
+```
+
+**Nota sobre custo OpenAI:** raw query obrigatória porque Prisma aggregate não suporta produto de dois campos:
+
+```sql
+SELECT COALESCE(SUM(cost_usd * exchange_rate), 0) AS total_cost_brl
+FROM credit_transactions
+WHERE type = 'consumption'
+  AND cost_usd IS NOT NULL
+  AND exchange_rate IS NOT NULL
+```
+
 ---
 
 ## Core Workflows
@@ -387,13 +504,29 @@ _Nota: Esta função é adicionada em `packages/db/src/token-counter.ts` junto c
 17. Retorna header `X-Balance-Cents` com `balanceCents` atualizado.
 18. Buffers dos arquivos descartados — nenhuma persistência em disco, S3 ou banco.
 
-### Purchase & Credit Addition
+### Purchase & Credit Addition (Stripe)
 
 1. Aluno escolhe pacote e finaliza compra via Stripe Checkout.
 2. Stripe envia webhook `checkout.session.completed`.
-3. Backend calcula saldo a creditar: `amountCents = valor_pago_centavos × CREDIT_PERCENTAGE` (ex: R$69,90 × 0.40 = 2796 centavos).
-4. Busca cotação atual via `getExchangeRate("USD-BRL")` para registro.
-5. Credita via `addCredits(userId, amountCents, stripePaymentId, exchangeRate)` em transação atômica (idempotente).
+3. Extrai `session.amount_total` (valor bruto pago em centavos) como `grossAmountCents`.
+4. Backend calcula saldo a creditar: `amountCents = grossAmountCents × CREDIT_PERCENTAGE` (ex: R$69,90 × 0.40 = 2796 centavos).
+5. Busca cotação atual via `getExchangeRate("USD-BRL")` para registro.
+6. Credita via `addCredits(userId, amountCents, { type: 'purchase', stripePaymentId, exchangeRate, grossAmountCents })` em transação atômica (idempotente via `stripePaymentId` UNIQUE).
+7. `CreditTransaction` registra `grossAmountCents` para rastreio correto de receita bruta no painel admin.
+
+### Admin Manual Credit Addition
+
+1. Admin acessa `/admin` (protegido por `role: ADMIN` no Server Component).
+2. Preenche formulário: email do usuário + valor em R$ + motivo.
+3. Frontend exibe confirmação: "Adicionar R$ X,XX ao saldo de [email]?"
+4. Admin confirma → `POST /api/admin/add-credits` com `{ userEmail, amountBRL, reason }`.
+5. Backend valida (Zod) → verifica `role: ADMIN` server-side → busca usuário pelo email (404 se não encontrado).
+6. Converte: `amountCents = Math.round(amountBRL × 100)`.
+7. Busca cotação via `getExchangeRate("USD-BRL")` (auditoria de câmbio do dia).
+8. Credita via `addCredits(userId, amountCents, { type: 'adjustment', exchangeRate, adminEmail, description: "Ajuste manual por [adminEmail]: [reason]" })`.
+9. `CreditTransaction` registrada com `type: adjustment`, `adminEmail`, `description`, `exchangeRate`, `stripePaymentId: null`, `grossAmountCents: null`.
+10. Retorna `{ success: true, userEmail, addedCents, newBalanceCents }`.
+11. Sem passar pelo Stripe — sem taxa. Sem idempotência automática (admin confirma antes de executar).
 
 ### Exchange Rate Refresh (Lazy On-Demand)
 
@@ -423,23 +556,34 @@ model User {
 }
 
 model CreditTransaction {
-  id              String   @id @default(cuid())
-  userId          String
-  user            User     @relation(fields: [userId], references: [id])
-  amount          Int      // centavos de real (positivo = crédito, negativo = débito)
-  type            String   // "consumption" | "purchase"
-  description     String?  // título da conversa (consumption) ou descrição da compra (purchase)
-  stripePaymentId String?  @unique
-  exchangeRate    Decimal? // cotação USD-BRL no momento da transação
-  inputTokens     Int?     // tokens de input consumidos
-  outputTokens    Int?     // tokens de output consumidos
-  modelUsed       String?  // modelo OpenAI (ex: "gpt-4o", "gpt-4o-mini")
-  costUsd         Decimal? // custo em dólar da chamada OpenAI
-  maxOutputTokens  Int?     // max_tokens usado no gate (auditoria)
-  hasAttachments   Boolean  @default(false) // se a mensagem incluiu arquivos
-  attachmentTypes  String[] @default([])    // tipos MIME dos arquivos (ex: ["image/jpeg"])
-  attachmentTokens Int?     // tokens adicionais gerados pelos arquivos
-  createdAt        DateTime @default(now())
+  id               String          @id @default(cuid())
+  userId           String
+  user             User            @relation(fields: [userId], references: [id])
+  amount           Int             // centavos de real (positivo = crédito, negativo = débito)
+  type             TransactionType // purchase | consumption | adjustment
+  description      String?         // título da conversa (consumption), descrição da compra (purchase) ou "Ajuste manual por [adminEmail]: [motivo]" (adjustment)
+  stripePaymentId  String?         @unique          // idempotência de webhook (apenas purchase)
+  grossAmountCents Int?            // valor bruto pago no Stripe em centavos (apenas purchase) — base para receita bruta
+  adminEmail       String?         // email do admin executor (apenas adjustment) — auditoria
+  exchangeRate     Decimal?        // cotação USD-BRL no momento da transação
+  inputTokens      Int?            // tokens de input consumidos (apenas consumption)
+  outputTokens     Int?            // tokens de output consumidos (apenas consumption)
+  modelUsed        String?         // modelo OpenAI (ex: "gpt-4o", "gpt-4o-mini")
+  costUsd          Decimal?        // custo em dólar da chamada OpenAI (apenas consumption)
+  maxOutputTokens  Int?            // max_tokens usado no gate (auditoria — apenas consumption)
+  hasAttachments   Boolean         @default(false) // se a mensagem incluiu arquivos
+  attachmentTypes  String[]        @default([])    // tipos MIME dos arquivos (ex: ["image/jpeg"])
+  attachmentTokens Int?            // tokens adicionais gerados pelos arquivos (apenas consumption)
+  createdAt        DateTime        @default(now())
+
+  @@index([userId])
+  @@index([type])
+}
+
+enum TransactionType {
+  purchase
+  consumption
+  adjustment  // adição manual de créditos pelo admin (sem Stripe)
 }
 
 model ExchangeRate {
@@ -471,11 +615,11 @@ sol-saas/
 
 ## Security and Performance
 
-- **Security:** JWT em cookies httpOnly, CSP headers rígidos, Rate Limiting por IP no Chat. Cotação e custos internos nunca expostos ao frontend — aluno vê apenas créditos e estimativa de scripts. UPDATE atômico com `WHERE balanceCents - costCents >= 0` previne race conditions. Validação de MIME type no servidor contra allowlist (não confiar no Content-Type do cliente). Arquivos processados em memória e descartados — nunca persistidos.
+- **Security:** JWT em cookies httpOnly, CSP headers rígidos, Rate Limiting por IP no Chat. Cotação e custos internos nunca expostos ao frontend — aluno vê apenas créditos e estimativa de scripts. UPDATE atômico com `WHERE balanceCents - costCents >= 0` previne race conditions. Validação de MIME type no servidor contra allowlist (não confiar no Content-Type do cliente). Arquivos processados em memória e descartados — nunca persistidos. Rotas `/admin` e `/api/admin/*` verificam `role: ADMIN` server-side (Server Component + API Route) — middleware como primeira barreira, verificação server-side como garantia definitiva. Admin não pode inferir dados de outros admins via `adminEmail` auditado.
 - **Performance:** Resposta da primeira palavra em < 3s via SSE. RSC para carregamento zero-latency de dados iniciais. Cotação USD-BRL cacheada por dia na tabela `exchange_rates` (máximo 1 request externo por dia, lazy on-demand).
 - **Memory (Anexos):** Limite de 10MB/arquivo × 3 = 30MB max por request. Com 200 usuários concorrentes (NFR8), pior caso teórico ~6GB em pico (improvável — maioria das mensagens não tem anexo). Monitorar uso de memória em produção. Sem storage externo no MVP.
 - **Reliability:** Idempotência via `stripe_payment_id` no banco. Cotação com fallback em 4 níveis (dia atual → AwesomeAPI → última salva → env var). Gate pré-chamada garante saldo nunca negativo. Se extração de arquivo falhar → 400, nenhum crédito deduzido, nenhuma chamada OpenAI.
-- **Auditoria:** Cada `CreditTransaction` registra `exchangeRate`, `inputTokens`, `outputTokens`, `modelUsed`, `costUsd`, `maxOutputTokens`, `hasAttachments`, `attachmentTypes` e `attachmentTokens` para rastreabilidade completa de custos e recriação da decisão do gate.
+- **Auditoria:** Cada `CreditTransaction` registra campos específicos por tipo: `consumption` → `exchangeRate`, `inputTokens`, `outputTokens`, `modelUsed`, `costUsd`, `maxOutputTokens`, `hasAttachments`, `attachmentTypes`, `attachmentTokens`; `purchase` → `exchangeRate`, `stripePaymentId`, `grossAmountCents` (valor bruto real pago pelo aluno — independente do CREDIT_PERCENTAGE); `adjustment` → `exchangeRate`, `adminEmail`, `description`. Receita bruta sempre calculada via `SUM(grossAmountCents)` — imune a mudanças futuras no `CREDIT_PERCENTAGE`.
 
 ---
 
@@ -487,6 +631,10 @@ sol-saas/
 - **Unit - Exchange Rate:** Testes de `getExchangeRate()` e `updateExchangeRate()` com mock de AwesomeAPI e cenários de fallback (cotação do dia, última disponível, env var).
 - **Unit - Image Cost:** Testes de `calculateImageCost()` para detail low (85 tokens), high (tiles 512×512) e auto (threshold 512).
 - **Integration - Anexos:** Testes de POST /api/chat com multipart/form-data: validação de MIME type, rejeição >10MB, rejeição >50k chars, PDF escaneado, retrocompatibilidade com JSON.
+- **Unit - addCredits (refatorado):** Testes dos dois modos de `addCredits()`: `purchase` (com `stripePaymentId` e `grossAmountCents`, idempotência) e `adjustment` (com `adminEmail` e `description`, sem idempotência).
+- **Unit - Admin Metrics:** Testes das funções em `packages/db/src/admin.ts` com dados seedados: receita via `grossAmountCents`, custo via raw query `SUM(cost_usd * exchange_rate)`, lucro/margem/markup, métricas de uso (tokens, modelos, mensagens).
+- **Integration - Admin API:** Testes de `POST /api/admin/add-credits`: autenticação (401), autorização (403 para `role: USER`), usuário não encontrado (404), validação Zod (400), adição bem-sucedida (200) com verificação de `CreditTransaction` e `balanceCents` atualizados.
+- **Integration - Webhook (grossAmountCents):** Testes de `POST /api/webhooks/stripe` verificando que `grossAmountCents = session.amount_total` é persistido corretamente na `CreditTransaction`.
 
 ---
 

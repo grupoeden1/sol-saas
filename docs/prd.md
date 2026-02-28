@@ -27,6 +27,7 @@ O SOL é um SaaS conversacional com IA que resolve esse gargalo diretamente: via
 | 2026-02-27 | 3.0     | Adição do Epic 4 (Admin & Operações) com Story 4.1 (Painel Administrativo). Documenta funcionalidade /admin já implementada e define critérios de aceite para proteção de rota com role-based access control. | Morgan (PM) |
 | 2026-02-27 | 4.0     | Novo modelo de precificação: gate pré-chamada estima custo máximo (input real + MAX_OUTPUT_TOKENS=8192 × taxa), saldo nunca fica negativo. Remoção do conceito `minBalanceCents`. `CREDIT_PERCENTAGE` substitui `CREDIT_MARGIN_PERCENT`. Atualização de FR5, FR6, FR9, Technical Assumptions, Stories 3.1, 3.2, 3.4, 3.6. | Morgan (PM) |
 | 2026-02-27 | 5.0     | Adição de FR11 (Suporte a Anexos no Chat) e Story 2.5. Aluno pode anexar imagens (Vision API, forçando GPT-4o) e documentos (PDF, TXT, MD, DOCX) com extração de texto. Limites: 3 arquivos/msg, 10MB/arquivo, 50k chars/doc. Processamento in-memory, sem persistência. Custo de tokens do anexo incluído no gate e dedução real. Novos campos de auditoria: `hasAttachments`, `attachmentTypes`, `attachmentTokens`. | Morgan (PM) |
+| 2026-02-28 | 6.0     | Adição de FR12 (Admin Console) e Story 4.2. Painel administrativo completo em /admin com métricas reais de usuários, uso, financeiras e de cotação. Ação de adição manual de créditos em reais (sem Stripe) com auditoria completa. Novos campos: `grossAmountCents` e `adminEmail` em `CreditTransaction`, tipo `adjustment` no enum `TransactionType`. Webhook Stripe e `addCredits()` atualizados para registrar valor bruto e suportar adjustments. | Morgan (PM) |
 
 ---
 
@@ -45,6 +46,7 @@ O SOL é um SaaS conversacional com IA que resolve esse gargalo diretamente: via
 - **FR9:** O sistema deve processar webhooks do Stripe para confirmar pagamentos e creditar o saldo interno do usuário no banco de dados. Uma porcentagem configurável do valor pago (`CREDIT_PERCENTAGE`, inicialmente 40%) é disponibilizada como saldo interno em centavos de real para consumo nas chamadas da OpenAI
 - **FR10:** O usuário deve ter acesso a um painel básico com: saldo de créditos, histórico de compras e histórico de conversas
 - **FR11:** O aluno pode anexar até 3 arquivos por mensagem (imagens: JPEG, PNG, GIF, WEBP; documentos: PDF, TXT, MD, DOCX; máx 10MB cada) como contexto adicional para a IA. Imagens processadas via OpenAI Vision API (forçando GPT-4o). Documentos têm conteúdo extraído como texto (limite 50.000 caracteres — rejeitado se exceder, nunca truncado). Arquivos processados em memória sem persistência. Custo em créditos inclui tokens dos anexos no gate e na dedução real
+- **FR12:** Usuários com `role: ADMIN` têm acesso ao painel em `/admin` (e rotas `/api/admin/*`) com dados reais do banco. O painel exibe: **(a) Métricas de Usuários** — total cadastrados, ativos nos últimos 7d (≥1 mensagem), sem saldo útil (`balanceCents < MIN_COST_CENTS`), novos nos últimos 30d, lista paginada 20/pág com email, saldo em R$, total de mensagens e data de cadastro; **(b) Métricas de Uso** — mensagens totais/hoje/7d, tokens input/output separados, modelo mais usado com percentual, média de tokens/mensagem, total de mensagens com e sem anexo; **(c) Métricas Financeiras** — receita bruta via `SUM(grossAmountCents) WHERE type = 'purchase'`, custo OpenAI calculado por transação individual (`costUsd × exchangeRate`), lucro bruto, margem bruta e markup, créditos vendidos vs consumidos em R$, saldo total retido na plataforma; **(d) Métricas de Cotação** — cotação atual (última em `exchange_rates`), mínima e máxima dos últimos 30d; **(e) Adição Manual de Créditos** — admin informa email + valor em reais + motivo, confirmação antes de executar, registrado com `type: adjustment`, `adminEmail`, `description` e `exchangeRate` do dia, sem Stripe
 
 ### Non Functional
 
@@ -147,7 +149,7 @@ packages/db       → Prisma schema, client e migrations
 | 1    | Foundation & Auth     | Estabelecer infraestrutura (Turborepo, Docker, PostgreSQL, CI/CD) e autenticação completa (NextAuth.js v5). Entrega: produto deployado com login funcional.                   |
 | 2    | Chat Core com IA      | Implementar chat com streaming OpenAI, persistência de histórico e estado inline de créditos insuficientes. Entrega: aluno pode conversar com a IA e receber ofertas ao vivo. |
 | 3    | Créditos & Pagamentos | Implementar sistema de créditos, Stripe Checkout + PIX/cartão, webhooks e painel do usuário. Entrega: SOL monetizado, ciclo de valor fechado.                                 |
-| 4    | Admin & Operações     | Ferramentas de administração e operação do SOL: painel admin com visibilidade de uso, controle de usuários e monitoramento de tokens/custos. Entrega: operador tem controle total do produto. |
+| 4    | Admin & Operações     | Painel administrativo com métricas reais de usuários, uso, financeiras e de cotação, mais ação de adição manual de créditos com auditoria completa. Entrega: operador tem visibilidade financeira e operacional total do SOL. |
 
 ---
 
@@ -420,7 +422,7 @@ so that the business margin is protected and usage is metered accurately.
 
 ## Epic 4: Admin & Operações
 
-> Ferramentas de administração e operação do SOL: painel administrativo com visibilidade completa de uso por usuário, controle de tokens consumidos e monitoramento do produto. Ao final deste epic, o operador do SOL tem controle e visibilidade total da operação.
+> Ferramentas de administração e operação do SOL: painel administrativo com métricas reais de usuários, uso, financeiras e de cotação, mais ação de adição manual de créditos com auditoria completa. Inclui mudanças de schema (`grossAmountCents`, `adminEmail`, enum `adjustment`) e atualização do webhook Stripe. Ao final deste epic, o operador tem visibilidade financeira e operacional total do SOL.
 
 ### Story 4.1 — Painel Administrativo
 
@@ -441,6 +443,70 @@ so that I have full visibility into product usage and can manage the platform ef
 7. Página `/admin` exibe: lista de usuários com saldo, tokens consumidos e última atividade
 8. Nenhuma regressão em auth, chat ou fluxo de créditos
 
+### Story 4.2 — Admin Console: Métricas Operacionais e Financeiras
+
+As a SOL administrator,
+I want a comprehensive admin console at /admin with real metrics from the database,
+so that I can monitor platform usage and financial performance, and manage credits manually.
+
+**Acceptance Criteria:**
+
+**Schema (pré-requisito)**
+1. Enum `TransactionType` adiciona valor `adjustment` (adição manual de créditos pelo admin)
+2. `CreditTransaction` recebe campo `grossAmountCents` (Int, nullable) — valor bruto pago pelo aluno no Stripe, em centavos; preenchido apenas em transações `purchase`
+3. `CreditTransaction` recebe campo `adminEmail` (String, nullable) — email do admin executor; preenchido apenas em transações `adjustment`
+4. Migration Prisma aplica sem erros e sem impacto em transações existentes (campos nullable com default null)
+5. Webhook Stripe (`checkout.session.completed`) atualizado para registrar `grossAmountCents` = valor bruto pago (amount_total do Stripe, em centavos) na `CreditTransaction` de `purchase`
+6. Função `addCredits()` refatorada para suportar dois modos: `{ type: 'purchase', stripePaymentId, grossAmountCents, exchangeRate }` e `{ type: 'adjustment', adminEmail, motivo, exchangeRate }`
+
+**Métricas de Usuários**
+7. Total de usuários cadastrados (COUNT users)
+8. Usuários ativos nos últimos 7 dias — pelo menos 1 mensagem enviada (JOINing com messages)
+9. Usuários sem saldo útil — `balanceCents < MIN_COST_CENTS (100)` — critério correto: aluno com R$0,10 também está sem saldo útil
+10. Novos cadastros nos últimos 30 dias
+11. Lista paginada de usuários (20/pág) exibindo: email, saldo atual formatado em R$, total de mensagens, data de cadastro
+
+**Métricas de Uso**
+12. Total de mensagens enviadas (histórico completo)
+13. Mensagens enviadas hoje e nos últimos 7 dias
+14. Total de tokens consumidos: input e output separados (SUM em credit_transactions WHERE type = 'consumption')
+15. Modelo mais usado (gpt-4o vs gpt-4o-mini) com percentual sobre total de mensagens com consumo
+16. Média de tokens por mensagem (input + output / total de mensagens com tipo consumption)
+17. Total de mensagens com anexo (`hasAttachments = true`) vs sem anexo
+
+**Métricas Financeiras**
+18. Receita bruta total: `SUM(grossAmountCents) WHERE type = 'purchase'`, em R$
+19. Receita dos últimos 30 dias: idem com filtro de data
+20. Custo total OpenAI em reais: `SUM(costUsd × exchangeRate)` calculado por transação individual (campo exchange_rate armazenado por transação — não cotação média)
+21. Lucro bruto = Receita bruta − Custo OpenAI total
+22. Margem bruta = (Lucro / Receita) × 100 (%)
+23. Markup = (Receita / Custo) × 100 (%)
+24. Créditos vendidos (SUM amount WHERE type = 'purchase') vs consumidos (SUM ABS(amount) WHERE type = 'consumption'), em R$
+25. Saldo total retido na plataforma: `SUM(balanceCents)` de todos os usuários, formatado em R$
+
+**Métricas de Cotação**
+26. Cotação USD-BRL atual: última entrada na tabela `exchange_rates`
+27. Cotação mínima e máxima dos últimos 30 dias
+
+**Adição Manual de Créditos**
+28. Formulário na página /admin: campo email do usuário + valor em reais (não centavos) + motivo
+29. Antes de executar, exibe confirmação: "Adicionar R$ X,XX ao saldo de [email]?"
+30. Execução via `POST /api/admin/add-credits`, acessível apenas para `role: ADMIN` (verificado server-side)
+31. `CreditTransaction` registrada com: `type: adjustment`, `amount` = valor convertido para centavos, `adminEmail`, `description: "Ajuste manual por [adminEmail]: [motivo]"`, `exchangeRate` do dia (auditoria), `stripePaymentId: null`, `grossAmountCents: null`
+32. Saldo do usuário (`balanceCents`) atualizado atomicamente junto com o insert da transação
+
+**Restrições de Escopo (MVP)**
+33. Sem gráficos ou charts — números e tabelas são suficientes
+34. Sem exportação CSV/PDF
+35. Sem CRUD de usuários (editar, deletar, bloquear)
+36. Sem filtros de período customizado — apenas períodos fixos: hoje, 7d, 30d, histórico total
+37. Dados carregados via Server Components Next.js — atualiza no refresh, sem real-time
+
+**Qualidade e Consistência**
+38. Visual dark/solar consistente com o restante do SOL (Tailwind + Shadcn/UI)
+39. Todas as rotas `/api/admin/*` verificam `role: ADMIN` server-side (não apenas middleware)
+40. Nenhuma regressão em: auth, chat, streaming SSE, webhook Stripe, painel do usuário (`/dashboard`)
+
 ---
 
 ## Checklist Results Report
@@ -452,9 +518,9 @@ so that I have full visibility into product usage and can manage the platform ef
 | 1. Problem Definition & Context  | ✅ PASS | Problema claro (saturação leilão), audiência específica (alunos Space), métrica de sucesso mensurável (<30min) |
 | 2. MVP Scope Definition          | ✅ PASS | In/out of scope explícitos, foco correto em chat + auth + créditos + pagamento                                 |
 | 3. User Experience Requirements  | ✅ PASS | Flows primários documentados, telas definidas, estado de erro (inline) especificado                            |
-| 4. Functional Requirements       | ✅ PASS | FR1–FR11 testáveis, cobrindo todos os flows do MVP + anexos                                                    |
+| 4. Functional Requirements       | ✅ PASS | FR1–FR12 testáveis, cobrindo todos os flows do MVP + anexos + admin console                                    |
 | 5. Non-Functional Requirements   | ✅ PASS | Performance (3s streaming), segurança (JWT, bcrypt), infra (Docker, VPS), zeroing lock-in                      |
-| 6. Epic & Story Structure        | ✅ PASS | 4 epics sequenciais, 14 stories dimensionadas para sessão de agente, ACs testáveis                             |
+| 6. Epic & Story Structure        | ✅ PASS | 4 epics sequenciais, 15 stories dimensionadas para sessão de agente, ACs testáveis                             |
 | 7. Technical Guidance            | ✅ PASS | Stack completo definido em tech-stack.md, arquitetura monolith justificada, restrições explícitas              |
 | 8. Cross-Functional Requirements | ✅ PASS | Schema definido por story, integração Stripe com idempotência, deploy via Docker                               |
 | 9. Clarity & Communication       | ✅ PASS | Documento estruturado, terminologia consistente, changelog incluído                                            |
