@@ -4,16 +4,12 @@ import { processFiles, type ProcessedFile } from '@/lib/file-processor';
 import {
   prisma,
   deductCredits,
-  ensureTodayRate,
+  getPricingConfig,
+  calculateCredits,
+  calculateMaxCredits,
   InsufficientBalanceError,
 } from '@sol/db';
-import {
-  countTokens,
-  countRawTokens,
-  estimateMaxCost,
-  calculateRealCost,
-  MAX_OUTPUT_TOKENS,
-} from '@sol/db/token-counter';
+import { countTokens, countRawTokens } from '@sol/db/token-counter';
 import OpenAI from 'openai';
 import { z } from 'zod';
 
@@ -41,12 +37,12 @@ export async function POST(req: Request) {
       return new Response('Unauthorized', { status: 401 });
     }
 
-    // Buscar usuário com campos de saldo
+    // Buscar usuário com saldo em créditos
     const user = await prisma.user.findUnique({
       where: { email: session.user.email },
       select: {
         id: true,
-        balanceCents: true,
+        credits: true,
       },
     });
 
@@ -72,13 +68,11 @@ export async function POST(req: Request) {
         );
       }
 
-      // ── NOVO fluxo: multipart/form-data com arquivos ──────────────────
       const formData = await req.formData();
       const rawMessage = formData.get('message');
       const rawConversationId = formData.get('conversationId');
       const files = formData.getAll('files').filter((f): f is File => f instanceof File);
 
-      // Validar campos com Zod
       const parsed = chatSchema.safeParse({
         message: typeof rawMessage === 'string' ? rawMessage : '',
         conversationId: typeof rawConversationId === 'string' ? rawConversationId : null,
@@ -91,7 +85,6 @@ export async function POST(req: Request) {
       message = parsed.data.message;
       conversationId = parsed.data.conversationId;
 
-      // Processar arquivos (se houver)
       if (files.length > 0) {
         try {
           processedFiles = await processFiles(files);
@@ -102,7 +95,6 @@ export async function POST(req: Request) {
         }
       }
     } else {
-      // ── FLUXO EXISTENTE: application/json — intocado ──────────────────
       const body = await req.json();
       const parsed = chatSchema.safeParse(body);
 
@@ -114,9 +106,8 @@ export async function POST(req: Request) {
       conversationId = parsed.data.conversationId;
     }
 
-    // ── Daqui para baixo: fluxo unificado ─────────────────────────────────
+    // ── Fluxo unificado ───────────────────────────────────────────────────
 
-    // Separar arquivos processados por tipo
     const imageFiles = processedFiles.filter((f): f is ProcessedFile & { type: 'image' } => f.type === 'image');
     const documentFiles = processedFiles.filter((f): f is ProcessedFile & { type: 'document' } => f.type === 'document');
     const hasAttachments = processedFiles.length > 0;
@@ -126,10 +117,7 @@ export async function POST(req: Request) {
 
     if (conversationId) {
       conversation = await prisma.conversation.findFirst({
-        where: {
-          id: conversationId,
-          userId: user.id,
-        },
+        where: { id: conversationId, userId: user.id },
       });
 
       if (!conversation) {
@@ -137,16 +125,11 @@ export async function POST(req: Request) {
       }
     } else {
       conversation = await prisma.conversation.create({
-        data: {
-          userId: user.id,
-          title: message.substring(0, 60),
-        },
+        data: { userId: user.id, title: message.substring(0, 60) },
       });
     }
 
-    // Montar conteúdo da mensagem do usuário para salvar no banco
-    // Documentos: prefixar [Documento: filename] para histórico
-    // Imagens: marcar [Imagem: filename] para histórico
+    // Salvar mensagem do usuário
     const contentParts: string[] = [];
     for (const doc of documentFiles) {
       contentParts.push(`[Documento: ${doc.filename}]`);
@@ -157,29 +140,23 @@ export async function POST(req: Request) {
     contentParts.push(message);
     const savedContent = contentParts.join('\n');
 
-    // Salvar mensagem do usuário no banco
     const userMessage = await prisma.message.create({
-      data: {
-        conversationId: conversation.id,
-        role: 'user',
-        content: savedContent,
-      },
+      data: { conversationId: conversation.id, role: 'user', content: savedContent },
     });
 
-    // Buscar últimas 20 mensagens da conversa para contexto
+    // Buscar histórico
     const previousMessages = await prisma.message.findMany({
       where: { conversationId: conversation.id },
       orderBy: { createdAt: 'asc' },
       take: 20,
     });
 
-    // Detectar se deve usar modelo final ou iterativo
+    // Escolher modelo
     const useFinalModel = detectFinalOutputIntent(message);
     let model = useFinalModel
       ? (process.env.OPENAI_MODEL_FINAL || 'gpt-4o')
       : (process.env.OPENAI_MODEL_DEFAULT || 'gpt-4o-mini');
 
-    // Model forcing: imagem → gpt-4o (Vision API requer modelo completo)
     if (imageFiles.length > 0) {
       model = 'gpt-4o';
     }
@@ -191,44 +168,25 @@ export async function POST(req: Request) {
       { role: 'system', content: SYSTEM_PROMPT },
       ...previousMessages
         .filter((m) => m.id !== userMessage.id)
-        .map((m) => ({
-          role: m.role as 'user' | 'assistant',
-          content: m.content,
-        })),
+        .map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content })),
     ];
 
-    // Montar mensagem do usuário para OpenAI (com anexos se houver)
     let userOpenAIMessage: OpenAI.Chat.Completions.ChatCompletionMessageParam;
 
     if (hasAttachments) {
-      // Content array com documentos, texto e imagens
       const userContent: OpenAI.Chat.Completions.ChatCompletionContentPart[] = [];
-
-      // Documentos como texto prefixado
       for (const doc of documentFiles) {
-        userContent.push({
-          type: 'text',
-          text: `[Documento: ${doc.filename}]\n${doc.text}`,
-        });
+        userContent.push({ type: 'text', text: `[Documento: ${doc.filename}]\n${doc.text}` });
       }
-
-      // Texto da mensagem do usuário
       userContent.push({ type: 'text', text: message });
-
-      // Imagens como image_url
       for (const img of imageFiles) {
         userContent.push({
           type: 'image_url',
-          image_url: {
-            url: `data:${img.mimeType};base64,${img.base64}`,
-            detail: 'auto',
-          },
+          image_url: { url: `data:${img.mimeType};base64,${img.base64}`, detail: 'auto' },
         });
       }
-
       userOpenAIMessage = { role: 'user', content: userContent };
     } else {
-      // Sem anexos: content é string (comportamento original)
       userOpenAIMessage = { role: 'user', content: message };
     }
 
@@ -242,44 +200,40 @@ export async function POST(req: Request) {
       role: String(m.role),
       content: typeof m.content === 'string' ? m.content : '',
     }));
-    // Contar tokens do histórico + mensagem de texto do user
     tokenMessages.push({ role: 'user', content: message });
     const textInputTokens = countTokens(tokenMessages, model);
 
-    // Tokens de anexos (documentos via tiktoken + imagens via Vision pricing)
     const attachmentTokens = processedFiles.reduce((sum, f) => sum + f.tokens, 0);
     const totalInputTokens = textInputTokens + attachmentTokens;
 
-    // Buscar cotação do dia (lazy refresh)
-    const exchangeRate = await ensureTodayRate('USD-BRL');
+    // Buscar config de pricing (cached, TTL 60s)
+    const config = await getPricingConfig();
 
-    // Gate: estimar custo máximo (input real + MAX_OUTPUT_TOKENS de output)
-    const maxCostCents = estimateMaxCost(totalInputTokens, model, exchangeRate);
+    // Gate: créditos máximos estimados
+    const maxCredits = calculateMaxCredits(totalInputTokens, config);
 
-    console.log(`[Chat API] inputTokens=${totalInputTokens} (text=${textInputTokens} attachments=${attachmentTokens}) maxCostCents=${maxCostCents} (gate: input + ${MAX_OUTPUT_TOKENS} output tokens)`);
+    console.log(`[Chat API] inputTokens=${totalInputTokens} (text=${textInputTokens} attachments=${attachmentTokens}) maxCredits=${maxCredits}`);
 
-    // Pré-check: saldo suficiente para cobrir custo máximo estimado
-    if (user.balanceCents < maxCostCents) {
+    if (user.credits < maxCredits) {
       return new Response(JSON.stringify({
         error: 'insufficient_credits',
-        required: maxCostCents,
-        available: user.balanceCents,
+        required: maxCredits,
+        available: user.credits,
       }), {
         status: 402,
         headers: { 'Content-Type': 'application/json' },
       });
     }
 
-    // Iniciar streaming da OpenAI
+    // Streaming OpenAI
     const stream = await getOpenAI().chat.completions.create({
       model,
       messages,
       stream: true,
       temperature: 0.7,
-      max_tokens: MAX_OUTPUT_TOKENS,
+      max_completion_tokens: config.maxOutputTokens,
     });
 
-    // Criar ReadableStream para Server-Sent Events
     const encoder = new TextEncoder();
     let fullResponse = '';
 
@@ -294,48 +248,40 @@ export async function POST(req: Request) {
             }
           }
 
-          // Salvar resposta completa no banco
+          // Salvar resposta
           await prisma.message.create({
-            data: {
-              conversationId: conversation.id,
-              role: 'assistant',
-              content: fullResponse,
-            },
+            data: { conversationId: conversation.id, role: 'assistant', content: fullResponse },
           });
 
-          // ── Calcular custo real (input + output) e deduzir ────────────
+          // Calcular créditos reais e deduzir
           const outputTokens = countRawTokens(fullResponse, model);
-          const realCost = calculateRealCost(totalInputTokens, outputTokens, model, exchangeRate);
+          const creditsUsed = calculateCredits(totalInputTokens, outputTokens, config);
 
-          console.log(`[Chat API] outputTokens=${outputTokens} realCost=${realCost.costCents}`);
+          console.log(`[Chat API] outputTokens=${outputTokens} creditsUsed=${creditsUsed}`);
 
-          let balanceAfterDeduction = user.balanceCents;
+          let creditsAfterDeduction = user.credits;
           try {
-            const result = await deductCredits(user.id, realCost.costCents, {
-              exchangeRate,
+            const result = await deductCredits(user.id, creditsUsed, {
               inputTokens: totalInputTokens,
               outputTokens,
               modelUsed: model,
-              costUsd: realCost.costUsd,
+              creditsPerMInput: config.creditsPerMInput,
+              creditsPerMOutput: config.creditsPerMOutput,
               conversationTitle: conversation.title,
-              maxOutputTokens: MAX_OUTPUT_TOKENS,
               hasAttachments,
               attachmentTypes: processedFiles.map(f =>
                 f.type === 'image' ? f.mimeType : 'text/plain'
               ),
               attachmentTokens: attachmentTokens > 0 ? attachmentTokens : undefined,
             });
-            balanceAfterDeduction = result.balanceCents;
+            creditsAfterDeduction = result.credits;
           } catch (deductError) {
-            // Race condition: saldo insuficiente após stream.
-            // Resposta já entregue — registrar audit trail para visibilidade.
             if (deductError instanceof InsufficientBalanceError) {
-              console.warn('[Chat API] Balance insufficient post-stream (response already delivered):', deductError.message);
+              console.warn('[Chat API] Credits insufficient post-stream:', deductError.message);
             } else {
               console.error('[Chat API] Credit deduction failed:', deductError);
             }
 
-            // Audit trail: registrar tentativa falha para rastreabilidade
             try {
               await prisma.creditTransaction.create({
                 data: {
@@ -343,12 +289,11 @@ export async function POST(req: Request) {
                   amount: 0,
                   type: 'consumption',
                   description: `[Falha] ${conversation.title}`,
-                  exchangeRate,
                   inputTokens: totalInputTokens,
                   outputTokens,
                   modelUsed: model,
-                  costUsd: realCost.costUsd,
-                  maxOutputTokens: MAX_OUTPUT_TOKENS,
+                  creditsPerMInput: config.creditsPerMInput,
+                  creditsPerMOutput: config.creditsPerMOutput,
                   hasAttachments,
                   attachmentTypes: processedFiles.map(f =>
                     f.type === 'image' ? f.mimeType : 'text/plain'
@@ -360,20 +305,17 @@ export async function POST(req: Request) {
               console.error('[Chat API] Failed to write audit trail:', auditError);
             }
 
-            balanceAfterDeduction = 0;
+            creditsAfterDeduction = 0;
           }
 
-          // Enviar evento de conclusão com saldo pós-dedução
           controller.enqueue(
             encoder.encode(
-              `data: ${JSON.stringify({ done: true, conversationId: conversation.id, balanceCents: balanceAfterDeduction })}\n\n`
+              `data: ${JSON.stringify({ done: true, conversationId: conversation.id, credits: creditsAfterDeduction })}\n\n`
             )
           );
           controller.close();
         } catch (error) {
-          // OpenAI error → nenhuma dedução
           console.error('[Chat API] Streaming error:', error instanceof Error ? error.message : 'Unknown');
-
           const errorMessage = getErrorMessage(error);
           controller.enqueue(
             encoder.encode(`data: ${JSON.stringify({ error: errorMessage })}\n\n`)
@@ -383,13 +325,12 @@ export async function POST(req: Request) {
       },
     });
 
-    // Header com saldo pré-dedução para feedback imediato no badge
     return new Response(readable, {
       headers: {
         'Content-Type': 'text/event-stream',
         'Cache-Control': 'no-cache',
         'Connection': 'keep-alive',
-        'X-Balance-Cents': String(user.balanceCents),
+        'X-Credits-Remaining': String(user.credits),
       },
     });
   } catch (error) {
@@ -398,9 +339,6 @@ export async function POST(req: Request) {
   }
 }
 
-/**
- * Retorna mensagem de erro amigável baseada no erro da OpenAI
- */
 function getErrorMessage(error: unknown): string {
   if (error instanceof OpenAI.APIError) {
     if (error.status === 429) {

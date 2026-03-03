@@ -1,7 +1,7 @@
 import { prisma } from './index'
 
-// Threshold abaixo do qual o saldo é considerado "baixo" (R$ 1,00)
-const MIN_COST_CENTS = 100
+// Threshold abaixo do qual o saldo é considerado "baixo" (1 crédito)
+const LOW_CREDITS_THRESHOLD = 1
 
 // ─── Tipos de retorno ────────────────────────────────────────────────────────
 
@@ -15,6 +15,8 @@ export interface UserMetrics {
 
 export interface UsageMetrics {
   totalTokens: number
+  totalInputTokens: number
+  totalOutputTokens: number
   tokensThisMonth: number
   tokensLastMonth: number
   totalMessages: number
@@ -24,7 +26,7 @@ export interface UserListItem {
   id: string
   email: string
   role: string
-  balanceCents: number
+  credits: number
   totalMessages: number
   createdAt: Date
 }
@@ -38,13 +40,9 @@ export interface FinancialMetrics {
   totalRevenueCents: number
   revenueThisMonthCents: number
   revenueLastMonthCents: number
-  totalOpenAICostBRL: number
-  totalAdjustmentsCents: number
-}
-
-export interface ExchangeMetrics {
-  lastRateBRL: number
-  lastRateDate: Date | null
+  totalCreditsConsumed: number
+  totalAdjustmentCredits: number
+  estimatedOpenAICostUsd: number
 }
 
 // ─── Helpers de data ─────────────────────────────────────────────────────────
@@ -69,7 +67,6 @@ export async function getUserMetrics(): Promise<UserMetrics> {
       prisma.user.count({
         where: { createdAt: { gte: firstDayLastMonth, lt: firstDayThisMonth } },
       }),
-      // Usuários com mensagens enviadas nos últimos 7 dias
       prisma.user.count({
         where: {
           conversations: {
@@ -81,9 +78,8 @@ export async function getUserMetrics(): Promise<UserMetrics> {
           },
         },
       }),
-      // Usuários com saldo abaixo do mínimo usável
       prisma.user.count({
-        where: { balanceCents: { lt: MIN_COST_CENTS } },
+        where: { credits: { lt: LOW_CREDITS_THRESHOLD } },
       }),
     ])
 
@@ -117,9 +113,13 @@ export async function getUsageMetrics(): Promise<UsageMetrics> {
     prisma.message.count({ where: { role: 'user' } }),
   ])
 
+  const totalInput = tokensAll._sum.inputTokens ?? 0
+  const totalOutput = tokensAll._sum.outputTokens ?? 0
+
   return {
-    totalTokens:
-      (tokensAll._sum.inputTokens ?? 0) + (tokensAll._sum.outputTokens ?? 0),
+    totalTokens: totalInput + totalOutput,
+    totalInputTokens: totalInput,
+    totalOutputTokens: totalOutput,
     tokensThisMonth:
       (tokensThisMonth._sum.inputTokens ?? 0) + (tokensThisMonth._sum.outputTokens ?? 0),
     tokensLastMonth:
@@ -144,13 +144,12 @@ export async function getUsersList(
         id: true,
         email: true,
         role: true,
-        balanceCents: true,
+        credits: true,
         createdAt: true,
       },
     }),
   ])
 
-  // Contar mensagens de usuário por conversa (rawQuery para JOIN eficiente)
   const userIds = usersPage.map((u) => u.id)
 
   type MsgCountRow = { userId: string; msgCount: bigint }
@@ -175,7 +174,7 @@ export async function getUsersList(
     id: u.id,
     email: u.email,
     role: u.role,
-    balanceCents: u.balanceCents,
+    credits: u.credits,
     totalMessages: msgMap.get(u.id) ?? 0,
     createdAt: u.createdAt,
   }))
@@ -185,64 +184,73 @@ export async function getUsersList(
 
 // ─── Métricas financeiras ─────────────────────────────────────────────────────
 
+// OpenAI API pricing (USD per 1M tokens) — updated 2026-03
+const OPENAI_PRICING: Record<string, { input: number; output: number }> = {
+  'gpt-4o-mini': { input: 0.15, output: 0.60 },
+  'gpt-4o': { input: 2.50, output: 10.00 },
+}
+const DEFAULT_MODEL_PRICING = OPENAI_PRICING['gpt-4o-mini']!
+
 export async function getFinancialMetrics(): Promise<FinancialMetrics> {
   const { firstDayThisMonth, firstDayLastMonth } = getMonthBoundaries()
 
-  // grossAmountCents registra o valor bruto pago no Stripe
-  const [revenueAll, revenueThisMonth, revenueLastMonth, adjustments, openAICostRaw] =
-    await Promise.all([
-      prisma.creditTransaction.aggregate({
-        where: { type: 'purchase' },
-        _sum: { grossAmountCents: true },
-      }),
-      prisma.creditTransaction.aggregate({
-        where: { type: 'purchase', createdAt: { gte: firstDayThisMonth } },
-        _sum: { grossAmountCents: true },
-      }),
-      prisma.creditTransaction.aggregate({
-        where: {
-          type: 'purchase',
-          createdAt: { gte: firstDayLastMonth, lt: firstDayThisMonth },
-        },
-        _sum: { grossAmountCents: true },
-      }),
-      prisma.creditTransaction.aggregate({
-        where: { type: 'adjustment' },
-        _sum: { amount: true },
-      }),
-      // Prisma não suporta multiplicação de campos em aggregate → $queryRaw
-      prisma.$queryRaw<Array<{ total_cost_brl: number }>>`
-        SELECT COALESCE(
-          SUM(CAST("costUsd" AS FLOAT) * CAST("exchangeRate" AS FLOAT)),
-          0
-        ) AS total_cost_brl
-        FROM "CreditTransaction"
-        WHERE "type" = 'consumption'
-          AND "costUsd" IS NOT NULL
-          AND "exchangeRate" IS NOT NULL
-      `,
-    ])
+  // Revenue: JOIN purchases with credit_packages to get actual priceBrl
+  type RevenueRow = { total_cents: bigint | null }
+  const [revenueAllRows, revenueThisMonthRows, revenueLastMonthRows] = await Promise.all([
+    prisma.$queryRaw<RevenueRow[]>`
+      SELECT COALESCE(SUM(cp."priceBrl"), 0)::bigint AS total_cents
+      FROM "CreditTransaction" ct
+      JOIN "CreditPackage" cp ON ct.amount = cp.credits
+      WHERE ct.type = 'purchase' AND ct."stripePaymentId" IS NOT NULL`,
+    prisma.$queryRaw<RevenueRow[]>`
+      SELECT COALESCE(SUM(cp."priceBrl"), 0)::bigint AS total_cents
+      FROM "CreditTransaction" ct
+      JOIN "CreditPackage" cp ON ct.amount = cp.credits
+      WHERE ct.type = 'purchase' AND ct."stripePaymentId" IS NOT NULL
+        AND ct."createdAt" >= ${firstDayThisMonth}`,
+    prisma.$queryRaw<RevenueRow[]>`
+      SELECT COALESCE(SUM(cp."priceBrl"), 0)::bigint AS total_cents
+      FROM "CreditTransaction" ct
+      JOIN "CreditPackage" cp ON ct.amount = cp.credits
+      WHERE ct.type = 'purchase' AND ct."stripePaymentId" IS NOT NULL
+        AND ct."createdAt" >= ${firstDayLastMonth} AND ct."createdAt" < ${firstDayThisMonth}`,
+  ])
 
-  return {
-    totalRevenueCents: revenueAll._sum.grossAmountCents ?? 0,
-    revenueThisMonthCents: revenueThisMonth._sum.grossAmountCents ?? 0,
-    revenueLastMonthCents: revenueLastMonth._sum.grossAmountCents ?? 0,
-    totalOpenAICostBRL: openAICostRaw[0]?.total_cost_brl ?? 0,
-    totalAdjustmentsCents: adjustments._sum.amount ?? 0,
+  // OpenAI cost estimation: group consumption tokens by model
+  type CostRow = { modelUsed: string | null; total_input: bigint; total_output: bigint }
+  const costRows = await prisma.$queryRaw<CostRow[]>`
+    SELECT "modelUsed",
+           COALESCE(SUM("inputTokens"), 0)::bigint AS total_input,
+           COALESCE(SUM("outputTokens"), 0)::bigint AS total_output
+    FROM "CreditTransaction"
+    WHERE type = 'consumption'
+    GROUP BY "modelUsed"`
+
+  let estimatedOpenAICostUsd = 0
+  for (const row of costRows) {
+    const pricing = OPENAI_PRICING[row.modelUsed ?? ''] ?? DEFAULT_MODEL_PRICING
+    const inputCost = (Number(row.total_input) / 1_000_000) * pricing.input
+    const outputCost = (Number(row.total_output) / 1_000_000) * pricing.output
+    estimatedOpenAICostUsd += inputCost + outputCost
   }
-}
 
-// ─── Métricas de câmbio ──────────────────────────────────────────────────────
-
-export async function getExchangeMetrics(): Promise<ExchangeMetrics> {
-  const latest = await prisma.exchangeRate.findFirst({
-    where: { currency: 'USD-BRL' },
-    orderBy: { date: 'desc' },
-    select: { rate: true, date: true },
-  })
+  const [consumptionAll, adjustmentsAll] = await Promise.all([
+    prisma.creditTransaction.aggregate({
+      where: { type: 'consumption' },
+      _sum: { amount: true },
+    }),
+    prisma.creditTransaction.aggregate({
+      where: { type: 'adjustment' },
+      _sum: { amount: true },
+    }),
+  ])
 
   return {
-    lastRateBRL: latest ? Number(latest.rate) : 0,
-    lastRateDate: latest?.date ?? null,
+    totalRevenueCents: Number(revenueAllRows[0]?.total_cents ?? 0),
+    revenueThisMonthCents: Number(revenueThisMonthRows[0]?.total_cents ?? 0),
+    revenueLastMonthCents: Number(revenueLastMonthRows[0]?.total_cents ?? 0),
+    totalCreditsConsumed: Math.abs(consumptionAll._sum.amount ?? 0),
+    totalAdjustmentCredits: adjustmentsAll._sum.amount ?? 0,
+    estimatedOpenAICostUsd: Math.round(estimatedOpenAICostUsd * 100) / 100,
   }
 }

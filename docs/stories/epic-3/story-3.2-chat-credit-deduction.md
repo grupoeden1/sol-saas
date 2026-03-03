@@ -4,7 +4,7 @@
 **Story ID:** 3.2
 **Priority:** High
 **Estimate:** 3-5 story points
-**Status:** Draft
+**Status:** DONE
 
 ---
 

@@ -2,12 +2,12 @@ import Link from 'next/link';
 import { formatBalance } from '@/lib/format-balance';
 
 interface CreditSummaryProps {
-  balanceCents: number;
+  credits: number;
 }
 
-export default function CreditSummary({ balanceCents }: CreditSummaryProps) {
-  const showBuyPrompt = balanceCents < 1000; // < 10 créditos
-  const hasCredits = balanceCents > 0;
+export default function CreditSummary({ credits }: CreditSummaryProps) {
+  const showBuyPrompt = credits < 10;
+  const hasCredits = credits > 0;
 
   return (
     <div className="rounded-2xl border border-solar-800/20 bg-background-secondary p-6">
@@ -15,7 +15,7 @@ export default function CreditSummary({ balanceCents }: CreditSummaryProps) {
         <div>
           <p className="text-sm text-foreground-muted">Seu saldo</p>
           <p className={`mt-1 text-3xl font-bold ${hasCredits ? 'text-solar-300' : 'text-red-400'}`}>
-            {formatBalance(balanceCents)}
+            {formatBalance(credits)}
           </p>
         </div>
         <div className={`rounded-xl p-3 ${hasCredits ? 'bg-solar-500/10' : 'bg-red-500/10'}`}>

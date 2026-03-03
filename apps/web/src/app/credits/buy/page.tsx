@@ -1,6 +1,7 @@
 import { auth } from '@/lib/auth';
 import { redirect } from 'next/navigation';
-import { CREDIT_PACKAGES, formatPrice } from '@/lib/credits-config';
+import { prisma } from '@sol/db';
+import { formatPrice } from '@/lib/credits-config';
 import BuyButton from './components/BuyButton';
 
 export default async function BuyCreditsPage() {
@@ -9,6 +10,15 @@ export default async function BuyCreditsPage() {
   if (!session) {
     redirect('/login');
   }
+
+  // Buscar pacotes ativos do banco, ordenados por sortOrder
+  const packages = await prisma.creditPackage.findMany({
+    where: { active: true },
+    orderBy: { sortOrder: 'asc' },
+  });
+
+  // O pacote "popular" é o segundo (Pro) — sortOrder=1
+  const popularIndex = 1;
 
   return (
     <div className="mx-auto max-w-5xl px-4 py-8 md:py-12">
@@ -33,59 +43,57 @@ export default async function BuyCreditsPage() {
 
       {/* Pricing Grid */}
       <div className="grid gap-6 md:grid-cols-3">
-        {CREDIT_PACKAGES.map((pkg) => (
-          <div
-            key={pkg.id}
-            className={`relative rounded-2xl p-6 flex flex-col gap-4 transition-all ${
-              pkg.popular
-                ? 'border-2 border-solar-500/60 bg-background-secondary shadow-lg shadow-solar-500/10 scale-[1.02]'
-                : 'border border-solar-800/20 bg-background-secondary hover:border-solar-500/30'
-            }`}
-          >
-            {/* Popular Badge */}
-            {pkg.popular && (
-              <div className="absolute -top-3 left-1/2 -translate-x-1/2 rounded-full bg-solar-500 px-4 py-1 text-xs font-bold uppercase tracking-wider text-background">
-                Mais popular
+        {packages.map((pkg, index) => {
+          const isPopular = index === popularIndex;
+          return (
+            <div
+              key={pkg.id}
+              className={`relative rounded-2xl p-6 flex flex-col gap-4 transition-all ${
+                isPopular
+                  ? 'border-2 border-solar-500/60 bg-background-secondary shadow-lg shadow-solar-500/10 scale-[1.02]'
+                  : 'border border-solar-800/20 bg-background-secondary hover:border-solar-500/30'
+              }`}
+            >
+              {isPopular && (
+                <div className="absolute -top-3 left-1/2 -translate-x-1/2 rounded-full bg-solar-500 px-4 py-1 text-xs font-bold uppercase tracking-wider text-background">
+                  Mais popular
+                </div>
+              )}
+
+              <div>
+                <h2 className="mb-1 text-xl font-bold text-foreground">{pkg.name}</h2>
+                <p className="text-sm text-foreground-muted">{pkg.description}</p>
               </div>
-            )}
 
-            {/* Package Name */}
-            <div>
-              <h2 className="mb-1 text-xl font-bold text-foreground">{pkg.label}</h2>
-              <p className="text-sm text-foreground-muted">{pkg.description}</p>
+              <div>
+                <span className="text-3xl font-bold text-solar-300">{formatPrice(pkg.priceBrl)}</span>
+              </div>
+
+              <ul className="flex-1 space-y-3">
+                <li className="flex items-center gap-2 text-sm text-foreground-muted">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" className="shrink-0 text-solar-400">
+                    <path d="M20 6L9 17L4 12" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                  {pkg.credits} créditos
+                </li>
+                <li className="flex items-center gap-2 text-sm text-foreground-muted">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" className="shrink-0 text-solar-400">
+                    <path d="M20 6L9 17L4 12" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                  Pagamento via cartão de crédito
+                </li>
+                <li className="flex items-center gap-2 text-sm text-foreground-muted">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" className="shrink-0 text-solar-400">
+                    <path d="M20 6L9 17L4 12" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                  Créditos sem prazo de expiração
+                </li>
+              </ul>
+
+              <BuyButton packageId={pkg.id} />
             </div>
-
-            {/* Price */}
-            <div>
-              <span className="text-3xl font-bold text-solar-300">{formatPrice(pkg.price)}</span>
-            </div>
-
-            {/* Features */}
-            <ul className="flex-1 space-y-3">
-              <li className="flex items-center gap-2 text-sm text-foreground-muted">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" className="shrink-0 text-solar-400">
-                  <path d="M20 6L9 17L4 12" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                </svg>
-                Aproximadamente {pkg.scriptsEstimate}
-              </li>
-              <li className="flex items-center gap-2 text-sm text-foreground-muted">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" className="shrink-0 text-solar-400">
-                  <path d="M20 6L9 17L4 12" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                </svg>
-                Pagamento via cartão de crédito
-              </li>
-              <li className="flex items-center gap-2 text-sm text-foreground-muted">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" className="shrink-0 text-solar-400">
-                  <path d="M20 6L9 17L4 12" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                </svg>
-                Créditos sem prazo de expiração
-              </li>
-            </ul>
-
-            {/* Buy Button */}
-            <BuyButton packageId={pkg.id} />
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       {/* Stripe Disclaimer */}

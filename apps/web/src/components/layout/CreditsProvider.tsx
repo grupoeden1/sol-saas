@@ -6,8 +6,8 @@ import { formatBalance } from '@/lib/format-balance';
 // ─── Context ───────────────────────────────────────────────────────────────
 
 interface CreditsContextValue {
-  balanceCents: number;
-  updateCredits: (newBalanceCents: number) => void;
+  credits: number;
+  updateCredits: (newCredits: number) => void;
   formatted: string;
 }
 
@@ -20,15 +20,15 @@ export function CreditsProvider({
   initialCredits: number;
   children: React.ReactNode;
 }) {
-  const [balanceCents, setBalanceCents] = useState(initialCredits);
-  const formatted = formatBalance(balanceCents);
+  const [credits, setCredits] = useState(initialCredits);
+  const formatted = formatBalance(credits);
 
-  const updateCredits = useCallback((newBalanceCents: number) => {
-    setBalanceCents(newBalanceCents);
+  const updateCredits = useCallback((newCredits: number) => {
+    setCredits(newCredits);
   }, []);
 
   return (
-    <CreditsContext.Provider value={{ balanceCents, updateCredits, formatted }}>
+    <CreditsContext.Provider value={{ credits, updateCredits, formatted }}>
       {children}
     </CreditsContext.Provider>
   );

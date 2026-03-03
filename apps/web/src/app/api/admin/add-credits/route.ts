@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { auth } from '@/lib/auth';
-import { prisma, addCredits, getExchangeRate } from '@sol/db';
+import { prisma, addCredits } from '@sol/db';
 
 const BodySchema = z.object({
   userEmail: z.string().email(),
-  amountBRL: z.number().positive(),
+  credits: z.number().int().positive(),
   reason: z.string().min(3),
 });
 
@@ -27,42 +27,37 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Invalid request body' }, { status: 400 });
   }
 
-  const { userEmail, amountBRL, reason } = body;
+  const { userEmail, credits, reason } = body;
   const adminEmail = session.user.email;
 
   // 3. Buscar usuário alvo
   const targetUser = await prisma.user.findUnique({
     where: { email: userEmail },
-    select: { id: true, email: true, balanceCents: true },
+    select: { id: true, email: true, credits: true },
   });
   if (!targetUser) {
     return NextResponse.json({ error: 'User not found' }, { status: 404 });
   }
 
-  // 4. Converter BRL para centavos e buscar cotação
-  const amountCents = Math.round(amountBRL * 100);
-  const exchangeRate = await getExchangeRate('USD-BRL');
-
-  // 5. Adicionar créditos como ajuste manual
-  const { balanceCents: newBalanceCents } = await addCredits(
+  // 4. Adicionar créditos como ajuste manual
+  const result = await addCredits(
     targetUser.id,
-    amountCents,
+    credits,
     {
       type: 'adjustment',
-      exchangeRate,
       adminEmail,
       description: reason,
     },
   );
 
   console.log(
-    `[Admin] addCredits adjustment: admin=${adminEmail} user=${userEmail} amountCents=${amountCents}`,
+    `[Admin] addCredits adjustment: admin=${adminEmail} user=${userEmail} credits=${credits}`,
   );
 
   return NextResponse.json({
     success: true,
     userEmail,
-    addedCents: amountCents,
-    newBalanceCents,
+    addedCredits: credits,
+    newCredits: result.credits,
   });
 }

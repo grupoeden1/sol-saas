@@ -5,7 +5,6 @@ import {
   getUserMetrics,
   getUsageMetrics,
   getFinancialMetrics,
-  getExchangeMetrics,
   getUsersList,
 } from '@sol/db';
 import Logo from '@/components/Logo';
@@ -38,10 +37,6 @@ function calcChange(current: number, previous: number): string | null {
   return `${sign}${pct}% vs mês anterior`;
 }
 
-function formatCostBRL(brl: number): string {
-  return `R$ ${brl.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-}
-
 export default async function AdminDashboardPage({ searchParams }: AdminPageProps) {
   const session = await auth();
 
@@ -56,19 +51,16 @@ export default async function AdminDashboardPage({ searchParams }: AdminPageProp
   const resolvedParams = await searchParams;
   const page = Math.max(1, Number(resolvedParams?.page) || 1);
 
-  // Todas as métricas em paralelo
-  const [userMetrics, usageMetrics, financialMetrics, exchangeMetrics, userListResult] =
+  const [userMetrics, usageMetrics, financialMetrics, userListResult] =
     await Promise.all([
       getUserMetrics(),
       getUsageMetrics(),
       getFinancialMetrics(),
-      getExchangeMetrics(),
       getUsersList(page, PAGE_SIZE),
     ]);
 
   const totalPages = Math.ceil(userListResult.total / PAGE_SIZE);
 
-  // Blocos de métricas
   const userCards = [
     {
       label: 'Total de Usuários',
@@ -99,13 +91,12 @@ export default async function AdminDashboardPage({ searchParams }: AdminPageProp
       value: formatTokensShort(usageMetrics.totalTokens),
       change: calcChange(usageMetrics.tokensThisMonth, usageMetrics.tokensLastMonth),
     },
+    {
+      label: 'Input / Output',
+      value: `${formatTokensShort(usageMetrics.totalInputTokens)} / ${formatTokensShort(usageMetrics.totalOutputTokens)}`,
+      change: null,
+    },
   ];
-
-  // Lucro e Margem derivados dos dados financeiros
-  const revenueBRL = financialMetrics.totalRevenueCents / 100;
-  const profitBRL = revenueBRL - financialMetrics.totalOpenAICostBRL;
-  const marginPct =
-    revenueBRL > 0 ? Math.round((profitBRL / revenueBRL) * 1000) / 10 : 0;
 
   const financialCards = [
     {
@@ -123,24 +114,18 @@ export default async function AdminDashboardPage({ searchParams }: AdminPageProp
       change: null,
     },
     {
-      label: 'Custo OpenAI (BRL)',
-      value: formatCostBRL(financialMetrics.totalOpenAICostBRL),
-      change: null,
-      variant: 'amber' as const,
-    },
-    {
-      label: 'Lucro Estimado',
-      value: formatCostBRL(profitBRL),
-      change: null,
-    },
-    {
-      label: 'Margem Estimada',
-      value: revenueBRL > 0 ? `${marginPct.toFixed(1)}%` : '—',
+      label: 'Créditos Consumidos',
+      value: String(financialMetrics.totalCreditsConsumed),
       change: null,
     },
     {
       label: 'Ajustes Manuais',
-      value: formatBRL(financialMetrics.totalAdjustmentsCents),
+      value: String(financialMetrics.totalAdjustmentCredits),
+      change: null,
+    },
+    {
+      label: 'Custo OpenAI (est.)',
+      value: `US$ ${financialMetrics.estimatedOpenAICostUsd.toFixed(2)}`,
       change: null,
     },
   ];
@@ -167,7 +152,6 @@ export default async function AdminDashboardPage({ searchParams }: AdminPageProp
       <main className="relative z-10 flex-1 px-4 pb-12 pt-28 md:px-8">
         <div className="mx-auto max-w-6xl space-y-10">
 
-          {/* Título */}
           <div className="flex items-end justify-between">
             <div>
               <h1 className="text-3xl font-bold text-foreground">Painel de Controle</h1>
@@ -175,9 +159,14 @@ export default async function AdminDashboardPage({ searchParams }: AdminPageProp
                 {userMetrics.totalUsers} usuário{userMetrics.totalUsers !== 1 ? 's' : ''} cadastrado{userMetrics.totalUsers !== 1 ? 's' : ''}
               </p>
             </div>
+            <Link
+              href="/admin/pricing"
+              className="rounded-xl bg-solar-500/10 px-4 py-2.5 text-sm font-medium text-solar-300 transition-all hover:bg-solar-500/20"
+            >
+              Simulador de Pricing
+            </Link>
           </div>
 
-          {/* Bloco: Usuários */}
           <section>
             <h2 className="mb-4 text-sm font-semibold uppercase tracking-widest text-foreground-muted">
               Usuários
@@ -195,24 +184,22 @@ export default async function AdminDashboardPage({ searchParams }: AdminPageProp
             </div>
           </section>
 
-          {/* Bloco: Uso */}
           <section>
             <h2 className="mb-4 text-sm font-semibold uppercase tracking-widest text-foreground-muted">
               Uso
             </h2>
-            <div className="grid gap-4 sm:grid-cols-2">
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
               {usageCards.map((card, i) => (
                 <MetricCard key={i} label={card.label} value={card.value} change={card.change} />
               ))}
             </div>
           </section>
 
-          {/* Bloco: Financeiro */}
           <section>
             <h2 className="mb-4 text-sm font-semibold uppercase tracking-widest text-foreground-muted">
               Financeiro
             </h2>
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
               {financialCards.map((card, i) => (
                 <MetricCard
                   key={i}
@@ -225,36 +212,12 @@ export default async function AdminDashboardPage({ searchParams }: AdminPageProp
             </div>
           </section>
 
-          {/* Bloco: Câmbio */}
-          <section>
-            <h2 className="mb-4 text-sm font-semibold uppercase tracking-widest text-foreground-muted">
-              Câmbio
-            </h2>
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-              <MetricCard
-                label="USD-BRL (última cotação)"
-                value={
-                  exchangeMetrics.lastRateBRL > 0
-                    ? `R$ ${exchangeMetrics.lastRateBRL.toFixed(4)}`
-                    : '—'
-                }
-                change={
-                  exchangeMetrics.lastRateDate
-                    ? new Intl.DateTimeFormat('pt-BR').format(exchangeMetrics.lastRateDate)
-                    : null
-                }
-              />
-            </div>
-          </section>
-
-          {/* Bloco: Lista de usuários */}
           <UsersTable
             users={userListResult.users}
             currentPage={page}
             totalPages={totalPages}
           />
 
-          {/* Bloco: Adicionar créditos manualmente */}
           <section>
             <h2 className="mb-4 text-sm font-semibold uppercase tracking-widest text-foreground-muted">
               Créditos Manuais

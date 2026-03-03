@@ -14,11 +14,13 @@ model User {
   email           String    @unique
   passwordHash    String
   role            Role      @default(USER)
-  balanceCents    Int       @default(0)    // saldo interno em centavos de real
+  credits         Int       @default(0)    // créditos inteiros
 
-  sessions      Session[]
-  conversations Conversation[]
-  transactions  CreditTransaction[]
+  sessions           Session[]
+  conversations      Conversation[]
+  transactions       CreditTransaction[]
+  onboardingProfiles OnboardingProfile[]
+  quizSessions       QuizSession[]
 
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
@@ -37,13 +39,15 @@ model Session {
 }
 
 model Conversation {
-  id        String    @id @default(cuid())
-  userId    String
-  title     String    @db.VarChar(60)
-  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  messages  Message[]
+  id             String       @id @default(cuid())
+  userId         String
+  title          String       @db.VarChar(60)
+  quizSessionId  String?      @unique
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  quizSession    QuizSession? @relation(fields: [quizSessionId], references: [id])
+  messages       Message[]
 
-  createdAt DateTime  @default(now())
+  createdAt      DateTime     @default(now())
 
   @@index([userId])
 }
@@ -71,26 +75,24 @@ enum Role {
 }
 
 model CreditTransaction {
-  id              String          @id @default(cuid())
-  userId          String
-  amount          Int             // centavos de real (positivo = crédito, negativo = débito)
-  type            TransactionType
-  description     String?
-  stripePaymentId String?         @unique
-  exchangeRate       Decimal?        // cotação USD-BRL no momento da transação
-  grossAmountCents   Int?            // valor bruto pago pelo aluno no Stripe (em centavos)
-  adminEmail         String?         // email do admin que realizou ajuste manual (auditoria)
+  id                 String          @id @default(cuid())
+  userId             String
+  amount             Int             // créditos (positivo = crédito, negativo = débito)
+  type               TransactionType
+  description        String?
+  stripePaymentId    String?         @unique
+  adminEmail         String?         // email do admin que realizou ajuste manual
   inputTokens        Int?            // tokens de input consumidos
   outputTokens       Int?            // tokens de output consumidos
   modelUsed          String?         // modelo OpenAI (ex: "gpt-4o", "gpt-4o-mini")
-  costUsd            Decimal?        // custo em USD da chamada OpenAI
-  maxOutputTokens    Int?            // MAX_OUTPUT_TOKENS usado no gate (auditoria)
-  hasAttachments     Boolean         @default(false)  // mensagem incluiu anexos?
-  attachmentTypes    String[]        @default([])     // tipos MIME dos arquivos anexados
-  attachmentTokens   Int?            // tokens extras dos arquivos (Vision + documentos)
+  creditsPerMInput   Int?            // snapshot: créditos por 1M input tokens no momento
+  creditsPerMOutput  Int?            // snapshot: créditos por 1M output tokens no momento
+  hasAttachments     Boolean         @default(false)
+  attachmentTypes    String[]        @default([])
+  attachmentTokens   Int?
   user               User            @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  createdAt       DateTime        @default(now())
+  createdAt          DateTime        @default(now())
 
   @@index([userId])
   @@index([stripePaymentId])
@@ -103,12 +105,134 @@ enum TransactionType {
   adjustment
 }
 
-model ExchangeRate {
+model PricingConfig {
   id        String   @id @default(cuid())
-  currency  String   // par cambial (ex: "USD-BRL")
-  rate      Decimal  // cotação (ex: 5.45)
-  date      DateTime @db.Date // data da cotação (sem horário)
+  key       String   @unique
+  value     Int
   createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
 
-  @@unique([currency, date])
+model CreditPackage {
+  id          String   @id @default(cuid())
+  name        String
+  credits     Int
+  priceBrl    Int      // centavos BRL (ex: 2990 = R$29,90)
+  description String?
+  active      Boolean  @default(true)
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+// ─── Quiz & Onboarding ─────────────────────────────────────────────────────
+
+model OnboardingProfile {
+  id        String   @id @default(cuid())
+  userId    String
+  name      String   // nome do perfil (ex: produto ou nicho)
+  answers   Json     // respostas do onboarding (9 perguntas O1-O9)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  quizSessions QuizSession[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+}
+
+model QuizSession {
+  id                   String             @id @default(cuid())
+  userId               String
+  onboardingProfileId  String
+  path1                Path1?             // AD ou ORGANIC (definido em Q1)
+  path2                Path2?             // MODELED ou FROM_SCRATCH (definido em Q2)
+  status               QuizStatus         @default(IN_PROGRESS)
+
+  user                 User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  onboardingProfile    OnboardingProfile  @relation(fields: [onboardingProfileId], references: [id])
+  answers              QuizAnswer[]
+  conversation         Conversation?      // 1:1 — roteiro gerado a partir deste quiz
+  videoAnalysis        VideoAnalysis?     // 1:1 — análise do vídeo referência (caminho 2A)
+
+  createdAt            DateTime           @default(now())
+  completedAt          DateTime?
+
+  @@index([userId])
+  @@index([onboardingProfileId])
+}
+
+model QuizAnswer {
+  id            String      @id @default(cuid())
+  quizSessionId String
+  section       QuizSection
+  questionKey   String      // ex: "Q1", "1A.3", "2B.7"
+  answerType    AnswerType
+  answerValue   String      @db.Text // resposta em texto ou JSON stringificado
+  quizSession   QuizSession @relation(fields: [quizSessionId], references: [id], onDelete: Cascade)
+  videoAnalysis VideoAnalysis? // 1:1 — se esta resposta é upload de vídeo (2A.2)
+
+  createdAt     DateTime    @default(now())
+
+  @@unique([quizSessionId, questionKey])
+  @@index([quizSessionId])
+}
+
+enum Path1 {
+  AD
+  ORGANIC
+}
+
+enum Path2 {
+  MODELED
+  FROM_SCRATCH
+}
+
+enum QuizStatus {
+  IN_PROGRESS
+  COMPLETED
+  ABANDONED
+}
+
+enum QuizSection {
+  INITIAL
+  AD_CREATIVE
+  ORGANIC_VIDEO
+  MODELED_VIDEO
+  FROM_SCRATCH_VIDEO
+}
+
+enum AnswerType {
+  TEXT
+  SINGLE_SELECT
+  MULTI_SELECT
+  UPLOAD
+}
+
+// ─── Video Processing ─────────────────────────────────────────────────────
+
+model VideoAnalysis {
+  id                 String      @id @default(cuid())
+  quizSessionId      String      @unique
+  quizAnswerId       String      @unique   // pergunta 2A.2 (upload)
+  transcription      String?     @db.Text  // transcrição AssemblyAI
+  frameDescriptions  String?     @db.Text  // descrições visuais dos frames
+  structureAnalysis  String?     @db.Text  // análise estrutural (ganchos, CTA, tom)
+  fullDescription    String?     @db.Text  // descrição consolidada para prompt
+  processingStatus   VideoStatus @default(QUEUED)
+  processingTimeMs   Int?
+  errorMessage       String?
+
+  quizSession        QuizSession @relation(fields: [quizSessionId], references: [id], onDelete: Cascade)
+  quizAnswer         QuizAnswer  @relation(fields: [quizAnswerId], references: [id], onDelete: Cascade)
+
+  createdAt          DateTime    @default(now())
+}
+
+enum VideoStatus {
+  QUEUED
+  PROCESSING
+  COMPLETED
+  FAILED
 }

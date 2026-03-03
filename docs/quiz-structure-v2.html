@@ -1,0 +1,1768 @@
+
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SOL AI — Apresentação TV</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap');
+
+  :root {
+    --gold-light: #E8C86A;
+    --gold: #D4A844;
+    --gold-dark: #8B6914;
+    --gold-deep: #6B5210;
+    --bg: #000000;
+    --bg-card: #0A0A0A;
+    --bg-elevated: #111111;
+    --bg-surface: #1A1A1A;
+    --border: #2A2A2A;
+    --border-gold: rgba(212,168,68,0.3);
+    --text: #F5F0E8;
+    --text-sec: #A09880;
+    --text-muted: #5A5040;
+  }
+
+  * { margin:0; padding:0; box-sizing:border-box; }
+
+  body {
+    font-family:'Inter',sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    -webkit-print-color-adjust:exact;
+    print-color-adjust:exact;
+  }
+
+  @media print {
+    .slide { page-break-after:always; break-after:page; }
+    .slide:last-child { page-break-after:avoid; }
+    .no-print { display:none!important; }
+  }
+
+  /* ===== SLIDE SYSTEM ===== */
+  .slide {
+    width:100vw;
+    height:100vh;
+    min-height:100vh;
+    display:flex;
+    flex-direction:column;
+    justify-content:center;
+    align-items:center;
+    padding:40px 60px;
+    position:relative;
+    overflow:hidden;
+  }
+
+  .slide-inner {
+    width:100%;
+    max-width:1400px;
+    height:100%;
+    display:flex;
+    flex-direction:column;
+  }
+
+  /* ===== COVER ===== */
+  .cover {
+    background: radial-gradient(ellipse at 50% 40%, rgba(212,168,68,0.08) 0%, transparent 60%), #000;
+  }
+
+  .cover-content {
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    justify-content:center;
+    height:100%;
+    text-align:center;
+  }
+
+  .logo-sun {
+    width:140px; height:140px;
+    margin-bottom:32px;
+    position:relative;
+  }
+
+  .logo-sun svg { width:100%; height:100%; }
+
+  .cover h1 {
+    font-size:64px;
+    font-weight:900;
+    background:linear-gradient(135deg, var(--gold-light), var(--gold), var(--gold-dark));
+    -webkit-background-clip:text;
+    -webkit-text-fill-color:transparent;
+    background-clip:text;
+    letter-spacing:-2px;
+  }
+
+  .cover .subtitle {
+    font-size:20px;
+    color:var(--text-sec);
+    margin-top:12px;
+    font-weight:300;
+    letter-spacing:6px;
+    text-transform:uppercase;
+  }
+
+  .cover .desc {
+    max-width:700px;
+    font-size:16px;
+    color:var(--text-muted);
+    margin-top:36px;
+    line-height:1.8;
+  }
+
+  .cover .badge {
+    margin-top:40px;
+    padding:8px 28px;
+    border:1px solid var(--border-gold);
+    border-radius:100px;
+    font-size:13px;
+    color:var(--gold);
+    background:rgba(212,168,68,0.05);
+  }
+
+  /* ===== SECTION HEADER ===== */
+  .slide-header {
+    display:flex;
+    align-items:center;
+    gap:20px;
+    margin-bottom:28px;
+    flex-shrink:0;
+  }
+
+  .slide-header .icon-box {
+    width:48px; height:48px;
+    border-radius:14px;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    font-size:22px;
+    flex-shrink:0;
+  }
+
+  .icon-onboard { background:rgba(212,168,68,0.15); border:1px solid rgba(212,168,68,0.3); }
+  .icon-initial { background:rgba(100,160,255,0.15); border:1px solid rgba(100,160,255,0.3); }
+  .icon-ads { background:rgba(255,100,150,0.15); border:1px solid rgba(255,100,150,0.3); }
+  .icon-organic { background:rgba(160,100,255,0.15); border:1px solid rgba(160,100,255,0.3); }
+  .icon-model { background:rgba(80,200,220,0.15); border:1px solid rgba(80,200,220,0.3); }
+  .icon-zero { background:rgba(255,180,50,0.15); border:1px solid rgba(255,180,50,0.3); }
+  .icon-flow { background:rgba(212,168,68,0.15); border:1px solid rgba(212,168,68,0.3); }
+
+  .slide-header h2 {
+    font-size:32px;
+    font-weight:800;
+    letter-spacing:-1px;
+  }
+
+  .slide-header .tag {
+    font-size:11px;
+    font-weight:600;
+    text-transform:uppercase;
+    letter-spacing:2px;
+    color:var(--gold);
+    opacity:0.7;
+  }
+
+  /* ===== DUAL VIEW (MOBILE + DESKTOP) ===== */
+  .dual-view {
+    display:grid;
+    grid-template-columns:320px 1fr;
+    gap:32px;
+    flex:1;
+    min-height:0;
+    align-items:start;
+  }
+
+  .device-label {
+    text-align:center;
+    font-size:11px;
+    font-weight:600;
+    text-transform:uppercase;
+    letter-spacing:3px;
+    color:var(--text-muted);
+    margin-bottom:10px;
+  }
+
+  /* MOBILE MOCKUP */
+  .mobile-frame {
+    width:280px;
+    margin:0 auto;
+    background:var(--bg-card);
+    border-radius:32px;
+    border:2px solid var(--border);
+    padding:12px;
+    position:relative;
+    max-height:calc(100vh - 200px);
+    overflow:hidden;
+  }
+
+  .mobile-notch {
+    width:100px;
+    height:6px;
+    background:var(--border);
+    border-radius:10px;
+    margin:4px auto 10px;
+  }
+
+  .mobile-screen {
+    background:var(--bg-elevated);
+    border-radius:20px;
+    padding:16px;
+    overflow-y:auto;
+    max-height:calc(100vh - 280px);
+  }
+
+  .mobile-screen::-webkit-scrollbar { width:0; }
+
+  .m-header {
+    display:flex;
+    align-items:center;
+    gap:8px;
+    margin-bottom:14px;
+    padding-bottom:10px;
+    border-bottom:1px solid var(--border);
+  }
+
+  .m-header .m-logo {
+    width:24px;height:24px;
+    background:linear-gradient(135deg, var(--gold-light), var(--gold-dark));
+    border-radius:6px;
+    display:flex;align-items:center;justify-content:center;
+    font-size:10px;font-weight:900;color:#000;
+  }
+
+  .m-header span {
+    font-size:13px;font-weight:700;
+    background:linear-gradient(135deg, var(--gold-light), var(--gold));
+    -webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;
+  }
+
+  .m-progress {
+    height:3px;
+    background:var(--border);
+    border-radius:10px;
+    margin-bottom:14px;
+    overflow:hidden;
+  }
+
+  .m-progress-fill {
+    height:100%;
+    background:linear-gradient(90deg, var(--gold-dark), var(--gold-light));
+    border-radius:10px;
+  }
+
+  .m-question {
+    margin-bottom:12px;
+  }
+
+  .m-q-num {
+    display:inline-block;
+    font-size:9px;
+    font-weight:700;
+    color:var(--gold);
+    background:rgba(212,168,68,0.12);
+    padding:2px 8px;
+    border-radius:4px;
+    margin-bottom:6px;
+  }
+
+  .m-q-title {
+    font-size:12px;
+    font-weight:600;
+    line-height:1.4;
+    color:var(--text);
+    margin-bottom:4px;
+  }
+
+  .m-q-example {
+    font-size:10px;
+    color:var(--text-muted);
+    font-style:italic;
+    margin-bottom:8px;
+  }
+
+  .m-option {
+    display:flex;
+    align-items:center;
+    gap:8px;
+    padding:8px 10px;
+    background:rgba(26,26,26,0.8);
+    border:1px solid var(--border);
+    border-radius:10px;
+    margin-bottom:5px;
+    font-size:11px;
+    color:var(--text-sec);
+    cursor:pointer;
+  }
+
+  .m-option:hover, .m-option.selected {
+    border-color:var(--gold);
+    background:rgba(212,168,68,0.08);
+    color:var(--text);
+  }
+
+  .m-option-letter {
+    width:20px;height:20px;
+    border-radius:6px;
+    background:rgba(212,168,68,0.12);
+    color:var(--gold);
+    display:flex;align-items:center;justify-content:center;
+    font-size:9px;font-weight:700;flex-shrink:0;
+  }
+
+  .m-input {
+    width:100%;
+    padding:10px 12px;
+    background:rgba(26,26,26,0.8);
+    border:1px solid var(--border);
+    border-radius:10px;
+    font-size:11px;
+    color:var(--text-muted);
+    font-style:italic;
+  }
+
+  .m-btn {
+    width:100%;
+    padding:10px;
+    background:linear-gradient(135deg, var(--gold-dark), var(--gold));
+    border:none;
+    border-radius:10px;
+    color:#000;
+    font-size:12px;
+    font-weight:700;
+    margin-top:10px;
+    text-align:center;
+  }
+
+  /* DESKTOP MOCKUP */
+  .desktop-frame {
+    background:var(--bg-card);
+    border-radius:16px;
+    border:2px solid var(--border);
+    overflow:hidden;
+    max-height:calc(100vh - 200px);
+  }
+
+  .desktop-toolbar {
+    display:flex;
+    align-items:center;
+    gap:8px;
+    padding:10px 16px;
+    background:var(--bg-surface);
+    border-bottom:1px solid var(--border);
+  }
+
+  .toolbar-dot {
+    width:10px;height:10px;border-radius:50%;
+  }
+
+  .dot-red { background:#FF5F57; }
+  .dot-yellow { background:#FFBD2E; }
+  .dot-green { background:#28C840; }
+
+  .toolbar-url {
+    flex:1;
+    margin-left:12px;
+    padding:5px 14px;
+    background:var(--bg-elevated);
+    border-radius:6px;
+    font-size:11px;
+    color:var(--text-muted);
+  }
+
+  .desktop-screen {
+    padding:28px 36px;
+    overflow-y:auto;
+    max-height:calc(100vh - 260px);
+  }
+
+  .desktop-screen::-webkit-scrollbar { width:4px; }
+  .desktop-screen::-webkit-scrollbar-thumb { background:var(--border); border-radius:4px; }
+
+  .d-sidebar-layout {
+    display:grid;
+    grid-template-columns:180px 1fr;
+    gap:24px;
+  }
+
+  .d-sidebar {
+    border-right:1px solid var(--border);
+    padding-right:16px;
+  }
+
+  .d-sidebar-logo {
+    display:flex;align-items:center;gap:8px;
+    margin-bottom:20px;
+  }
+
+  .d-sidebar-logo .d-logo-icon {
+    width:28px;height:28px;border-radius:8px;
+    background:linear-gradient(135deg, var(--gold-light), var(--gold-dark));
+    display:flex;align-items:center;justify-content:center;
+    font-size:11px;font-weight:900;color:#000;
+  }
+
+  .d-sidebar-logo span {
+    font-size:14px;font-weight:800;
+    background:linear-gradient(135deg, var(--gold-light), var(--gold));
+    -webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;
+  }
+
+  .d-nav-item {
+    display:flex;align-items:center;gap:8px;
+    padding:8px 10px;border-radius:8px;
+    font-size:11px;color:var(--text-muted);
+    margin-bottom:2px;
+  }
+
+  .d-nav-item.active {
+    background:rgba(212,168,68,0.1);
+    color:var(--gold);
+  }
+
+  .d-content { flex:1; }
+
+  .d-progress-bar {
+    display:flex;align-items:center;gap:12px;
+    margin-bottom:20px;
+  }
+
+  .d-progress-track {
+    flex:1;height:4px;background:var(--border);border-radius:10px;overflow:hidden;
+  }
+
+  .d-progress-fill {
+    height:100%;
+    background:linear-gradient(90deg, var(--gold-dark), var(--gold-light));
+    border-radius:10px;
+  }
+
+  .d-progress-text {
+    font-size:11px;color:var(--text-muted);white-space:nowrap;
+  }
+
+  .d-question {
+    margin-bottom:16px;
+  }
+
+  .d-q-badge {
+    display:inline-flex;align-items:center;gap:6px;
+    font-size:10px;font-weight:600;
+    color:var(--gold);
+    background:rgba(212,168,68,0.1);
+    padding:3px 10px;border-radius:6px;
+    margin-bottom:8px;
+  }
+
+  .d-q-type {
+    display:inline-block;
+    font-size:9px;font-weight:600;
+    text-transform:uppercase;letter-spacing:1px;
+    padding:2px 8px;border-radius:4px;
+    margin-left:6px;
+  }
+
+  .dtype-open { background:rgba(255,180,50,0.12);color:#FFB432; }
+  .dtype-select { background:rgba(100,160,255,0.12);color:#64A0FF; }
+  .dtype-upload { background:rgba(255,100,150,0.12);color:#FF6496; }
+
+  .d-q-title {
+    font-size:14px;font-weight:600;line-height:1.4;
+    color:var(--text);margin-bottom:4px;
+  }
+
+  .d-q-example {
+    font-size:11px;color:var(--text-muted);font-style:italic;margin-bottom:10px;
+  }
+
+  .d-options-grid {
+    display:grid;
+    grid-template-columns:1fr 1fr;
+    gap:6px;
+  }
+
+  .d-option {
+    display:flex;align-items:center;gap:8px;
+    padding:8px 12px;
+    background:var(--bg-surface);
+    border:1px solid var(--border);
+    border-radius:8px;
+    font-size:11px;color:var(--text-sec);
+  }
+
+  .d-option.full { grid-column:1/-1; }
+
+  .d-option:hover, .d-option.selected {
+    border-color:var(--gold);
+    background:rgba(212,168,68,0.06);
+  }
+
+  .d-option-letter {
+    width:20px;height:20px;border-radius:5px;
+    background:rgba(212,168,68,0.12);
+    color:var(--gold);
+    display:flex;align-items:center;justify-content:center;
+    font-size:9px;font-weight:700;flex-shrink:0;
+  }
+
+  .d-input {
+    width:100%;padding:10px 14px;
+    background:var(--bg-surface);
+    border:1px solid var(--border);
+    border-radius:8px;
+    font-size:11px;color:var(--text-muted);font-style:italic;
+  }
+
+  .d-btn {
+    display:inline-block;
+    padding:10px 28px;
+    background:linear-gradient(135deg, var(--gold-dark), var(--gold));
+    border:none;border-radius:8px;
+    color:#000;font-size:12px;font-weight:700;
+    margin-top:12px;
+  }
+
+  /* ===== FLOW SLIDE ===== */
+  .flow-visual {
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    gap:6px;
+    flex:1;
+    justify-content:center;
+  }
+
+  .flow-node {
+    padding:12px 32px;
+    border-radius:12px;
+    font-size:14px;font-weight:600;
+    text-align:center;min-width:220px;
+  }
+
+  .fn-start {
+    background:linear-gradient(135deg, var(--gold-dark), var(--gold-light));
+    color:#000;
+    box-shadow:0 4px 30px rgba(212,168,68,0.3);
+  }
+
+  .fn-quiz { background:rgba(100,160,255,0.12);border:1px solid rgba(100,160,255,0.3);color:#64A0FF; }
+  .fn-ads { background:rgba(255,100,150,0.12);border:1px solid rgba(255,100,150,0.3);color:#FF6496; }
+  .fn-organic { background:rgba(160,100,255,0.12);border:1px solid rgba(160,100,255,0.3);color:#A064FF; }
+  .fn-model { background:rgba(80,200,220,0.12);border:1px solid rgba(80,200,220,0.3);color:#50C8DC; }
+  .fn-zero { background:rgba(255,180,50,0.12);border:1px solid rgba(255,180,50,0.3);color:#FFB432; }
+  .fn-end { background:rgba(212,168,68,0.12);border:1px solid rgba(212,168,68,0.4);color:var(--gold-light); }
+
+  .flow-arrow { color:var(--text-muted);font-size:18px;line-height:1; }
+  .flow-split { display:flex;gap:80px;align-items:flex-start; }
+  .flow-branch { display:flex;flex-direction:column;align-items:center;gap:6px; }
+  .flow-branch-label { font-size:10px;font-weight:600;letter-spacing:2px;color:var(--text-muted);text-transform:uppercase; }
+
+  /* ===== STATS ===== */
+  .stats-row {
+    display:grid;
+    grid-template-columns:repeat(4,1fr);
+    gap:16px;
+    margin:24px 0;
+  }
+
+  .stat-box {
+    background:var(--bg-elevated);
+    border:1px solid var(--border);
+    border-radius:14px;
+    padding:20px;text-align:center;
+  }
+
+  .stat-num {
+    font-size:40px;font-weight:900;
+    background:linear-gradient(135deg, var(--gold-light), var(--gold));
+    -webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;
+  }
+
+  .stat-lbl {
+    font-size:11px;color:var(--text-muted);
+    text-transform:uppercase;letter-spacing:1px;margin-top:4px;
+  }
+
+  /* ===== TOC ===== */
+  .toc-grid {
+    display:grid;
+    grid-template-columns:1fr 1fr;
+    gap:12px;
+    margin-top:20px;
+  }
+
+  .toc-card {
+    display:flex;align-items:center;gap:14px;
+    padding:16px 20px;
+    background:var(--bg-elevated);
+    border:1px solid var(--border);
+    border-radius:12px;
+  }
+
+  .toc-card .toc-icon {
+    width:40px;height:40px;border-radius:10px;
+    display:flex;align-items:center;justify-content:center;
+    font-size:18px;flex-shrink:0;
+  }
+
+  .toc-card h3 { font-size:13px;font-weight:600; }
+  .toc-card p { font-size:11px;color:var(--text-muted);margin-top:2px; }
+
+  /* ===== SYSTEM NOTE ===== */
+  .sys-note {
+    padding:10px 14px;
+    background:rgba(80,200,220,0.06);
+    border-left:3px solid rgba(80,200,220,0.5);
+    border-radius:0 8px 8px 0;
+    font-size:11px;color:#50C8DC;
+    margin-top:8px;
+  }
+
+  .cond-note {
+    padding:8px 12px;
+    background:rgba(160,100,255,0.06);
+    border-left:3px solid rgba(160,100,255,0.5);
+    border-radius:0 8px 8px 0;
+    font-size:11px;color:#A064FF;
+    margin-top:8px;
+  }
+
+  /* COMBO NOTE */
+  .combo-grid {
+    display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:16px;
+  }
+
+  .combo-card {
+    padding:14px 18px;
+    background:var(--bg-elevated);
+    border:1px solid var(--border);
+    border-radius:10px;
+    display:flex;align-items:center;gap:12px;
+  }
+
+  .combo-num {
+    width:28px;height:28px;border-radius:8px;
+    background:rgba(212,168,68,0.15);
+    color:var(--gold);
+    display:flex;align-items:center;justify-content:center;
+    font-size:12px;font-weight:800;flex-shrink:0;
+  }
+
+  .combo-text { font-size:12px;color:var(--text-sec); }
+
+  .footer-bar {
+    position:absolute;bottom:20px;left:60px;right:60px;
+    display:flex;justify-content:space-between;align-items:center;
+    font-size:10px;color:var(--text-muted);
+  }
+
+  .footer-bar .gold { color:var(--gold); }
+
+  .print-btn {
+    position:fixed;bottom:24px;right:24px;
+    padding:12px 24px;
+    background:linear-gradient(135deg, var(--gold-dark), var(--gold));
+    color:#000;border:none;border-radius:12px;
+    font-family:'Inter',sans-serif;font-size:13px;font-weight:700;
+    cursor:pointer;z-index:100;
+    box-shadow:0 4px 20px rgba(212,168,68,0.4);
+  }
+
+  .slide-num {
+    position:absolute;bottom:20px;right:60px;
+    font-size:11px;color:var(--text-muted);
+  }
+</style>
+</head>
+<body>
+
+<button class="print-btn no-print" onclick="window.print()">Salvar como PDF</button>
+
+<!-- ========== SLIDE 1: COVER ========== -->
+<div class="slide cover">
+  <div class="cover-content">
+    <div class="logo-sun">
+      <svg viewBox="0 0 140 140" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <linearGradient id="g1" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" style="stop-color:#E8C86A"/>
+            <stop offset="50%" style="stop-color:#D4A844"/>
+            <stop offset="100%" style="stop-color:#8B6914"/>
+          </linearGradient>
+        </defs>
+        <circle cx="70" cy="70" r="20" stroke="url(#g1)" stroke-width="3" fill="none"/>
+        <circle cx="70" cy="70" r="28" stroke="url(#g1)" stroke-width="2" fill="none"/>
+        <!-- 8 rays -->
+        <line x1="70" y1="10" x2="70" y2="38" stroke="url(#g1)" stroke-width="3" stroke-linecap="round"/>
+        <line x1="70" y1="102" x2="70" y2="130" stroke="url(#g1)" stroke-width="3" stroke-linecap="round"/>
+        <line x1="10" y1="70" x2="38" y2="70" stroke="url(#g1)" stroke-width="3" stroke-linecap="round"/>
+        <line x1="102" y1="70" x2="130" y2="70" stroke="url(#g1)" stroke-width="3" stroke-linecap="round"/>
+        <line x1="27.6" y1="27.6" x2="47.4" y2="47.4" stroke="url(#g1)" stroke-width="3" stroke-linecap="round"/>
+        <line x1="92.6" y1="92.6" x2="112.4" y2="112.4" stroke="url(#g1)" stroke-width="3" stroke-linecap="round"/>
+        <line x1="112.4" y1="27.6" x2="92.6" y2="47.4" stroke="url(#g1)" stroke-width="3" stroke-linecap="round"/>
+        <line x1="47.4" y1="92.6" x2="27.6" y2="112.4" stroke="url(#g1)" stroke-width="3" stroke-linecap="round"/>
+        <!-- pointed tips -->
+        <polygon points="70,2 64,16 76,16" fill="url(#g1)"/>
+        <polygon points="70,138 64,124 76,124" fill="url(#g1)"/>
+        <polygon points="2,70 16,64 16,76" fill="url(#g1)"/>
+        <polygon points="138,70 124,64 124,76" fill="url(#g1)"/>
+        <polygon points="21.9,21.9 33.8,24.1 24.1,33.8" fill="url(#g1)"/>
+        <polygon points="118.1,118.1 106.2,115.9 115.9,106.2" fill="url(#g1)"/>
+        <polygon points="118.1,21.9 115.9,33.8 106.2,24.1" fill="url(#g1)"/>
+        <polygon points="21.9,118.1 24.1,106.2 33.8,115.9" fill="url(#g1)"/>
+      </svg>
+    </div>
+    <h1>SOL AI</h1>
+    <div class="subtitle">Estrutura do Sistema de Quiz</div>
+    <p class="desc">Mapeamento completo dos fluxos de questionário, caminhos condicionais e lógica de roteamento — visualização mobile e desktop para o time.</p>
+    <div class="badge">v2.0 · Março 2026 · Documento Interno</div>
+  </div>
+  <div class="slide-num">01</div>
+</div>
+
+<!-- ========== SLIDE 2: SUMÁRIO + FLUXO ========== -->
+<div class="slide">
+  <div class="slide-inner">
+    <div class="slide-header">
+      <div class="icon-box icon-flow">🔀</div>
+      <div><div class="tag">Visão Geral</div><h2>Sumário & Fluxo de Caminhos</h2></div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:32px;flex:1;">
+      <!-- Left: TOC -->
+      <div>
+        <div class="toc-card" style="margin-bottom:10px;">
+          <div class="toc-icon icon-onboard">☀️</div>
+          <div><h3>Onboarding</h3><p>9 perguntas · 1ª vez · Base de conhecimento</p></div>
+        </div>
+        <div class="toc-card" style="margin-bottom:10px;">
+          <div class="toc-icon icon-initial">🔵</div>
+          <div><h3>Quiz Inicial</h3><p>7 perguntas + 1 condicional · Ramificação</p></div>
+        </div>
+        <div class="toc-card" style="margin-bottom:10px;">
+          <div class="toc-icon icon-ads">🩷</div>
+          <div><h3>1A — Anúncio Criativo</h3><p>5 perguntas · Público, destino, caixa</p></div>
+        </div>
+        <div class="toc-card" style="margin-bottom:10px;">
+          <div class="toc-icon icon-organic">🟣</div>
+          <div><h3>1B — Vídeo Orgânico</h3><p>3 perguntas · Funil, objetivo, audiência</p></div>
+        </div>
+        <div class="toc-card" style="margin-bottom:10px;">
+          <div class="toc-icon icon-model">🔹</div>
+          <div><h3>2A — Vídeo Modelado</h3><p>13 perguntas · Upload, análise IA, formato</p></div>
+        </div>
+        <div class="toc-card">
+          <div class="toc-icon icon-zero">🟡</div>
+          <div><h3>2B — Vídeo do Zero</h3><p>11 perguntas · Tema, gancho, tom</p></div>
+        </div>
+
+        <div class="stats-row" style="margin-top:16px;">
+          <div class="stat-box"><div class="stat-num">48</div><div class="stat-lbl">Perguntas</div></div>
+          <div class="stat-box"><div class="stat-num">6</div><div class="stat-lbl">Seções</div></div>
+          <div class="stat-box"><div class="stat-num">4</div><div class="stat-lbl">Caminhos</div></div>
+          <div class="stat-box"><div class="stat-num">4</div><div class="stat-lbl">Combos</div></div>
+        </div>
+      </div>
+
+      <!-- Right: Flow -->
+      <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;">
+        <div class="flow-visual">
+          <div class="flow-node fn-start">☀️ ONBOARDING · 9 perguntas</div>
+          <div class="flow-arrow">↓</div>
+          <div class="flow-node fn-quiz">🔵 QUIZ INICIAL · 7+1 perguntas</div>
+          <div class="flow-arrow">↓</div>
+          <div style="font-size:10px;color:var(--text-muted);letter-spacing:2px;font-weight:600;">PERGUNTA 1 — TIPO</div>
+          <div class="flow-split">
+            <div class="flow-branch">
+              <div class="flow-branch-label">Resp. A</div>
+              <div class="flow-node fn-ads">🩷 1A ANÚNCIO<br><span style="font-size:11px">5 perguntas</span></div>
+            </div>
+            <div class="flow-branch">
+              <div class="flow-branch-label">Resp. B</div>
+              <div class="flow-node fn-organic">🟣 1B ORGÂNICO<br><span style="font-size:11px">3 perguntas</span></div>
+            </div>
+          </div>
+          <div class="flow-arrow">↓</div>
+          <div style="font-size:10px;color:var(--text-muted);letter-spacing:2px;font-weight:600;">PERGUNTA 2 — MÉTODO</div>
+          <div class="flow-split">
+            <div class="flow-branch">
+              <div class="flow-branch-label">Resp. A</div>
+              <div class="flow-node fn-model">🔹 2A MODELADO<br><span style="font-size:11px">13 perguntas</span></div>
+            </div>
+            <div class="flow-branch">
+              <div class="flow-branch-label">Resp. B</div>
+              <div class="flow-node fn-zero">🟡 2B DO ZERO<br><span style="font-size:11px">11 perguntas</span></div>
+            </div>
+          </div>
+          <div class="flow-arrow">↓</div>
+          <div class="flow-node fn-end">✅ GERAÇÃO DO ROTEIRO</div>
+        </div>
+
+        <div class="combo-grid">
+          <div class="combo-card"><div class="combo-num">1</div><div class="combo-text">Anúncio + Modelado</div></div>
+          <div class="combo-card"><div class="combo-num">2</div><div class="combo-text">Anúncio + Do Zero</div></div>
+          <div class="combo-card"><div class="combo-num">3</div><div class="combo-text">Orgânico + Modelado</div></div>
+          <div class="combo-card"><div class="combo-num">4</div><div class="combo-text">Orgânico + Do Zero</div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="slide-num">02</div>
+</div>
+
+<!-- ========== SLIDE 3: ONBOARDING ========== -->
+<div class="slide">
+  <div class="slide-inner">
+    <div class="slide-header">
+      <div class="icon-box icon-onboard">☀️</div>
+      <div><div class="tag">Preenchido 1 vez</div><h2>Onboarding — Cadastro Inicial</h2></div>
+    </div>
+
+    <div class="dual-view">
+      <!-- MOBILE -->
+      <div>
+        <div class="device-label">📱 Mobile</div>
+        <div class="mobile-frame">
+          <div class="mobile-notch"></div>
+          <div class="mobile-screen">
+            <div class="m-header">
+              <div class="m-logo">S</div>
+              <span>SOL AI</span>
+            </div>
+            <div class="m-progress"><div class="m-progress-fill" style="width:22%"></div></div>
+
+            <div class="m-question">
+              <div class="m-q-num">PERGUNTA 1 DE 9</div>
+              <div class="m-q-title">Descreva seu produto/serviço de forma detalhada</div>
+              <div class="m-q-example">Ex: curso online de emagrecimento, R$197...</div>
+              <div class="m-input">Digite sua resposta aqui...</div>
+            </div>
+
+            <div class="m-question">
+              <div class="m-q-num">PERGUNTA 2 DE 9</div>
+              <div class="m-q-title">Promessa ou resultado que o produto entrega</div>
+              <div class="m-input">Digite sua resposta aqui...</div>
+            </div>
+
+            <div class="m-question">
+              <div class="m-q-num">PERGUNTA 6 DE 9</div>
+              <div class="m-q-title">O público sabe que tem o problema?</div>
+              <div class="m-option selected"><div class="m-option-letter">A</div> Não sabem que tem o problema</div>
+              <div class="m-option"><div class="m-option-letter">B</div> Sabe, mas não conhece soluções</div>
+              <div class="m-option"><div class="m-option-letter">C</div> Conhece soluções, mas não a sua</div>
+              <div class="m-option"><div class="m-option-letter">D</div> SOL define</div>
+            </div>
+
+            <div class="m-btn">Continuar →</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- DESKTOP -->
+      <div>
+        <div class="device-label">🖥️ Desktop</div>
+        <div class="desktop-frame">
+          <div class="desktop-toolbar">
+            <div class="toolbar-dot dot-red"></div>
+            <div class="toolbar-dot dot-yellow"></div>
+            <div class="toolbar-dot dot-green"></div>
+            <div class="toolbar-url">app.sol.ai/onboarding</div>
+          </div>
+          <div class="desktop-screen">
+            <div class="d-sidebar-layout">
+              <div class="d-sidebar">
+                <div class="d-sidebar-logo"><div class="d-logo-icon">S</div><span>SOL AI</span></div>
+                <div class="d-nav-item active">☀️ Onboarding</div>
+                <div class="d-nav-item">🔵 Quiz Inicial</div>
+                <div class="d-nav-item">📝 Meus Roteiros</div>
+                <div class="d-nav-item">⚙️ Configurações</div>
+              </div>
+              <div class="d-content">
+                <div class="d-progress-bar">
+                  <div class="d-progress-track"><div class="d-progress-fill" style="width:22%"></div></div>
+                  <div class="d-progress-text">2 de 9</div>
+                </div>
+
+                <div class="d-question">
+                  <div class="d-q-badge">Pergunta 1 <span class="d-q-type dtype-open">Aberta</span></div>
+                  <div class="d-q-title">Descreva seu produto/serviço de forma detalhada</div>
+                  <div class="d-q-example">Ex: curso online de emagrecimento, R$197, entrego em videoaulas gravadas</div>
+                  <div class="d-input">Digite sua resposta aqui...</div>
+                </div>
+
+                <div class="d-question">
+                  <div class="d-q-badge">Pergunta 2 <span class="d-q-type dtype-open">Aberta</span></div>
+                  <div class="d-q-title">Promessa ou resultado que o produto entrega</div>
+                  <div class="d-q-example">Ex: perder 3kg em 5 dias com a dieta da selva</div>
+                  <div class="d-input">Digite sua resposta aqui...</div>
+                </div>
+
+                <div class="d-question">
+                  <div class="d-q-badge">Pergunta 6 <span class="d-q-type dtype-select">Seleção</span></div>
+                  <div class="d-q-title">O público já sabe que tem o problema que você resolve?</div>
+                  <div class="d-options-grid">
+                    <div class="d-option full selected"><div class="d-option-letter">A</div> Não sabem que tem o problema</div>
+                    <div class="d-option full"><div class="d-option-letter">B</div> Sabe que tem o problema, mas não conhece soluções</div>
+                    <div class="d-option full"><div class="d-option-letter">C</div> Conhece soluções, mas não conhece a sua</div>
+                    <div class="d-option full"><div class="d-option-letter">D</div> Não sei te responder e permito o SOL definir</div>
+                  </div>
+                </div>
+
+                <div class="d-question">
+                  <div class="d-q-badge">Pergunta 8 <span class="d-q-type dtype-select">Seleção</span></div>
+                  <div class="d-q-title">Em qual(is) rede(s) social(is) você publica?</div>
+                  <div class="d-options-grid">
+                    <div class="d-option"><div class="d-option-letter">A</div> Instagram</div>
+                    <div class="d-option"><div class="d-option-letter">B</div> TikTok</div>
+                    <div class="d-option selected"><div class="d-option-letter">C</div> Ambos</div>
+                    <div class="d-option"><div class="d-option-letter">D</div> Outra</div>
+                  </div>
+                </div>
+
+                <div class="d-btn">Continuar →</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="footer-bar"><span class="gold">SOL AI</span><span>Onboarding · 9 perguntas · Preenchido 1 vez</span></div>
+  <div class="slide-num">03</div>
+</div>
+
+<!-- ========== SLIDE 4: QUIZ INICIAL ========== -->
+<div class="slide">
+  <div class="slide-inner">
+    <div class="slide-header">
+      <div class="icon-box icon-initial">🔵</div>
+      <div><div class="tag">A cada nova produção</div><h2>Quiz Inicial — Definição de Caminhos</h2></div>
+    </div>
+
+    <div class="dual-view">
+      <div>
+        <div class="device-label">📱 Mobile</div>
+        <div class="mobile-frame">
+          <div class="mobile-notch"></div>
+          <div class="mobile-screen">
+            <div class="m-header"><div class="m-logo">S</div><span>SOL AI</span></div>
+            <div class="m-progress"><div class="m-progress-fill" style="width:14%"></div></div>
+
+            <div class="m-question">
+              <div class="m-q-num">RAMIFICAÇÃO 1</div>
+              <div class="m-q-title">O que você deseja criar?</div>
+              <div class="m-option selected"><div class="m-option-letter">A</div> Anúncio Criativo → 1A</div>
+              <div class="m-option"><div class="m-option-letter">B</div> Vídeo Orgânico → 1B</div>
+            </div>
+
+            <div class="m-question">
+              <div class="m-q-num">RAMIFICAÇÃO 2</div>
+              <div class="m-q-title">Modelar ou criar do zero?</div>
+              <div class="m-option"><div class="m-option-letter">A</div> Modelar → 2A</div>
+              <div class="m-option selected"><div class="m-option-letter">B</div> Criar do Zero → 2B</div>
+            </div>
+
+            <div class="m-question">
+              <div class="m-q-num">CONDICIONAL</div>
+              <div class="m-q-title">Aparecendo ou sem aparecer?</div>
+              <div class="m-option"><div class="m-option-letter">A</div> Aparecendo</div>
+              <div class="m-option selected"><div class="m-option-letter">B</div> Sem aparecer → abre 3.1</div>
+            </div>
+
+            <div style="margin-left:12px;border-left:2px solid rgba(160,100,255,0.3);padding-left:10px;">
+              <div class="m-question">
+                <div class="m-q-num" style="background:rgba(160,100,255,0.15);color:#A064FF;">3.1 CONDICIONAL</div>
+                <div class="m-q-title">Como pretende produzir?</div>
+                <div class="m-option"><div class="m-option-letter">A</div> Fotos + narração</div>
+                <div class="m-option"><div class="m-option-letter">B</div> Banco de imagem</div>
+                <div class="m-option"><div class="m-option-letter">C</div> Gerado por I.A</div>
+                <div class="m-option"><div class="m-option-letter">D</div> Texto animado</div>
+              </div>
+            </div>
+
+            <div class="m-btn">Continuar →</div>
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <div class="device-label">🖥️ Desktop</div>
+        <div class="desktop-frame">
+          <div class="desktop-toolbar">
+            <div class="toolbar-dot dot-red"></div><div class="toolbar-dot dot-yellow"></div><div class="toolbar-dot dot-green"></div>
+            <div class="toolbar-url">app.sol.ai/novo-roteiro</div>
+          </div>
+          <div class="desktop-screen">
+            <div class="d-sidebar-layout">
+              <div class="d-sidebar">
+                <div class="d-sidebar-logo"><div class="d-logo-icon">S</div><span>SOL AI</span></div>
+                <div class="d-nav-item">☀️ Onboarding</div>
+                <div class="d-nav-item active">🔵 Quiz Inicial</div>
+                <div class="d-nav-item">📝 Meus Roteiros</div>
+                <div class="d-nav-item">⚙️ Configurações</div>
+              </div>
+              <div class="d-content">
+                <div class="d-progress-bar">
+                  <div class="d-progress-track"><div class="d-progress-fill" style="width:14%"></div></div>
+                  <div class="d-progress-text">1 de 7</div>
+                </div>
+
+                <div class="d-question">
+                  <div class="d-q-badge">Pergunta 1 <span class="d-q-type dtype-select">Ramificação</span></div>
+                  <div class="d-q-title">O que você deseja criar?</div>
+                  <div class="d-options-grid">
+                    <div class="d-option selected"><div class="d-option-letter">A</div> ANÚNCIO CRIATIVO → Caminho 1A</div>
+                    <div class="d-option"><div class="d-option-letter">B</div> VÍDEO ORGÂNICO → Caminho 1B</div>
+                  </div>
+                </div>
+
+                <div class="d-question">
+                  <div class="d-q-badge">Pergunta 2 <span class="d-q-type dtype-select">Ramificação</span></div>
+                  <div class="d-q-title">Você gostaria de modelar ou criar um roteiro do zero?</div>
+                  <div class="d-options-grid">
+                    <div class="d-option"><div class="d-option-letter">A</div> MODELAR (adaptar de vídeo existente)</div>
+                    <div class="d-option selected"><div class="d-option-letter">B</div> CRIAR UM ROTEIRO DO ZERO</div>
+                  </div>
+                </div>
+
+                <div class="d-question">
+                  <div class="d-q-badge">Pergunta 3 <span class="d-q-type" style="background:rgba(160,100,255,0.12);color:#A064FF;">Condicional</span></div>
+                  <div class="d-q-title">Seu vídeo será produzido por uma pessoa aparecendo ou sem aparecer?</div>
+                  <div class="d-options-grid">
+                    <div class="d-option"><div class="d-option-letter">A</div> APARECENDO</div>
+                    <div class="d-option selected"><div class="d-option-letter">B</div> SEM APARECER → abre pergunta 3.1</div>
+                  </div>
+                  <div class="cond-note">⚡ Se B → limita formatos e exibe pergunta 3.1</div>
+                </div>
+
+                <div class="d-question">
+                  <div class="d-q-badge">Pergunta 4 <span class="d-q-type dtype-open">Aberta</span></div>
+                  <div class="d-q-title">Descreva detalhadamente o nicho e o objetivo da produção</div>
+                  <div class="d-input">Ex: nicho da saúde, objetivo de atrair clientes para programa de perda de peso</div>
+                </div>
+
+                <div class="d-question">
+                  <div class="d-q-badge">Pergunta 5 <span class="d-q-type dtype-select">Seleção</span></div>
+                  <div class="d-q-title">Gênero predominante do público-alvo</div>
+                  <div class="d-options-grid">
+                    <div class="d-option"><div class="d-option-letter">A</div> Homens (+60%)</div>
+                    <div class="d-option selected"><div class="d-option-letter">B</div> Mulheres (+60%)</div>
+                    <div class="d-option"><div class="d-option-letter">C</div> Ambos</div>
+                    <div class="d-option"><div class="d-option-letter">D</div> SOL define</div>
+                  </div>
+                </div>
+
+                <div class="d-btn">Continuar →</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="footer-bar"><span class="gold">SOL AI</span><span>Quiz Inicial · 7 perguntas + 1 condicional · Define caminhos</span></div>
+  <div class="slide-num">04</div>
+</div>
+
+<!-- ========== SLIDE 5: CAMINHO 1A — ANÚNCIO ========== -->
+<div class="slide">
+  <div class="slide-inner">
+    <div class="slide-header">
+      <div class="icon-box icon-ads">🩷</div>
+      <div><div class="tag">Se escolheu Anúncio Criativo</div><h2>Caminho 1A — Anúncio Criativo</h2></div>
+    </div>
+
+    <div class="dual-view">
+      <div>
+        <div class="device-label">📱 Mobile</div>
+        <div class="mobile-frame">
+          <div class="mobile-notch"></div>
+          <div class="mobile-screen">
+            <div class="m-header"><div class="m-logo">S</div><span>SOL AI</span></div>
+            <div class="m-progress"><div class="m-progress-fill" style="width:40%"></div></div>
+
+            <div class="m-question">
+              <div class="m-q-num">PERGUNTA 1</div>
+              <div class="m-q-title">Para qual tipo de público?</div>
+              <div class="m-option selected"><div class="m-option-letter">A</div> Público frio</div>
+              <div class="m-option"><div class="m-option-letter">B</div> Público morno</div>
+              <div class="m-option"><div class="m-option-letter">C</div> Público quente</div>
+              <div class="m-option"><div class="m-option-letter">D</div> SOL define</div>
+            </div>
+
+            <div class="m-question">
+              <div class="m-q-num">PERGUNTA 2</div>
+              <div class="m-q-title">Destino do tráfego</div>
+              <div class="m-option"><div class="m-option-letter">A</div> WhatsApp</div>
+              <div class="m-option selected"><div class="m-option-letter">B</div> Página de vendas</div>
+              <div class="m-option"><div class="m-option-letter">C</div> Checkout direto</div>
+              <div class="m-option"><div class="m-option-letter">E</div> VSL</div>
+            </div>
+
+            <div class="m-question">
+              <div class="m-q-num">PERGUNTA 4</div>
+              <div class="m-q-title">Qual seu caixa para anúncios?</div>
+              <div class="m-option"><div class="m-option-letter">A</div> +R$20.000</div>
+              <div class="m-option"><div class="m-option-letter">B</div> R$10k–R$19k</div>
+              <div class="m-option selected"><div class="m-option-letter">C</div> R$5k–R$9k</div>
+              <div class="m-option"><div class="m-option-letter">D</div> R$2k–R$4k</div>
+            </div>
+
+            <div class="m-btn">Continuar →</div>
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <div class="device-label">🖥️ Desktop</div>
+        <div class="desktop-frame">
+          <div class="desktop-toolbar">
+            <div class="toolbar-dot dot-red"></div><div class="toolbar-dot dot-yellow"></div><div class="toolbar-dot dot-green"></div>
+            <div class="toolbar-url">app.sol.ai/novo-roteiro/anuncio</div>
+          </div>
+          <div class="desktop-screen">
+            <div class="d-sidebar-layout">
+              <div class="d-sidebar">
+                <div class="d-sidebar-logo"><div class="d-logo-icon">S</div><span>SOL AI</span></div>
+                <div class="d-nav-item">☀️ Onboarding</div>
+                <div class="d-nav-item">🔵 Quiz Inicial ✓</div>
+                <div class="d-nav-item active">🩷 Anúncio Criativo</div>
+                <div class="d-nav-item" style="opacity:0.4;">📝 Meus Roteiros</div>
+              </div>
+              <div class="d-content">
+                <div class="d-progress-bar">
+                  <div class="d-progress-track"><div class="d-progress-fill" style="width:40%"></div></div>
+                  <div class="d-progress-text">2 de 5</div>
+                </div>
+
+                <div class="d-question">
+                  <div class="d-q-badge">Pergunta 1 <span class="d-q-type dtype-select">Seleção</span></div>
+                  <div class="d-q-title">Para qual tipo de público?</div>
+                  <div class="d-options-grid">
+                    <div class="d-option full selected"><div class="d-option-letter">A</div> Público frio — pessoas que nunca viram seu conteúdo</div>
+                    <div class="d-option full"><div class="d-option-letter">B</div> Público morno — quem já viu/interagiu com seu perfil</div>
+                    <div class="d-option full"><div class="d-option-letter">C</div> Público quente — quem já comprou com você</div>
+                    <div class="d-option full"><div class="d-option-letter">D</div> Não sei informar e permito o SOL definir</div>
+                  </div>
+                </div>
+
+                <div class="d-question">
+                  <div class="d-q-badge">Pergunta 2 <span class="d-q-type dtype-select">Seleção</span></div>
+                  <div class="d-q-title">Para onde você deseja enviar o público do criativo?</div>
+                  <div class="d-options-grid">
+                    <div class="d-option"><div class="d-option-letter">A</div> WhatsApp</div>
+                    <div class="d-option selected"><div class="d-option-letter">B</div> Página de vendas</div>
+                    <div class="d-option"><div class="d-option-letter">C</div> Checkout direto</div>
+                    <div class="d-option"><div class="d-option-letter">D</div> Formulário</div>
+                    <div class="d-option"><div class="d-option-letter">E</div> VSL</div>
+                    <div class="d-option"><div class="d-option-letter">F</div> Site</div>
+                    <div class="d-option"><div class="d-option-letter">G</div> Perfil</div>
+                    <div class="d-option"><div class="d-option-letter">H</div> Outro</div>
+                  </div>
+                </div>
+
+                <div class="d-question">
+                  <div class="d-q-badge">Pergunta 4 <span class="d-q-type dtype-select">Seleção</span></div>
+                  <div class="d-q-title">Qual seu caixa para rodar anúncios atualmente?</div>
+                  <div class="d-options-grid">
+                    <div class="d-option"><div class="d-option-letter">A</div> +R$20.000</div>
+                    <div class="d-option"><div class="d-option-letter">B</div> R$10k–R$19k</div>
+                    <div class="d-option selected"><div class="d-option-letter">C</div> R$5k–R$9k</div>
+                    <div class="d-option"><div class="d-option-letter">D</div> R$2k–R$4k</div>
+                    <div class="d-option"><div class="d-option-letter">E</div> R$500–R$1,9k</div>
+                    <div class="d-option"><div class="d-option-letter">F</div> Menos de R$499</div>
+                  </div>
+                </div>
+
+                <div class="d-question">
+                  <div class="d-q-badge">Pergunta 5 <span class="d-q-type dtype-select">Seleção</span></div>
+                  <div class="d-q-title">Qual abordagem principal?</div>
+                  <div class="d-options-grid">
+                    <div class="d-option full"><div class="d-option-letter">A</div> Apresentar problema → solução</div>
+                    <div class="d-option full"><div class="d-option-letter">B</div> Resultado / prova social direto</div>
+                    <div class="d-option full selected"><div class="d-option-letter">C</div> Gerar curiosidade para o clique</div>
+                    <div class="d-option full"><div class="d-option-letter">D</div> Educar e depois direcionar</div>
+                    <div class="d-option full"><div class="d-option-letter">E</div> SOL define</div>
+                  </div>
+                </div>
+
+                <div class="d-btn">Continuar →</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="footer-bar"><span class="gold">SOL AI</span><span>Caminho 1A · Anúncio Criativo · 5 perguntas</span></div>
+  <div class="slide-num">05</div>
+</div>
+
+<!-- ========== SLIDE 6: CAMINHO 1B — ORGÂNICO ========== -->
+<div class="slide">
+  <div class="slide-inner">
+    <div class="slide-header">
+      <div class="icon-box icon-organic">🟣</div>
+      <div><div class="tag">Se escolheu Vídeo Orgânico</div><h2>Caminho 1B — Vídeo Orgânico</h2></div>
+    </div>
+
+    <div class="dual-view">
+      <div>
+        <div class="device-label">📱 Mobile</div>
+        <div class="mobile-frame">
+          <div class="mobile-notch"></div>
+          <div class="mobile-screen">
+            <div class="m-header"><div class="m-logo">S</div><span>SOL AI</span></div>
+            <div class="m-progress"><div class="m-progress-fill" style="width:33%"></div></div>
+
+            <div class="m-question">
+              <div class="m-q-num">PERGUNTA 1</div>
+              <div class="m-q-title">Para qual tipo de público?</div>
+              <div class="m-option selected"><div class="m-option-letter">A</div> Topo de funil (viralizar)</div>
+              <div class="m-option"><div class="m-option-letter">B</div> Meio de funil (educar)</div>
+              <div class="m-option"><div class="m-option-letter">C</div> Fundo de funil (converter)</div>
+              <div class="m-option"><div class="m-option-letter">D</div> SOL define</div>
+            </div>
+
+            <div class="m-question">
+              <div class="m-q-num">PERGUNTA 2</div>
+              <div class="m-q-title">Objetivo principal com o vídeo?</div>
+              <div class="m-option selected"><div class="m-option-letter">A</div> Ganhar seguidores</div>
+              <div class="m-option"><div class="m-option-letter">B</div> Gerar comentários</div>
+              <div class="m-option"><div class="m-option-letter">C</div> Ativar gatilho</div>
+              <div class="m-option"><div class="m-option-letter">D</div> Compartilhamentos</div>
+              <div class="m-option"><div class="m-option-letter">E</div> Salvamentos</div>
+              <div class="m-option"><div class="m-option-letter">F</div> Link da bio</div>
+            </div>
+
+            <div class="m-question">
+              <div class="m-q-num">PERGUNTA 3</div>
+              <div class="m-q-title">Tamanho da audiência atual?</div>
+              <div class="m-option"><div class="m-option-letter">A</div> -1.000</div>
+              <div class="m-option selected"><div class="m-option-letter">B</div> 1k–10k</div>
+              <div class="m-option"><div class="m-option-letter">C</div> 10k–50k</div>
+              <div class="m-option"><div class="m-option-letter">D</div> 50k–200k</div>
+              <div class="m-option"><div class="m-option-letter">E</div> +200k</div>
+            </div>
+
+            <div class="m-btn">Continuar →</div>
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <div class="device-label">🖥️ Desktop</div>
+        <div class="desktop-frame">
+          <div class="desktop-toolbar">
+            <div class="toolbar-dot dot-red"></div><div class="toolbar-dot dot-yellow"></div><div class="toolbar-dot dot-green"></div>
+            <div class="toolbar-url">app.sol.ai/novo-roteiro/organico</div>
+          </div>
+          <div class="desktop-screen">
+            <div class="d-sidebar-layout">
+              <div class="d-sidebar">
+                <div class="d-sidebar-logo"><div class="d-logo-icon">S</div><span>SOL AI</span></div>
+                <div class="d-nav-item">☀️ Onboarding</div>
+                <div class="d-nav-item">🔵 Quiz Inicial ✓</div>
+                <div class="d-nav-item active">🟣 Vídeo Orgânico</div>
+                <div class="d-nav-item" style="opacity:0.4;">📝 Meus Roteiros</div>
+              </div>
+              <div class="d-content">
+                <div class="d-progress-bar">
+                  <div class="d-progress-track"><div class="d-progress-fill" style="width:33%"></div></div>
+                  <div class="d-progress-text">1 de 3</div>
+                </div>
+
+                <div class="d-question">
+                  <div class="d-q-badge">Pergunta 1 <span class="d-q-type dtype-select">Seleção</span></div>
+                  <div class="d-q-title">Para qual tipo de público?</div>
+                  <div class="d-options-grid">
+                    <div class="d-option full selected"><div class="d-option-letter">A</div> Topo de funil — viralizar e atrair novos seguidores</div>
+                    <div class="d-option full"><div class="d-option-letter">B</div> Meio de funil — educar e construir autoridade</div>
+                    <div class="d-option full"><div class="d-option-letter">C</div> Fundo de funil — converter público em venda</div>
+                    <div class="d-option full"><div class="d-option-letter">D</div> Não sei informar e permito o SOL definir</div>
+                  </div>
+                </div>
+
+                <div class="d-question">
+                  <div class="d-q-badge">Pergunta 2 <span class="d-q-type dtype-select">Seleção</span></div>
+                  <div class="d-q-title">Qual objetivo de ganho principal com o vídeo?</div>
+                  <div class="d-options-grid">
+                    <div class="d-option selected"><div class="d-option-letter">A</div> Ganhar seguidores</div>
+                    <div class="d-option"><div class="d-option-letter">B</div> Gerar comentários</div>
+                    <div class="d-option"><div class="d-option-letter">C</div> Ativar gatilho ("eu quero")</div>
+                    <div class="d-option"><div class="d-option-letter">D</div> Compartilhamentos</div>
+                    <div class="d-option"><div class="d-option-letter">E</div> Salvamentos</div>
+                    <div class="d-option"><div class="d-option-letter">F</div> Clicar no link da bio</div>
+                    <div class="d-option"><div class="d-option-letter">G</div> Outro</div>
+                  </div>
+                </div>
+
+                <div class="d-question">
+                  <div class="d-q-badge">Pergunta 3 <span class="d-q-type dtype-select">Seleção</span></div>
+                  <div class="d-q-title">Qual o tamanho aproximado da sua audiência atual?</div>
+                  <div class="d-options-grid">
+                    <div class="d-option"><div class="d-option-letter">A</div> Menos de 1.000</div>
+                    <div class="d-option selected"><div class="d-option-letter">B</div> 1.000 a 10.000</div>
+                    <div class="d-option"><div class="d-option-letter">C</div> 10.000 a 50.000</div>
+                    <div class="d-option"><div class="d-option-letter">D</div> 50.000 a 200.000</div>
+                    <div class="d-option"><div class="d-option-letter">E</div> Mais de 200.000</div>
+                  </div>
+                </div>
+
+                <div class="d-btn">Continuar →</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="footer-bar"><span class="gold">SOL AI</span><span>Caminho 1B · Vídeo Orgânico · 3 perguntas</span></div>
+  <div class="slide-num">06</div>
+</div>
+
+<!-- ========== SLIDE 7: CAMINHO 2A — MODELADO ========== -->
+<div class="slide">
+  <div class="slide-inner">
+    <div class="slide-header">
+      <div class="icon-box icon-model">🔹</div>
+      <div><div class="tag">Se escolheu Modelar</div><h2>Caminho 2A — Vídeo Modelado (pt. 1)</h2></div>
+    </div>
+
+    <div class="dual-view">
+      <div>
+        <div class="device-label">📱 Mobile</div>
+        <div class="mobile-frame">
+          <div class="mobile-notch"></div>
+          <div class="mobile-screen">
+            <div class="m-header"><div class="m-logo">S</div><span>SOL AI</span></div>
+            <div class="m-progress"><div class="m-progress-fill" style="width:15%"></div></div>
+
+            <div class="m-question">
+              <div class="m-q-num">PERGUNTA 1</div>
+              <div class="m-q-title">Mesmo nicho ou outro?</div>
+              <div class="m-option selected"><div class="m-option-letter">A</div> Mesmo nicho</div>
+              <div class="m-option"><div class="m-option-letter">B</div> Outro nicho</div>
+            </div>
+
+            <div class="m-question">
+              <div class="m-q-num" style="background:rgba(255,100,150,0.15);color:#FF6496;">UPLOAD</div>
+              <div class="m-q-title">Faça upload do vídeo referência</div>
+              <div style="padding:20px;border:2px dashed var(--border);border-radius:12px;text-align:center;margin-bottom:8px;">
+                <div style="font-size:24px;margin-bottom:6px;">📤</div>
+                <div style="font-size:10px;color:var(--text-muted);">Toque para selecionar</div>
+              </div>
+            </div>
+
+            <div class="m-question">
+              <div class="m-q-num">PERGUNTA 3</div>
+              <div class="m-q-title">Contexto do áudio</div>
+              <div class="m-option selected"><div class="m-option-letter">A</div> Pessoa(s) falando</div>
+              <div class="m-option"><div class="m-option-letter">B</div> Falando + música</div>
+              <div class="m-option"><div class="m-option-letter">C</div> Narrado</div>
+              <div class="m-option"><div class="m-option-letter">E</div> Apenas música</div>
+            </div>
+
+            <div class="m-question">
+              <div class="m-q-num">PERGUNTA 5</div>
+              <div class="m-q-title">Emoção que o vídeo te gerou</div>
+              <div class="m-option selected"><div class="m-option-letter">D</div> Curiosidade</div>
+              <div class="m-option"><div class="m-option-letter">E</div> Surpresa</div>
+              <div class="m-option"><div class="m-option-letter">G</div> Desejo</div>
+            </div>
+
+            <div class="m-btn">Continuar →</div>
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <div class="device-label">🖥️ Desktop</div>
+        <div class="desktop-frame">
+          <div class="desktop-toolbar">
+            <div class="toolbar-dot dot-red"></div><div class="toolbar-dot dot-yellow"></div><div class="toolbar-dot dot-green"></div>
+            <div class="toolbar-url">app.sol.ai/novo-roteiro/modelar</div>
+          </div>
+          <div class="desktop-screen">
+            <div class="d-sidebar-layout">
+              <div class="d-sidebar">
+                <div class="d-sidebar-logo"><div class="d-logo-icon">S</div><span>SOL AI</span></div>
+                <div class="d-nav-item">🔵 Quiz Inicial ✓</div>
+                <div class="d-nav-item">🩷 Anúncio ✓</div>
+                <div class="d-nav-item active">🔹 Modelar</div>
+                <div class="d-nav-item" style="opacity:0.4;">✅ Gerar Roteiro</div>
+              </div>
+              <div class="d-content">
+                <div class="d-progress-bar">
+                  <div class="d-progress-track"><div class="d-progress-fill" style="width:15%"></div></div>
+                  <div class="d-progress-text">2 de 13</div>
+                </div>
+
+                <div class="d-question">
+                  <div class="d-q-badge">Pergunta 1 <span class="d-q-type dtype-select">Seleção</span></div>
+                  <div class="d-q-title">O vídeo referência é do mesmo nicho?</div>
+                  <div class="d-options-grid">
+                    <div class="d-option selected"><div class="d-option-letter">A</div> É do mesmo nicho</div>
+                    <div class="d-option"><div class="d-option-letter">B</div> Quero modelar de outro nicho</div>
+                  </div>
+                </div>
+
+                <div class="d-question">
+                  <div class="d-q-badge">Pergunta 2 <span class="d-q-type dtype-upload">Upload</span></div>
+                  <div class="d-q-title">Faça o upload do vídeo a ser modelado</div>
+                  <div style="padding:24px;border:2px dashed var(--border);border-radius:12px;text-align:center;">
+                    <div style="font-size:28px;margin-bottom:8px;">📤</div>
+                    <div style="font-size:12px;color:var(--text-muted);">Arraste o vídeo ou clique para selecionar</div>
+                  </div>
+                  <div class="sys-note">
+                    ⚙️ <strong>Processamento automático:</strong> AssemblyAI (transcrição + speakers + emoção) → FFmpeg (frames visuais) → Claude (ganchos + CTA + estrutura)
+                  </div>
+                </div>
+
+                <div class="d-question">
+                  <div class="d-q-badge">Pergunta 4 <span class="d-q-type dtype-select">Seleção</span></div>
+                  <div class="d-q-title">Em qual formato você deseja produzir?</div>
+                  <div class="d-options-grid">
+                    <div class="d-option full selected"><div class="d-option-letter">A</div> Formato idêntico ao do vídeo referência</div>
+                    <div class="d-option"><div class="d-option-letter">B</div> Perguntas e respostas</div>
+                    <div class="d-option"><div class="d-option-letter">C</div> Classificação</div>
+                    <div class="d-option"><div class="d-option-letter">D</div> Isso ou aquilo</div>
+                    <div class="d-option"><div class="d-option-letter">H</div> Low-fi</div>
+                    <div class="d-option"><div class="d-option-letter">M</div> Dicas e tutoriais</div>
+                    <div class="d-option"><div class="d-option-letter">N</div> Curiosidades</div>
+                    <div class="d-option"><div class="d-option-letter">O</div> SOL define</div>
+                  </div>
+                  <div style="font-size:10px;color:var(--text-muted);margin-top:6px;font-style:italic;">+ 8 formatos adicionais com exemplos em vídeo na interface</div>
+                </div>
+
+                <div class="d-btn">Continuar →</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="footer-bar"><span class="gold">SOL AI</span><span>Caminho 2A · Vídeo Modelado · 13 perguntas (parte 1)</span></div>
+  <div class="slide-num">07</div>
+</div>
+
+<!-- ========== SLIDE 8: CAMINHO 2A — pt.2 ========== -->
+<div class="slide">
+  <div class="slide-inner">
+    <div class="slide-header">
+      <div class="icon-box icon-model">🔹</div>
+      <div><div class="tag">Continuação</div><h2>Caminho 2A — Vídeo Modelado (pt. 2)</h2></div>
+    </div>
+
+    <div class="dual-view">
+      <div>
+        <div class="device-label">📱 Mobile</div>
+        <div class="mobile-frame">
+          <div class="mobile-notch"></div>
+          <div class="mobile-screen">
+            <div class="m-header"><div class="m-logo">S</div><span>SOL AI</span></div>
+            <div class="m-progress"><div class="m-progress-fill" style="width:70%"></div></div>
+
+            <div class="m-question">
+              <div class="m-q-num">PERGUNTA 6 · OPCIONAL</div>
+              <div class="m-q-title">3 comentários mais curtidos</div>
+              <div class="m-input">1 → ...</div>
+              <div class="m-input" style="margin-top:4px;">2 → ...</div>
+              <div class="m-input" style="margin-top:4px;">3 → ...</div>
+            </div>
+
+            <div class="m-question">
+              <div class="m-q-num">PERGUNTA 8</div>
+              <div class="m-q-title">Tom de comunicação</div>
+              <div class="m-option selected"><div class="m-option-letter">A</div> Mesmo do vídeo ref.</div>
+              <div class="m-option"><div class="m-option-letter">C</div> Leve e didático</div>
+              <div class="m-option"><div class="m-option-letter">E</div> Provocador</div>
+            </div>
+
+            <div class="m-question">
+              <div class="m-q-num">PERGUNTA 9</div>
+              <div class="m-q-title">Descreva o LOCAL do vídeo</div>
+              <div class="m-input">Ex: na cozinha de casa...</div>
+            </div>
+
+            <div class="m-question">
+              <div class="m-q-num">PERGUNTA 13</div>
+              <div class="m-q-title">O que NÃO gostou no vídeo ref.?</div>
+              <div class="m-input">Ex: CTA fraco no final...</div>
+            </div>
+
+            <div class="m-btn">Gerar Roteiro ✨</div>
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <div class="device-label">🖥️ Desktop</div>
+        <div class="desktop-frame">
+          <div class="desktop-toolbar">
+            <div class="toolbar-dot dot-red"></div><div class="toolbar-dot dot-yellow"></div><div class="toolbar-dot dot-green"></div>
+            <div class="toolbar-url">app.sol.ai/novo-roteiro/modelar</div>
+          </div>
+          <div class="desktop-screen">
+            <div class="d-sidebar-layout">
+              <div class="d-sidebar">
+                <div class="d-sidebar-logo"><div class="d-logo-icon">S</div><span>SOL AI</span></div>
+                <div class="d-nav-item">🔵 Quiz Inicial ✓</div>
+                <div class="d-nav-item">🩷 Anúncio ✓</div>
+                <div class="d-nav-item active">🔹 Modelar</div>
+                <div class="d-nav-item" style="opacity:0.4;">✅ Gerar Roteiro</div>
+              </div>
+              <div class="d-content">
+                <div class="d-progress-bar">
+                  <div class="d-progress-track"><div class="d-progress-fill" style="width:70%"></div></div>
+                  <div class="d-progress-text">9 de 13</div>
+                </div>
+
+                <div class="d-question">
+                  <div class="d-q-badge">Pergunta 8 <span class="d-q-type dtype-select">Seleção</span></div>
+                  <div class="d-q-title">Qual tom de comunicação?</div>
+                  <div class="d-options-grid">
+                    <div class="d-option selected"><div class="d-option-letter">A</div> Mesmo do vídeo ref.</div>
+                    <div class="d-option"><div class="d-option-letter">B</div> Direto e agressivo</div>
+                    <div class="d-option"><div class="d-option-letter">C</div> Leve e didático</div>
+                    <div class="d-option"><div class="d-option-letter">D</div> Empático</div>
+                    <div class="d-option"><div class="d-option-letter">E</div> Provocador</div>
+                    <div class="d-option"><div class="d-option-letter">F</div> Inspirador</div>
+                    <div class="d-option"><div class="d-option-letter">G</div> Técnico</div>
+                    <div class="d-option"><div class="d-option-letter">H</div> Outro</div>
+                  </div>
+                </div>
+
+                <div class="d-question">
+                  <div class="d-q-badge">Pergunta 9 <span class="d-q-type dtype-open">Aberta</span></div>
+                  <div class="d-q-title">Como você descreveria o LOCAL do vídeo?</div>
+                  <div class="d-input">Ex: "começa na cozinha, depois a câmera muda para o corredor"</div>
+                </div>
+
+                <div class="d-question">
+                  <div class="d-q-badge">Pergunta 10 <span class="d-q-type dtype-open">Aberta</span></div>
+                  <div class="d-q-title">O que mais prendeu sua atenção no vídeo?</div>
+                  <div class="d-input">Ex: "pessoa falando com a barriga de alguém"</div>
+                </div>
+
+                <div class="d-question">
+                  <div class="d-q-badge">Pergunta 12 <span class="d-q-type dtype-select">Seleção + texto</span></div>
+                  <div class="d-q-title">Deseja utilizar prova social?</div>
+                  <div class="d-options-grid">
+                    <div class="d-option"><div class="d-option-letter">A</div> Sim, em foto</div>
+                    <div class="d-option"><div class="d-option-letter">B</div> Sim, falando</div>
+                    <div class="d-option"><div class="d-option-letter">C</div> Sim, vídeo curto</div>
+                    <div class="d-option selected"><div class="d-option-letter">D</div> Não utilizar</div>
+                  </div>
+                </div>
+
+                <div class="d-question">
+                  <div class="d-q-badge">Pergunta 13 <span class="d-q-type dtype-open">Aberta</span></div>
+                  <div class="d-q-title">Algo que NÃO gostou ou mudaria no vídeo referência?</div>
+                  <div class="d-input">Ex: "achei que demorou pra chegar no ponto", "CTA fraco"</div>
+                </div>
+
+                <div class="d-btn">Gerar Roteiro ✨</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="footer-bar"><span class="gold">SOL AI</span><span>Caminho 2A · Vídeo Modelado · 13 perguntas (parte 2)</span></div>
+  <div class="slide-num">08</div>
+</div>
+
+<!-- ========== SLIDE 9: CAMINHO 2B — DO ZERO ========== -->
+<div class="slide">
+  <div class="slide-inner">
+    <div class="slide-header">
+      <div class="icon-box icon-zero">🟡</div>
+      <div><div class="tag">Se escolheu Criar do Zero</div><h2>Caminho 2B — Vídeo Criado do Zero</h2></div>
+    </div>
+
+    <div class="dual-view">
+      <div>
+        <div class="device-label">📱 Mobile</div>
+        <div class="mobile-frame">
+          <div class="mobile-notch"></div>
+          <div class="mobile-screen">
+            <div class="m-header"><div class="m-logo">S</div><span>SOL AI</span></div>
+            <div class="m-progress"><div class="m-progress-fill" style="width:27%"></div></div>
+
+            <div class="m-question">
+              <div class="m-q-num">PERGUNTA 1</div>
+              <div class="m-q-title">Tema principal do vídeo</div>
+              <div class="m-input">Ex: Sou nutricionista e quero ensinar uma receita...</div>
+            </div>
+
+            <div class="m-question">
+              <div class="m-q-num">PERGUNTA 2</div>
+              <div class="m-q-title">Emoção que quer provocar</div>
+              <div class="m-option"><div class="m-option-letter">D</div> Curiosidade</div>
+              <div class="m-option selected"><div class="m-option-letter">E</div> Surpresa / Quebra</div>
+              <div class="m-option"><div class="m-option-letter">G</div> Desejo</div>
+              <div class="m-option"><div class="m-option-letter">K</div> Esperança</div>
+            </div>
+
+            <div class="m-question">
+              <div class="m-q-num">PERGUNTA 3</div>
+              <div class="m-q-title">Tem um gancho em mente?</div>
+              <div class="m-input">Ex: "como eu perdi 3kg com..."</div>
+            </div>
+
+            <div class="m-question">
+              <div class="m-q-num">PERGUNTA 7</div>
+              <div class="m-q-title">Duração desejada</div>
+              <div class="m-option"><div class="m-option-letter">A</div> Até 15s</div>
+              <div class="m-option selected"><div class="m-option-letter">C</div> 31–60s</div>
+              <div class="m-option"><div class="m-option-letter">E</div> 91–120s</div>
+            </div>
+
+            <div class="m-question">
+              <div class="m-q-num">PERGUNTA 9</div>
+              <div class="m-q-title">Tom de comunicação</div>
+              <div class="m-option"><div class="m-option-letter">A</div> Direto e agressivo</div>
+              <div class="m-option selected"><div class="m-option-letter">B</div> Leve e didático</div>
+              <div class="m-option"><div class="m-option-letter">E</div> Inspirador</div>
+            </div>
+
+            <div class="m-btn">Gerar Roteiro ✨</div>
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <div class="device-label">🖥️ Desktop</div>
+        <div class="desktop-frame">
+          <div class="desktop-toolbar">
+            <div class="toolbar-dot dot-red"></div><div class="toolbar-dot dot-yellow"></div><div class="toolbar-dot dot-green"></div>
+            <div class="toolbar-url">app.sol.ai/novo-roteiro/do-zero</div>
+          </div>
+          <div class="desktop-screen">
+            <div class="d-sidebar-layout">
+              <div class="d-sidebar">
+                <div class="d-sidebar-logo"><div class="d-logo-icon">S</div><span>SOL AI</span></div>
+                <div class="d-nav-item">🔵 Quiz Inicial ✓</div>
+                <div class="d-nav-item">🟣 Orgânico ✓</div>
+                <div class="d-nav-item active">🟡 Do Zero</div>
+                <div class="d-nav-item" style="opacity:0.4;">✅ Gerar Roteiro</div>
+              </div>
+              <div class="d-content">
+                <div class="d-progress-bar">
+                  <div class="d-progress-track"><div class="d-progress-fill" style="width:27%"></div></div>
+                  <div class="d-progress-text">3 de 11</div>
+                </div>
+
+                <div class="d-question">
+                  <div class="d-q-badge">Pergunta 1 <span class="d-q-type dtype-open">Aberta</span></div>
+                  <div class="d-q-title">Descreva detalhadamente o tema principal do vídeo</div>
+                  <div class="d-input">Ex: Sou nutricionista e quero ensinar no vídeo uma receita para perder peso</div>
+                </div>
+
+                <div class="d-question">
+                  <div class="d-q-badge">Pergunta 2 <span class="d-q-type dtype-select">Seleção</span></div>
+                  <div class="d-q-title">Qual emoção você deseja provocar?</div>
+                  <div class="d-options-grid">
+                    <div class="d-option"><div class="d-option-letter">A</div> Raiva</div>
+                    <div class="d-option"><div class="d-option-letter">B</div> Indignação</div>
+                    <div class="d-option"><div class="d-option-letter">C</div> Medo</div>
+                    <div class="d-option"><div class="d-option-letter">D</div> Curiosidade</div>
+                    <div class="d-option selected"><div class="d-option-letter">E</div> Surpresa / Quebra</div>
+                    <div class="d-option"><div class="d-option-letter">G</div> Desejo</div>
+                    <div class="d-option"><div class="d-option-letter">H</div> Identidade</div>
+                    <div class="d-option"><div class="d-option-letter">K</div> Esperança</div>
+                  </div>
+                </div>
+
+                <div class="d-question">
+                  <div class="d-q-badge">Pergunta 6 <span class="d-q-type dtype-select">Seleção</span></div>
+                  <div class="d-q-title">Em qual formato será feito?</div>
+                  <div class="d-options-grid">
+                    <div class="d-option full"><div class="d-option-letter">A</div> SOL define o formato por mim</div>
+                    <div class="d-option"><div class="d-option-letter">B</div> Perguntas e respostas</div>
+                    <div class="d-option"><div class="d-option-letter">C</div> Classificação</div>
+                    <div class="d-option"><div class="d-option-letter">H</div> Low-fi</div>
+                    <div class="d-option selected"><div class="d-option-letter">M</div> Dicas e tutoriais</div>
+                    <div class="d-option"><div class="d-option-letter">N</div> Curiosidades</div>
+                  </div>
+                  <div style="font-size:10px;color:var(--text-muted);margin-top:6px;font-style:italic;">+ exemplos em vídeo ao lado de cada formato na interface</div>
+                </div>
+
+                <div class="d-question">
+                  <div class="d-q-badge">Pergunta 7 <span class="d-q-type dtype-select">Seleção</span></div>
+                  <div class="d-q-title">Duração desejada aproximadamente</div>
+                  <div class="d-options-grid">
+                    <div class="d-option"><div class="d-option-letter">A</div> Até 15s</div>
+                    <div class="d-option"><div class="d-option-letter">B</div> 16–30s</div>
+                    <div class="d-option selected"><div class="d-option-letter">C</div> 31–60s</div>
+                    <div class="d-option"><div class="d-option-letter">D</div> 61–90s</div>
+                    <div class="d-option"><div class="d-option-letter">E</div> 91–120s</div>
+                    <div class="d-option"><div class="d-option-letter">F</div> 121–150s</div>
+                  </div>
+                </div>
+
+                <div class="d-question">
+                  <div class="d-q-badge">Pergunta 11 <span class="d-q-type dtype-open">Aberta · Opcional</span></div>
+                  <div class="d-q-title">Algo que NÃO quer no vídeo?</div>
+                  <div class="d-input">Ex: "não quero parecer vendedor", "não quero dancinhas"</div>
+                </div>
+
+                <div class="d-btn">Gerar Roteiro ✨</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="footer-bar"><span class="gold">SOL AI</span><span>Caminho 2B · Vídeo do Zero · 11 perguntas</span></div>
+  <div class="slide-num">09</div>
+</div>
+
+<!-- ========== SLIDE 10: ENCERRAMENTO ========== -->
+<div class="slide cover">
+  <div class="cover-content">
+    <div class="logo-sun" style="margin-bottom:24px;">
+      <svg viewBox="0 0 140 140" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <defs><linearGradient id="g2" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" style="stop-color:#E8C86A"/><stop offset="50%" style="stop-color:#D4A844"/><stop offset="100%" style="stop-color:#8B6914"/></linearGradient></defs>
+        <circle cx="70" cy="70" r="20" stroke="url(#g2)" stroke-width="3" fill="none"/>
+        <circle cx="70" cy="70" r="28" stroke="url(#g2)" stroke-width="2" fill="none"/>
+        <line x1="70" y1="10" x2="70" y2="38" stroke="url(#g2)" stroke-width="3" stroke-linecap="round"/>
+        <line x1="70" y1="102" x2="70" y2="130" stroke="url(#g2)" stroke-width="3" stroke-linecap="round"/>
+        <line x1="10" y1="70" x2="38" y2="70" stroke="url(#g2)" stroke-width="3" stroke-linecap="round"/>
+        <line x1="102" y1="70" x2="130" y2="70" stroke="url(#g2)" stroke-width="3" stroke-linecap="round"/>
+        <line x1="27.6" y1="27.6" x2="47.4" y2="47.4" stroke="url(#g2)" stroke-width="3" stroke-linecap="round"/>
+        <line x1="92.6" y1="92.6" x2="112.4" y2="112.4" stroke="url(#g2)" stroke-width="3" stroke-linecap="round"/>
+        <line x1="112.4" y1="27.6" x2="92.6" y2="47.4" stroke="url(#g2)" stroke-width="3" stroke-linecap="round"/>
+        <line x1="47.4" y1="92.6" x2="27.6" y2="112.4" stroke="url(#g2)" stroke-width="3" stroke-linecap="round"/>
+        <polygon points="70,2 64,16 76,16" fill="url(#g2)"/>
+        <polygon points="70,138 64,124 76,124" fill="url(#g2)"/>
+        <polygon points="2,70 16,64 16,76" fill="url(#g2)"/>
+        <polygon points="138,70 124,64 124,76" fill="url(#g2)"/>
+        <polygon points="21.9,21.9 33.8,24.1 24.1,33.8" fill="url(#g2)"/>
+        <polygon points="118.1,118.1 106.2,115.9 115.9,106.2" fill="url(#g2)"/>
+        <polygon points="118.1,21.9 115.9,33.8 106.2,24.1" fill="url(#g2)"/>
+        <polygon points="21.9,118.1 24.1,106.2 33.8,115.9" fill="url(#g2)"/>
+      </svg>
+    </div>
+    <h1 style="font-size:48px;">Estrutura Validada</h1>
+    <div class="subtitle" style="font-size:16px;">Pronta para implementação</div>
+
+    <div class="stats-row" style="margin-top:48px;max-width:800px;width:100%;">
+      <div class="stat-box"><div class="stat-num">48</div><div class="stat-lbl">Perguntas</div></div>
+      <div class="stat-box"><div class="stat-num">6</div><div class="stat-lbl">Seções</div></div>
+      <div class="stat-box"><div class="stat-num">4</div><div class="stat-lbl">Caminhos</div></div>
+      <div class="stat-box"><div class="stat-num">4</div><div class="stat-lbl">Combinações</div></div>
+    </div>
+
+    <p style="margin-top:40px;color:var(--text-muted);font-size:14px;">SOL AI · Documento Interno v2.0 · Março 2026</p>
+  </div>
+  <div class="slide-num">10</div>
+</div>
+
+</body>
+</html>
+

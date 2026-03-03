@@ -14,9 +14,9 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   if (session?.user?.email) {
     const user = await prisma.user.findUnique({
       where: { email: session.user.email },
-      select: { balanceCents: true },
+      select: { credits: true },
     });
-    initialCredits = user?.balanceCents ?? 0;
+    initialCredits = user?.credits ?? 0;
   }
 
   return (
@@ -33,6 +33,22 @@ export default async function AppLayout({ children }: { children: React.ReactNod
               <Logo size={28} />
               <LogoWithText height={16} className="hidden sm:block" />
             </Link>
+
+            {/* Center nav links */}
+            <nav className="hidden items-center gap-1 md:flex">
+              <Link
+                href="/roteiros"
+                className="rounded-full px-3 py-1.5 text-xs font-medium text-solar-300/70 transition-all hover:bg-solar-500/10 hover:text-solar-300"
+              >
+                Meus Roteiros
+              </Link>
+              <Link
+                href="/quiz"
+                className="rounded-full px-3 py-1.5 text-xs font-medium text-solar-300/70 transition-all hover:bg-solar-500/10 hover:text-solar-300"
+              >
+                Novo Roteiro
+              </Link>
+            </nav>
 
             {/* Right actions */}
             <div className="flex items-center gap-2 sm:gap-3">

@@ -1,58 +1,50 @@
-# SOL - Criação de Ofertas com Inteligência Artificial
+# SOL - Criador de Roteiros com Inteligência Artificial
 
-> SaaS conversacional com IA para criação de ofertas de infoprodutos diferenciadas e scripts de criativos para anúncios digitais.
+> SaaS quiz-first com IA para criação de roteiros de anúncios e vídeos orgânicos para infoprodutos.
 
 **Desenvolvido para:** Alunos do Space (Eden Corporate)
 **Objetivo:** Escalar a entrega de valor que hoje só acontece via mentoria 1:1 em formato SaaS recorrente
 
 ---
 
-## 📋 Visão Geral
+## Visão Geral
 
-O SOL resolve o problema de saturação no leilão de anúncios causado por alunos do Space vendendo o mesmo produto com os mesmos criativos. Via chat com IA, o aluno descreve seu produto, público e contexto, e recebe uma oferta ou script de criativo completamente novo e personalizado em menos de 30 minutos.
+O SOL resolve o problema de saturação no leilão de anúncios causado por alunos do Space vendendo o mesmo produto com os mesmos criativos. Via quiz estruturado + IA, o aluno descreve seu produto, público e contexto, e recebe um roteiro completamente novo e personalizado.
 
 ### Status do Desenvolvimento
 
-- ✅ **Epic 1 - Story 1.1:** Project Bootstrap & Infrastructure (COMPLETO)
-- ⏳ **Epic 1 - Story 1.2:** Database Schema: Users & Sessions (PRÓXIMO)
-- ⏳ **Epic 2:** Chat Core com IA
-- ⏳ **Epic 3:** Créditos & Pagamentos
+- ✅ **Epic 1:** Foundation & Auth (COMPLETO)
+- ⏳ **Epic 2:** Chat Core com IA (IN PROGRESS)
+- ⏳ **Epic 3:** Créditos & Pagamentos (PARCIAL)
+- ⏳ **Epic 4:** Admin & Operações (PARCIAL)
+- ⏳ **Epic 6:** Quiz & Onboarding (TODO)
+- ⏳ **Epic 7:** Video Processing (TODO)
 
 ---
 
-## 🛠️ Tech Stack
+## Tech Stack
 
-### Frontend
+| Camada | Tecnologia |
+|--------|-----------|
+| Frontend | Next.js 14, React 18, TypeScript (strict), Tailwind CSS |
+| Backend | Next.js API Routes, Prisma ORM |
+| Database | PostgreSQL 17 (Docker) |
+| Auth | NextAuth.js v5 (email/password, JWT) |
+| AI | OpenAI (GPT-4o, GPT-4o-mini) |
+| Payments | Stripe (Checkout + Webhooks) |
+| Monorepo | Turborepo + pnpm |
+| CI/CD | GitHub Actions |
 
-- **Next.js 14** - Framework React com App Router e Server Components
-- **TypeScript** - Strict mode, sem `any`
-- **Tailwind CSS** - Utility-first CSS com tema dark
-- **Shadcn/UI** - Componentes customizáveis (será adicionado em stories futuras)
-
-### Backend
-
-- **Next.js API Routes** - Backend integrado, sem servidor separado
-- **Prisma** - ORM type-safe para PostgreSQL
-- **PostgreSQL 16** - Banco de dados relacional self-hosted
-
-### Infraestrutura
-
-- **Turborepo** - Monorepo build system
-- **Docker Compose** - Containerização local
-- **GitHub Actions** - CI/CD automatizado
-
-### Princípio: Zero Lock-in
-
-Toda a infraestrutura pode ser migrada sem parar a operação. Sem Vercel, Railway, Render ou qualquer PaaS em produção.
+**Princípio: Zero Lock-in** — Toda a infraestrutura pode ser migrada sem parar a operação.
 
 ---
 
-## 🚀 Setup Local
+## Setup Local
 
 ### Pré-requisitos
 
 - **Node.js** 20.x ou superior
-- **npm** 10.x ou superior
+- **pnpm** 10.x ou superior
 - **Docker** e Docker Compose
 - **Git**
 
@@ -71,15 +63,10 @@ Toda a infraestrutura pode ser migrada sem parar a operação. Sem Vercel, Railw
    cp .env.example .env
    ```
 
-   Edite o `.env` e gere o `NEXTAUTH_SECRET`:
-   - No Windows (PowerShell):
-     ```powershell
-     $bytes = new-object Byte[] 32; (new-object Security.Cryptography.RNGCryptoServiceProvider).GetBytes($bytes); [Convert]::ToBase64String($bytes)
-     ```
-   - No Unix (OpenSSL):
-     ```bash
-     openssl rand -base64 32
-     ```
+   Edite o `.env` e gere o `AUTH_SECRET`:
+   ```bash
+   openssl rand -base64 32
+   ```
 
 3. **Inicie o PostgreSQL com Docker**
 
@@ -105,224 +92,123 @@ Toda a infraestrutura pode ser migrada sem parar a operação. Sem Vercel, Railw
    pnpm dev
    ```
 
-7. **Acesse a aplicação**
-   Abra [http://localhost:3000](http://localhost:3000) no seu navegador.
+7. **Acesse a aplicação** em [http://localhost:3000](http://localhost:3000)
 
 ---
 
-## 📦 Scripts Disponíveis
+## Scripts Disponíveis
 
-| Script               | Descrição                                                |
-| -------------------- | -------------------------------------------------------- |
-| `npm run dev`        | Inicia o servidor de desenvolvimento (Turbo)             |
-| `npm run build`      | Compila a aplicação para produção                        |
-| `npm run lint`       | Executa o linter em todos os pacotes                     |
-| `npm run typecheck`  | Verifica tipos TypeScript                                |
-| `npm run test`       | Executa os testes (será implementado em stories futuras) |
-| `npm run db:migrate` | Cria e aplica migrations do Prisma                       |
-| `npm run db:studio`  | Abre o Prisma Studio (GUI do banco)                      |
-| `npm run db:push`    | Envia schema direto para o banco (apenas dev)            |
+| Script | Descrição |
+|--------|-----------|
+| `pnpm dev` | Inicia o servidor de desenvolvimento (Turbo) |
+| `pnpm build` | Compila a aplicação para produção |
+| `pnpm lint` | Executa o linter em todos os pacotes |
+| `pnpm typecheck` | Verifica tipos TypeScript |
+| `pnpm test` | Executa os testes |
+| `pnpm db:migrate` | Cria e aplica migrations do Prisma |
+| `pnpm db:generate` | Regenera o Prisma Client |
+| `pnpm db:studio` | Abre o Prisma Studio (GUI do banco) |
+| `pnpm db:push` | Envia schema direto para o banco (apenas dev) |
 
 ---
 
-## 🏗️ Estrutura do Projeto
+## Estrutura do Projeto
 
 ```
 sol-saas/
 ├── apps/
 │   └── web/                    # Aplicação Next.js principal
-│       ├── src/
-│       │   ├── app/            # App Router do Next.js
-│       │   ├── components/     # Componentes React
-│       │   ├── lib/            # Utilitários e configs
-│       │   └── types/          # Tipos TypeScript
-│       ├── public/             # Assets estáticos
-│       ├── next.config.ts      # Configuração Next.js
-│       └── tailwind.config.ts  # Configuração Tailwind
+│       └── src/
+│           ├── app/            # App Router (pages + API routes)
+│           ├── components/     # Componentes React
+│           ├── lib/            # Utilitários e configs
+│           └── types/          # Tipos TypeScript
 ├── packages/
-│   └── db/                     # Pacote Prisma compartilhado
+│   └── db/                     # Pacote Prisma compartilhado (@sol/db)
 │       ├── prisma/
 │       │   └── schema.prisma   # Schema do banco
-│       └── src/
-│           └── index.ts        # Cliente Prisma (singleton)
+│       └── src/                # Repo functions (credits, pricing, admin)
 ├── docs/                       # Documentação do projeto
 │   ├── framework/              # Tech stack, coding standards
-│   ├── stories/                # User stories do AIOS
-│   ├── prd.md                  # Product Requirements
-│   └── architecture.md         # Documento de arquitetura
+│   ├── stories/                # User stories por epic
+│   ├── workflows/              # Workflows de automação
+│   ├── prd.md                  # Product Requirements v9.0
+│   └── architecture.md         # Arquitetura v7.0
 ├── .github/workflows/          # CI/CD GitHub Actions
-├── docker-compose.yml          # PostgreSQL containerizado
+├── docker-compose.yml          # PostgreSQL 17 containerizado
 ├── turbo.json                  # Configuração Turborepo
-└── package.json                # Workspace raiz
+└── package.json                # Workspace raiz (pnpm)
 ```
 
 ---
 
-## 🔧 Desenvolvimento
+## Desenvolvimento
 
 ### Adicionando Migrations
 
-1. Modifique o `packages/db/prisma/schema.prisma`
-2. Execute:
-   ```bash
-   npm run db:migrate
-   ```
-3. Dê um nome descritivo para a migration quando solicitado
+```bash
+# 1. Modifique packages/db/prisma/schema.prisma
+# 2. Execute:
+pnpm db:migrate
+```
 
 ### Visualizando o Banco de Dados
 
 ```bash
-npm run db:studio
+pnpm db:studio
+# Abre em http://localhost:5555
 ```
-
-Abre o Prisma Studio em [http://localhost:5555](http://localhost:5555)
-
-### Criando Componentes
-
-Componentes React vão em `apps/web/src/components/`. Use:
-
-- PascalCase para nomes de componentes
-- TypeScript strict (sem `any`)
-- Server Components por padrão (adicione `'use client'` apenas quando necessário)
 
 ### Padrões de Código
 
-Veja [docs/framework/coding-standards.md](docs/framework/coding-standards.md) para:
-
-- Nomenclatura de arquivos e variáveis
-- Estrutura de API Routes
-- Segurança e boas práticas
+Veja [docs/framework/coding-standards.md](docs/framework/coding-standards.md) para nomenclatura, estrutura de API Routes e boas práticas.
 
 ---
 
-## 🚢 Deploy
+## CI/CD
 
-### Build de Produção
+O projeto usa GitHub Actions (`.github/workflows/ci.yml`):
 
-```bash
-npm run build
-```
-
-### Deploy via Docker (produção)
-
-Instruções de deploy serão adicionadas em stories futuras. O projeto está preparado para deploy em VPS própria via Docker Compose.
+- **Trigger:** Push e PRs para `main`
+- **Pipeline:** Install → Prisma Generate → Lint → Typecheck → Build
+- **Serviços:** PostgreSQL 17 Alpine
+- **Cache:** pnpm store
 
 ---
 
-## 🧪 CI/CD
+## Documentação
 
-O projeto usa GitHub Actions para CI/CD automático:
-
-- **Trigger:** Pull Requests para `main` e pushes para `main`
-- **Pipeline:**
-  1. Checkout código
-  2. Setup Node.js 20
-  3. Install dependencies
-  4. Generate Prisma Client
-  5. Run lint
-  6. Run typecheck
-  7. Build aplicação
-
-Veja [.github/workflows/ci.yml](.github/workflows/ci.yml) para detalhes.
-
----
-
-## 📚 Documentação
-
-- [PRD (Product Requirements)](docs/prd.md)
-- [Arquitetura](docs/architecture.md)
+- [PRD v9.0](docs/prd.md)
+- [Arquitetura v7.0](docs/architecture.md)
 - [Tech Stack](docs/framework/tech-stack.md)
 - [Coding Standards](docs/framework/coding-standards.md)
 - [Source Tree](docs/framework/source-tree.md)
 
 ---
 
-## 🎯 Roadmap
-
-### Epic 1: Foundation & Auth (Em andamento)
-
-- ✅ Story 1.1 - Project Bootstrap & Infrastructure
-- ⏳ Story 1.2 - Database Schema: Users & Sessions
-- ⏳ Story 1.3 - Authentication: Register & Login
-- ⏳ Story 1.4 - Layout Shell & Dark Theme
-
-### Epic 2: Chat Core com IA (Futuro)
-
-- Chat com streaming OpenAI
-- Persistência de histórico
-- Estado de créditos insuficientes
-
-### Epic 3: Créditos & Pagamentos (Futuro)
-
-- Sistema de créditos
-- Stripe Checkout + PIX
-- Webhooks e painel do usuário
-
----
-
-## 👥 Equipe
-
-**Desenvolvido por:** Eden Corporate
-**Produto:** SOL (Space Online Learning)
-**Target:** Alunos do programa Space
-
----
-
-## 📄 Licença
-
-Privado - Eden Corporate. Todos os direitos reservados.
-
----
-
-## 🆘 Troubleshooting
+## Troubleshooting
 
 ### PostgreSQL não conecta
 
-1. Verifique se o container está rodando:
-
-   ```bash
-   docker compose ps
-   ```
-
-2. Reinicie o container:
-
-   ```bash
-   docker compose restart postgres
-   ```
-
-3. Verifique os logs:
-   ```bash
-   docker compose logs postgres
-   ```
+```bash
+docker compose ps          # Verificar se container está rodando
+docker compose restart postgres  # Reiniciar
+docker compose logs postgres     # Ver logs
+```
 
 ### Erro no Prisma Client
 
-1. Regenere o cliente:
-
-   ```bash
-   cd packages/db && npx prisma generate
-   ```
-
-2. Se persistir, delete `node_modules` e reinstale:
-   ```bash
-   rm -rf node_modules package-lock.json
-   npm install
-   ```
+```bash
+pnpm db:generate           # Regenerar cliente
+```
 
 ### Build falhando
 
-1. Execute typecheck para ver erros:
-
-   ```bash
-   npm run typecheck
-   ```
-
-2. Limpe cache do Turbo:
-   ```bash
-   rm -rf .turbo
-   npm run build
-   ```
+```bash
+pnpm typecheck             # Ver erros de tipagem
+rm -rf .turbo && pnpm build  # Limpar cache do Turbo
+```
 
 ---
 
-**✨ Pronto para desenvolvimento!** Se tiver dúvidas, consulte a [documentação](docs/) ou abra uma issue.
+**Eden Corporate** — SOL (Space Online Learning) — Todos os direitos reservados.

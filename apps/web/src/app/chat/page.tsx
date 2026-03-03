@@ -8,6 +8,7 @@ import dynamic from 'next/dynamic';
 import Logo from '@/components/Logo';
 import { formatDistanceToNow } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
+import ReactMarkdown from 'react-markdown';
 
 const LottieLogo = dynamic(() => import('@/components/LottieLogo'), { ssr: false });
 
@@ -177,11 +178,11 @@ function MessageBubble({ message }: { message: Message }) {
         )}
 
         <div className={`relative rounded-2xl px-4 py-3 ${
-          isUser ? 'bg-solar-500/10 text-foreground' : 'group bg-background-secondary text-foreground'
+          isUser ? 'border border-solar-500/30 bg-solar-500/10 text-foreground' : 'group border border-solar-800/30 bg-background-secondary text-foreground'
         }`}>
-          <p className="whitespace-pre-wrap break-words text-sm leading-relaxed">
-            {message.content}
-          </p>
+          <div className="prose prose-sm prose-invert max-w-none break-words text-sm leading-relaxed [&>p]:mb-2 [&>p:last-child]:mb-0 [&>ul]:mb-2 [&>ol]:mb-2">
+            <ReactMarkdown>{message.content}</ReactMarkdown>
+          </div>
 
           {!isUser && message.content && (
             <button
@@ -223,6 +224,7 @@ function LoadingDots() {
           className="inline-flex items-center gap-1.5 rounded-2xl border border-solar-800/20 bg-background-secondary px-4 py-3"
           aria-label="Carregando resposta"
         >
+          <span className="text-xs text-foreground-muted">Digitando</span>
           <div className="loading-dot" />
           <div className="loading-dot" />
           <div className="loading-dot" />
@@ -454,21 +456,21 @@ function ChatInput({
 
 // ── Main ChatPage ────────────────────────────────────────────
 export default function ChatPage() {
-  const { balanceCents, updateCredits } = useCredits();
+  const { credits, updateCredits } = useCredits();
   const searchParams = useSearchParams();
   const [messages, setMessages] = useState<Message[]>([]);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [currentConversationId, setCurrentConversationId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [isLoadingConversations, setIsLoadingConversations] = useState(true);
-  const [noCredits, setNoCredits] = useState(balanceCents <= 0);
+  const [noCredits, setNoCredits] = useState(credits <= 0);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [initialIdHandled, setInitialIdHandled] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    setNoCredits(balanceCents <= 0);
-  }, [balanceCents]);
+    setNoCredits(credits <= 0);
+  }, [credits]);
 
   // Load conversations
   useEffect(() => {
@@ -615,9 +617,9 @@ export default function ChatPage() {
         throw new Error(`HTTP error! status: ${res.status}`);
       }
 
-      const balanceHeader = res.headers.get('X-Balance-Cents');
-      if (balanceHeader !== null) {
-        const parsed = parseInt(balanceHeader, 10);
+      const creditsHeader = res.headers.get('X-Credits-Remaining');
+      if (creditsHeader !== null) {
+        const parsed = parseInt(creditsHeader, 10);
         if (!isNaN(parsed)) {
           updateCredits(parsed);
           setNoCredits(parsed <= 0);
@@ -673,9 +675,9 @@ export default function ChatPage() {
                     );
                   }
                 }
-                if (typeof data.balanceCents === 'number') {
-                  updateCredits(data.balanceCents);
-                  setNoCredits(data.balanceCents <= 0);
+                if (typeof data.credits === 'number') {
+                  updateCredits(data.credits);
+                  setNoCredits(data.credits <= 0);
                 }
                 setLoading(false);
                 break;

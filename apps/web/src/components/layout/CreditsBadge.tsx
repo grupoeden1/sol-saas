@@ -3,8 +3,8 @@
 import { useCredits } from './CreditsProvider';
 
 export default function CreditsBadge() {
-  const { balanceCents, formatted } = useCredits();
-  const hasCredits = balanceCents > 0;
+  const { credits, formatted } = useCredits();
+  const hasCredits = credits > 0;
 
   return (
     <div

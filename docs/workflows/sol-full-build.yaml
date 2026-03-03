@@ -1,0 +1,763 @@
+##############################################################################
+# SOL FULL IMPLEMENTATION WORKFLOW
+# Execução: *workflow sol-full-build
+#
+# Escopo: Implementação completa de todas as stories pendentes (Epics 1-4)
+# seguida dos novos epics (6: Quiz & Onboarding, 7: Video Processing).
+#
+# Padrão por story:
+#   1. @architect → *create-plan (gera implementation.yaml)
+#   2. @dev → *build {story-id} (implementação autônoma)
+#
+# Stories já implementadas (SKIP):
+#   1.1, 1.2, 1.3, 1.4, 2.1, 3.1, 3.3, 3.4, 3.5, 3.6, 4.1, P.1
+#
+# Justificativa dos SKIPs:
+#   1.1 — Turborepo, Docker, GitHub Actions já configurados no codebase
+#   1.2 — User, Session models já existem no Prisma
+#   1.3 — NextAuth v5 com email/password já funcional
+#   1.4 — AppLayout com header, dark theme, sidebar já implementados
+#   2.1 — Conversation, Message models já existem no Prisma
+#   3.1 — CreditTransaction, CreditPackage, PricingConfig já no schema
+#   3.3 — Stripe Checkout flow já implementado (/credits/buy)
+#   3.4 — Stripe Webhook handler já funcional (/api/webhooks/stripe)
+#   3.5 — User Dashboard já implementado (/dashboard)
+#   3.6 — Pricing Refactoring completo e aprovado pelo QA
+#   4.1 — Admin Dashboard já implementado (/admin)
+#   P.1 — Migration de créditos supersedida pela Story 3.6
+#
+# Pré-requisito: PRD v9.0, Architecture v7.0, Stories criadas pelo SM
+##############################################################################
+
+id: sol-full-build
+name: "SOL Full Implementation — Pendências + Quiz + Video"
+description: |
+  Workflow completo de implementação do SOL. Finaliza stories pendentes
+  dos Epics 1-4, depois implementa Pricing Admin (P.2/P.3), Epic 6
+  (Quiz & Onboarding) e Epic 7 (Video Processing). Cada story passa
+  por planejamento do Architect e build autônomo do Dev.
+version: "2.0"
+createdAt: "2026-03-03"
+updatedAt: "2026-03-03"
+createdBy: "@aios-master"
+status: ready
+
+sharedContext:
+  - docs/prd.md                        # PRD v9.0 (quiz-first)
+  - docs/architecture.md               # Architecture v7.0
+  - docs/framework/tech-stack.md
+  - docs/framework/coding-standards.md
+  - docs/framework/source-tree.md
+
+##############################################################################
+# WAVE 1 — INFRAESTRUTURA PENDENTE (Epic 1)
+# Story 1.1 já implementada (Bootstrap completo no codebase).
+# Apenas 1.5 (CI/CD & Docs) precisa ser finalizada.
+##############################################################################
+phases:
+
+  # ---- STORY 1.5: CI/CD & Docs ----
+  - id: plan-1.5
+    name: "Plan 1.5 — CI/CD & Docs"
+    agent: "@architect"
+    command: "*create-plan"
+    blocking: true
+    prompt: |
+      @architect — Crie o implementation.yaml para a Story 1.5
+      (CI/CD Pipeline & Documentation).
+      Leia docs/stories/epic-1/story-1.5.md e docs/architecture.md v7.0.
+      Verifique .github/workflows/ existente antes de planejar.
+      Gere o arquivo em docs/stories/epic-1/story-1.5.implementation.yaml
+    output:
+      file: "docs/stories/epic-1/story-1.5.implementation.yaml"
+
+  - id: build-1.5
+    name: "Build 1.5 — CI/CD & Docs"
+    agent: "@dev"
+    command: "*build 1.5"
+    blocking: true
+    dependsOn: [plan-1.5]
+    prompt: |
+      @dev — Execute *build 1.5
+      Implementation plan em docs/stories/epic-1/story-1.5.implementation.yaml
+      Story em docs/stories/epic-1/story-1.5.md
+      Siga coding standards. TypeScript strict. Sem any.
+
+  ##############################################################################
+  # WAVE 2 — CHAT CORE PENDENTE (Epic 2)
+  # 2.2 e 2.3 estão IN PROGRESS (código parcial existe).
+  # 2.4 e 2.5 em DRAFT (sem código).
+  # Chat é feature COMPLEMENTAR no modelo quiz-first.
+  ##############################################################################
+
+  # ---- STORY 2.2: Chat UI ----
+  - id: plan-2.2
+    name: "Plan 2.2 — Chat UI (complementar)"
+    agent: "@architect"
+    command: "*create-plan"
+    blocking: true
+    dependsOn: [build-1.5]
+    prompt: |
+      @architect — Crie o implementation.yaml para a Story 2.2
+      (Chat UI: Interface e Histórico).
+      IMPORTANTE: O chat agora é feature COMPLEMENTAR, não tela principal.
+      Leia docs/stories/epic-2/story-2.2-chat-ui.md e docs/architecture.md v7.0.
+      Story IN PROGRESS — verifique código existente em apps/web/src/app/chat/
+      e apps/web/src/components/ antes de planejar.
+      Gere o arquivo em docs/stories/epic-2/story-2.2.implementation.yaml
+    output:
+      file: "docs/stories/epic-2/story-2.2.implementation.yaml"
+
+  - id: build-2.2
+    name: "Build 2.2 — Chat UI"
+    agent: "@dev"
+    command: "*build 2.2"
+    blocking: true
+    dependsOn: [plan-2.2]
+    prompt: |
+      @dev — Execute *build 2.2
+      Story IN PROGRESS — verifique código existente, complete o que falta.
+      Implementation plan em docs/stories/epic-2/story-2.2.implementation.yaml
+      Story em docs/stories/epic-2/story-2.2-chat-ui.md
+
+  # ---- STORY 2.3: OpenAI Streaming ----
+  - id: plan-2.3
+    name: "Plan 2.3 — OpenAI Streaming"
+    agent: "@architect"
+    command: "*create-plan"
+    blocking: true
+    dependsOn: [build-2.2]
+    prompt: |
+      @architect — Crie o implementation.yaml para a Story 2.3
+      (OpenAI Integration com Streaming).
+      Story IN PROGRESS — verifique código existente em apps/web/src/app/api/chat/.
+      Leia docs/stories/epic-2/story-2.3-openai-integration.md e docs/architecture.md v7.0.
+      Gere o arquivo em docs/stories/epic-2/story-2.3.implementation.yaml
+    output:
+      file: "docs/stories/epic-2/story-2.3.implementation.yaml"
+
+  - id: build-2.3
+    name: "Build 2.3 — OpenAI Streaming"
+    agent: "@dev"
+    command: "*build 2.3"
+    blocking: true
+    dependsOn: [plan-2.3]
+    prompt: |
+      @dev — Execute *build 2.3
+      Story IN PROGRESS — complete o que falta.
+      Implementation plan em docs/stories/epic-2/story-2.3.implementation.yaml
+      Story em docs/stories/epic-2/story-2.3-openai-integration.md
+
+  # ---- STORY 2.4: Créditos Insuficientes ----
+  - id: plan-2.4
+    name: "Plan 2.4 — Créditos Insuficientes"
+    agent: "@architect"
+    command: "*create-plan"
+    blocking: true
+    dependsOn: [build-2.3]
+    prompt: |
+      @architect — Crie o implementation.yaml para a Story 2.4
+      (Estado Inline de Créditos Insuficientes).
+      Leia docs/stories/epic-2/story-2.4-inline-credits-state.md e docs/architecture.md v7.0.
+      Gere o arquivo em docs/stories/epic-2/story-2.4.implementation.yaml
+    output:
+      file: "docs/stories/epic-2/story-2.4.implementation.yaml"
+
+  - id: build-2.4
+    name: "Build 2.4 — Créditos Insuficientes"
+    agent: "@dev"
+    command: "*build 2.4"
+    blocking: true
+    dependsOn: [plan-2.4]
+    prompt: |
+      @dev — Execute *build 2.4
+      Implementation plan em docs/stories/epic-2/story-2.4.implementation.yaml
+      Story em docs/stories/epic-2/story-2.4-inline-credits-state.md
+
+  # ---- STORY 2.5: Anexos ----
+  - id: plan-2.5
+    name: "Plan 2.5 — Anexos no Chat"
+    agent: "@architect"
+    command: "*create-plan"
+    blocking: true
+    dependsOn: [build-2.4]
+    prompt: |
+      @architect — Crie o implementation.yaml para a Story 2.5
+      (Suporte a Anexos de Arquivos no Chat).
+      Leia docs/stories/epic-2/story-2.5-chat-attachments.md e docs/architecture.md v7.0.
+      Gere o arquivo em docs/stories/epic-2/story-2.5.implementation.yaml
+    output:
+      file: "docs/stories/epic-2/story-2.5.implementation.yaml"
+
+  - id: build-2.5
+    name: "Build 2.5 — Anexos no Chat"
+    agent: "@dev"
+    command: "*build 2.5"
+    blocking: true
+    dependsOn: [plan-2.5]
+    prompt: |
+      @dev — Execute *build 2.5
+      Implementation plan em docs/stories/epic-2/story-2.5.implementation.yaml
+      Story em docs/stories/epic-2/story-2.5-chat-attachments.md
+
+  ##############################################################################
+  # WAVE 3 — CRÉDITOS PENDENTE (Epic 3)
+  # 3.1, 3.3, 3.4 já implementados. 3.6 (Pricing Refactoring) DONE + QA PASS.
+  # Apenas 3.2 (Dedução de créditos por tokens) falta implementar.
+  ##############################################################################
+
+  # ---- STORY 3.2: Dedução de Créditos ----
+  - id: plan-3.2
+    name: "Plan 3.2 — Dedução de Créditos por Tokens"
+    agent: "@architect"
+    command: "*create-plan"
+    blocking: true
+    dependsOn: [build-2.5]
+    prompt: |
+      @architect — Crie o implementation.yaml para a Story 3.2
+      (Dedução de Créditos Baseada em Tokens no Chat).
+      Gate pré-chamada + dedução real pós-streaming.
+      CONTEXTO: Schema de créditos (3.1) e pricing refactoring (3.6) já
+      estão implementados. Funções addCredits/deductCredits existem em
+      packages/db/src/credits.ts. calculateCredits em packages/db/src/pricing.ts.
+      Leia docs/stories/epic-3/story-3.2-chat-credit-deduction.md e docs/architecture.md v7.0.
+      Gere o arquivo em docs/stories/epic-3/story-3.2.implementation.yaml
+    output:
+      file: "docs/stories/epic-3/story-3.2.implementation.yaml"
+
+  - id: build-3.2
+    name: "Build 3.2 — Dedução de Créditos"
+    agent: "@dev"
+    command: "*build 3.2"
+    blocking: true
+    dependsOn: [plan-3.2]
+    prompt: |
+      @dev — Execute *build 3.2
+      CONTEXTO: Funções de créditos já existem em packages/db/src/credits.ts
+      e packages/db/src/pricing.ts. Integre ao fluxo de chat (api/chat/route.ts).
+      Implementation plan em docs/stories/epic-3/story-3.2.implementation.yaml
+      Story em docs/stories/epic-3/story-3.2-chat-credit-deduction.md
+
+  ##############################################################################
+  # WAVE 4 — ADMIN PENDENTE (Epic 4)
+  # 4.1 já implementada. 4.2 IN PROGRESS — verificar se precisa completar.
+  ##############################################################################
+
+  # ---- STORY 4.2: Admin Console Métricas ----
+  - id: plan-4.2
+    name: "Plan 4.2 — Admin Console Métricas"
+    agent: "@architect"
+    command: "*create-plan"
+    blocking: true
+    dependsOn: [build-3.2]
+    prompt: |
+      @architect — Crie o implementation.yaml para a Story 4.2
+      (Admin Console: Métricas Operacionais e Financeiras).
+      Story IN PROGRESS — verifique código existente em apps/web/src/app/admin/
+      e packages/db/src/admin.ts. Pode já estar completa — audite contra os ACs.
+      Leia docs/stories/epic-4/story-4.2-admin-console.md e docs/architecture.md v7.0.
+      Gere o arquivo em docs/stories/epic-4/story-4.2.implementation.yaml
+    output:
+      file: "docs/stories/epic-4/story-4.2.implementation.yaml"
+
+  - id: build-4.2
+    name: "Build 4.2 — Admin Console"
+    agent: "@dev"
+    command: "*build 4.2"
+    blocking: true
+    dependsOn: [plan-4.2]
+    prompt: |
+      @dev — Execute *build 4.2
+      Story IN PROGRESS — pode estar quase completa.
+      Verifique código existente e complete apenas o que falta.
+      Implementation plan em docs/stories/epic-4/story-4.2.implementation.yaml
+      Story em docs/stories/epic-4/story-4.2-admin-console.md
+
+  ##############################################################################
+  # WAVE 5 — PRICING ADMIN (Stories P.2, P.3)
+  # P.1 (Migration) já supersedida pela Story 3.6.
+  # P.2 e P.3 podem sobrepor com código existente em /admin/pricing.
+  # Verificar antes de implementar.
+  ##############################################################################
+
+  # ---- STORY P.2: Admin Pricing Panel ----
+  - id: plan-P.2
+    name: "Plan P.2 — Admin Pricing Panel & Simulador"
+    agent: "@architect"
+    command: "*create-plan"
+    blocking: true
+    dependsOn: [build-4.2]
+    prompt: |
+      @architect — Crie o implementation.yaml para a Story P.2
+      (Admin: Painel de Precificação com Simulador).
+      ATENÇÃO: A Story 3.6 (Pricing Refactoring) já foi implementada e
+      pode ter coberto parte desta story. Já existe /admin/pricing no codebase.
+      Audite o código existente contra os ACs da story antes de planejar.
+      Se todos os ACs já estiverem satisfeitos, documente no plan e marque SKIP.
+      Leia docs/stories/pricing-refactoring/story-P.2-admin-pricing-panel.md
+      e docs/architecture.md v7.0.
+      Gere o arquivo em docs/stories/pricing-refactoring/story-P.2.implementation.yaml
+    output:
+      file: "docs/stories/pricing-refactoring/story-P.2.implementation.yaml"
+
+  - id: build-P.2
+    name: "Build P.2 — Admin Pricing Panel"
+    agent: "@dev"
+    command: "*build P.2"
+    blocking: true
+    dependsOn: [plan-P.2]
+    prompt: |
+      @dev — Execute *build P.2
+      ATENÇÃO: Verifique se 3.6 já cobriu esta story.
+      Código existente em apps/web/src/app/admin/pricing/.
+      Implemente APENAS o que falta.
+      Implementation plan em docs/stories/pricing-refactoring/story-P.2.implementation.yaml
+      Story em docs/stories/pricing-refactoring/story-P.2-admin-pricing-panel.md
+
+  # ---- STORY P.3: Admin Metrics Update ----
+  - id: plan-P.3
+    name: "Plan P.3 — Admin Console Métricas Atualizadas"
+    agent: "@architect"
+    command: "*create-plan"
+    blocking: true
+    dependsOn: [build-P.2]
+    prompt: |
+      @architect — Crie o implementation.yaml para a Story P.3
+      (Atualizar Admin Console: Métricas para novo modelo de créditos).
+      ATENÇÃO: 3.6 e 4.2 podem já ter coberto parte dos ACs.
+      Audite contra código existente antes de planejar.
+      Leia docs/stories/pricing-refactoring/story-P.3-admin-console-metrics.md
+      e docs/architecture.md v7.0.
+      Gere o arquivo em docs/stories/pricing-refactoring/story-P.3.implementation.yaml
+    output:
+      file: "docs/stories/pricing-refactoring/story-P.3.implementation.yaml"
+
+  - id: build-P.3
+    name: "Build P.3 — Admin Metrics Update"
+    agent: "@dev"
+    command: "*build P.3"
+    blocking: true
+    dependsOn: [plan-P.3]
+    prompt: |
+      @dev — Execute *build P.3
+      Verifique sobreposição com 3.6 e 4.2 antes de implementar.
+      Implementation plan em docs/stories/pricing-refactoring/story-P.3.implementation.yaml
+      Story em docs/stories/pricing-refactoring/story-P.3-admin-console-metrics.md
+
+  ##############################################################################
+  # WAVE 6 — QUIZ & ONBOARDING (Epic 6)
+  # Novo epic. Todas as stories são novas (TODO).
+  # Ordem: schema → onboarding → quiz engine → UI → geração → listagem → chat
+  ##############################################################################
+
+  # ---- STORY 6.1: Schema Onboarding & Quiz ----
+  - id: plan-6.1
+    name: "Plan 6.1 — Schema Onboarding & Quiz"
+    agent: "@architect"
+    command: "*create-plan"
+    blocking: true
+    dependsOn: [build-P.3]
+    prompt: |
+      @architect — Crie o implementation.yaml para a Story 6.1
+      (Database Schema: Onboarding & Quiz).
+      Modelos: OnboardingProfile, QuizSession, QuizAnswer.
+      Enums: Path1, Path2, QuizStatus, QuizSection, AnswerType.
+      Relação QuizSession → Conversation (campo quizSessionId nullable).
+      Leia docs/stories/epic-6/story-6.1.md e docs/architecture.md v7.0.
+      Schema existente em packages/db/prisma/schema.prisma.
+      Gere o arquivo em docs/stories/epic-6/story-6.1.implementation.yaml
+    output:
+      file: "docs/stories/epic-6/story-6.1.implementation.yaml"
+
+  - id: build-6.1
+    name: "Build 6.1 — Schema Onboarding & Quiz"
+    agent: "@dev"
+    command: "*build 6.1"
+    blocking: true
+    dependsOn: [plan-6.1]
+    prompt: |
+      @dev — Execute *build 6.1
+      Adicione novos modelos ao schema existente.
+      prisma generate + prisma migrate dev devem rodar sem erros.
+      Implementation plan em docs/stories/epic-6/story-6.1.implementation.yaml
+      Story em docs/stories/epic-6/story-6.1.md
+
+  # ---- STORY 6.2: Onboarding Persistente ----
+  - id: plan-6.2
+    name: "Plan 6.2 — Onboarding Persistente"
+    agent: "@architect"
+    command: "*create-plan"
+    blocking: true
+    dependsOn: [build-6.1]
+    prompt: |
+      @architect — Crie o implementation.yaml para a Story 6.2
+      (Onboarding: Perfil Persistente do Aluno).
+      CRUD de OnboardingProfile. 9 perguntas do onboarding (O1-O9).
+      Múltiplos perfis por usuário. Seleção antes do quiz.
+      Leia docs/stories/epic-6/story-6.2.md e docs/architecture.md v7.0.
+      Referência: PRD v9.0 — seção "Catálogo Completo de Perguntas — Seção 1: Onboarding"
+      Gere o arquivo em docs/stories/epic-6/story-6.2.implementation.yaml
+    output:
+      file: "docs/stories/epic-6/story-6.2.implementation.yaml"
+
+  - id: build-6.2
+    name: "Build 6.2 — Onboarding Persistente"
+    agent: "@dev"
+    command: "*build 6.2"
+    blocking: true
+    dependsOn: [plan-6.2]
+    prompt: |
+      @dev — Execute *build 6.2
+      API routes: /api/onboarding (GET/POST), /api/onboarding/[id] (PUT/DELETE).
+      Página: /onboarding com formulário das 9 perguntas.
+      Implementation plan em docs/stories/epic-6/story-6.2.implementation.yaml
+      Story em docs/stories/epic-6/story-6.2.md
+
+  # ---- STORY 6.3: Quiz Engine ----
+  - id: plan-6.3
+    name: "Plan 6.3 — Quiz Engine & Lógica Condicional"
+    agent: "@architect"
+    command: "*create-plan"
+    blocking: true
+    dependsOn: [build-6.2]
+    prompt: |
+      @architect — Crie o implementation.yaml para a Story 6.3
+      (Quiz Engine: Renderização e Lógica Condicional).
+      48 perguntas em TypeScript (lib/quiz/questions.ts). showWhen conditions.
+      Ramificações: Q1 (AD/ORGANIC), Q2 (MODELED/FROM_SCRATCH).
+      Barra de progresso. Salvamento via API por resposta.
+      Leia docs/stories/epic-6/story-6.3.md e docs/architecture.md v7.0.
+      REFERÊNCIA CRÍTICA: PRD v9.0 — "Catálogo Completo de Perguntas"
+      contém TODAS as 48 perguntas, tipos, opções e lógica condicional.
+      Gere o arquivo em docs/stories/epic-6/story-6.3.implementation.yaml
+    output:
+      file: "docs/stories/epic-6/story-6.3.implementation.yaml"
+
+  - id: build-6.3
+    name: "Build 6.3 — Quiz Engine"
+    agent: "@dev"
+    command: "*build 6.3"
+    blocking: true
+    dependsOn: [plan-6.3]
+    prompt: |
+      @dev — Execute *build 6.3
+      ATENÇÃO: Esta é a story mais complexa do Epic 6.
+      A definição das 48 perguntas com tipos, opções e condições
+      deve vir do PRD v9.0 (seção "Catálogo Completo de Perguntas").
+      Crie: lib/quiz/questions.ts e lib/quiz/conditions.ts.
+      APIs: POST /api/quiz/answer, GET /api/quiz/session/[id].
+      Implementation plan em docs/stories/epic-6/story-6.3.implementation.yaml
+      Story em docs/stories/epic-6/story-6.3.md
+
+  # ---- STORY 6.4: Quiz UI ----
+  - id: plan-6.4
+    name: "Plan 6.4 — Quiz UI Mobile & Desktop"
+    agent: "@architect"
+    command: "*create-plan"
+    blocking: true
+    dependsOn: [build-6.3]
+    prompt: |
+      @architect — Crie o implementation.yaml para a Story 6.4
+      (Quiz UI: Interface Mobile e Desktop).
+      Dual layout. Sidebar com progresso por seção.
+      Tipos de pergunta: textarea, radio cards, checkbox cards, upload.
+      Dark/solar theme. Responsivo.
+      Leia docs/stories/epic-6/story-6.4.md e docs/architecture.md v7.0.
+      Referência visual: docs/quiz-structure-v2.html (mockups).
+      Gere o arquivo em docs/stories/epic-6/story-6.4.implementation.yaml
+    output:
+      file: "docs/stories/epic-6/story-6.4.implementation.yaml"
+
+  - id: build-6.4
+    name: "Build 6.4 — Quiz UI"
+    agent: "@dev"
+    command: "*build 6.4"
+    blocking: true
+    dependsOn: [plan-6.4]
+    prompt: |
+      @dev — Execute *build 6.4
+      Referência visual: docs/quiz-structure-v2.html (mockups mobile + desktop).
+      Componentes: components/quiz/quiz-engine.tsx, components/quiz/question-types/*.tsx.
+      Implementation plan em docs/stories/epic-6/story-6.4.implementation.yaml
+      Story em docs/stories/epic-6/story-6.4.md
+
+  # ---- STORY 6.5: Geração de Roteiro ----
+  - id: plan-6.5
+    name: "Plan 6.5 — Geração de Roteiro via Quiz"
+    agent: "@architect"
+    command: "*create-plan"
+    blocking: true
+    dependsOn: [build-6.4]
+    prompt: |
+      @architect — Crie o implementation.yaml para a Story 6.5
+      (Geração de Roteiro via Quiz).
+      POST /api/quiz/generate. Coleta contexto completo (onboarding + quiz answers).
+      4 system prompts por combinação de caminhos (path1 × path2).
+      Streaming SSE. Gate de créditos (reutiliza padrão da Story 3.2).
+      Cria Conversation com quizSessionId.
+      Leia docs/stories/epic-6/story-6.5.md e docs/architecture.md v7.0.
+      Gere o arquivo em docs/stories/epic-6/story-6.5.implementation.yaml
+    output:
+      file: "docs/stories/epic-6/story-6.5.implementation.yaml"
+
+  - id: build-6.5
+    name: "Build 6.5 — Geração de Roteiro"
+    agent: "@dev"
+    command: "*build 6.5"
+    blocking: true
+    dependsOn: [plan-6.5]
+    prompt: |
+      @dev — Execute *build 6.5
+      Reutiliza infra de streaming SSE do Epic 2 (api/chat/route.ts como referência).
+      Gate de créditos idêntico ao chat (Story 3.2).
+      Crie lib/quiz/prompt-builder.ts para montar prompts por combinação de caminhos.
+      Implementation plan em docs/stories/epic-6/story-6.5.implementation.yaml
+      Story em docs/stories/epic-6/story-6.5.md
+
+  # ---- STORY 6.6: Meus Roteiros ----
+  - id: plan-6.6
+    name: "Plan 6.6 — Meus Roteiros"
+    agent: "@architect"
+    command: "*create-plan"
+    blocking: true
+    dependsOn: [build-6.5]
+    prompt: |
+      @architect — Crie o implementation.yaml para a Story 6.6
+      ("Meus Roteiros": Listagem e Visualização).
+      Página /roteiros. Lista Conversations com quizSessionId.
+      Título, data, caminho (path1+path2), status do quiz.
+      Renomear "Conversas" → "Roteiros" na UI.
+      Leia docs/stories/epic-6/story-6.6.md e docs/architecture.md v7.0.
+      Gere o arquivo em docs/stories/epic-6/story-6.6.implementation.yaml
+    output:
+      file: "docs/stories/epic-6/story-6.6.implementation.yaml"
+
+  - id: build-6.6
+    name: "Build 6.6 — Meus Roteiros"
+    agent: "@dev"
+    command: "*build 6.6"
+    blocking: true
+    dependsOn: [plan-6.6]
+    prompt: |
+      @dev — Execute *build 6.6
+      Página /roteiros substitui /dashboard como tela principal do aluno.
+      Implementation plan em docs/stories/epic-6/story-6.6.implementation.yaml
+      Story em docs/stories/epic-6/story-6.6.md
+
+  # ---- STORY 6.7: Chat de Iteração ----
+  - id: plan-6.7
+    name: "Plan 6.7 — Chat de Iteração sobre Roteiro"
+    agent: "@architect"
+    command: "*create-plan"
+    blocking: true
+    dependsOn: [build-6.6]
+    prompt: |
+      @architect — Crie o implementation.yaml para a Story 6.7
+      (Chat de Iteração sobre Roteiro).
+      Reutiliza componentes de chat do Epic 2.
+      System prompt enriquecido com: contexto do quiz + roteiro gerado.
+      Créditos deduzidos por mensagem (mesmo padrão Story 3.2).
+      Leia docs/stories/epic-6/story-6.7.md e docs/architecture.md v7.0.
+      Gere o arquivo em docs/stories/epic-6/story-6.7.implementation.yaml
+    output:
+      file: "docs/stories/epic-6/story-6.7.implementation.yaml"
+
+  - id: build-6.7
+    name: "Build 6.7 — Chat de Iteração"
+    agent: "@dev"
+    command: "*build 6.7"
+    blocking: true
+    dependsOn: [plan-6.7]
+    prompt: |
+      @dev — Execute *build 6.7
+      Reutiliza: chat UI (2.2), streaming (2.3), créditos (3.2).
+      Acessível a partir de /roteiros/[id] (visualização do roteiro).
+      Implementation plan em docs/stories/epic-6/story-6.7.implementation.yaml
+      Story em docs/stories/epic-6/story-6.7.md
+
+  ##############################################################################
+  # WAVE 7 — VIDEO PROCESSING (Epic 7)
+  # Novo epic. Infraestrutura pesada (FFmpeg, AssemblyAI).
+  # Ordem: infra → schema → upload UI → pipeline transcrição → análise IA
+  ##############################################################################
+
+  # ---- STORY 7.1: Infra Video Processing ----
+  - id: plan-7.1
+    name: "Plan 7.1 — Infra Video Processing"
+    agent: "@architect"
+    command: "*create-plan"
+    blocking: true
+    dependsOn: [build-6.7]
+    prompt: |
+      @architect — Crie o implementation.yaml para a Story 7.1
+      (Infraestrutura de Processamento de Vídeo).
+      Docker: FFmpeg no container. Temp dir /tmp/sol-uploads/. Cleanup try/finally.
+      AssemblyAI SDK. Novas env vars (ASSEMBLYAI_API_KEY, VIDEO_MAX_*).
+      Limites: 100MB, 10min duração, timeout 3min processamento.
+      Leia docs/stories/epic-7/story-7.1.md e docs/architecture.md v7.0.
+      Gere o arquivo em docs/stories/epic-7/story-7.1.implementation.yaml
+    output:
+      file: "docs/stories/epic-7/story-7.1.implementation.yaml"
+
+  - id: build-7.1
+    name: "Build 7.1 — Infra Video"
+    agent: "@dev"
+    command: "*build 7.1"
+    blocking: true
+    dependsOn: [plan-7.1]
+    prompt: |
+      @dev — Execute *build 7.1
+      Atualizar docker-compose.yml e/ou Dockerfile com FFmpeg.
+      Instalar assemblyai SDK. Configurar temp dir e cleanup.
+      Adicionar env vars ao .env.example.
+      Implementation plan em docs/stories/epic-7/story-7.1.implementation.yaml
+      Story em docs/stories/epic-7/story-7.1.md
+
+  # ---- STORY 7.2: Schema Video Analysis ----
+  - id: plan-7.2
+    name: "Plan 7.2 — Schema Video Analysis"
+    agent: "@architect"
+    command: "*create-plan"
+    blocking: true
+    dependsOn: [build-7.1]
+    prompt: |
+      @architect — Crie o implementation.yaml para a Story 7.2
+      (Database Schema: Video Analysis).
+      Modelo VideoAnalysis com: id, quizAnswerId (FK), processingStatus (enum),
+      originalUrl, transcription, frameDescriptions, structureAnalysis,
+      fullDescription, processingTimeMs, errorMessage, createdAt, updatedAt.
+      Enum VideoStatus: PENDING, PROCESSING, COMPLETED, FAILED.
+      Leia docs/stories/epic-7/story-7.2.md e docs/architecture.md v7.0.
+      Gere o arquivo em docs/stories/epic-7/story-7.2.implementation.yaml
+    output:
+      file: "docs/stories/epic-7/story-7.2.implementation.yaml"
+
+  - id: build-7.2
+    name: "Build 7.2 — Schema Video Analysis"
+    agent: "@dev"
+    command: "*build 7.2"
+    blocking: true
+    dependsOn: [plan-7.2]
+    prompt: |
+      @dev — Execute *build 7.2
+      Adicione modelo ao schema existente em packages/db/prisma/schema.prisma.
+      prisma generate + prisma migrate dev devem rodar sem erros.
+      Implementation plan em docs/stories/epic-7/story-7.2.implementation.yaml
+      Story em docs/stories/epic-7/story-7.2.md
+
+  # ---- STORY 7.3: Upload de Vídeo ----
+  - id: plan-7.3
+    name: "Plan 7.3 — Upload de Vídeo com Progresso"
+    agent: "@architect"
+    command: "*create-plan"
+    blocking: true
+    dependsOn: [build-7.2]
+    prompt: |
+      @architect — Crie o implementation.yaml para a Story 7.3
+      (Upload de Vídeo com Progresso).
+      UI no caminho 2A (Modelar). Drag & drop. Validação client-side (tipo, tamanho).
+      API POST /api/video/upload (multipart/form-data). Polling GET /api/video/[id]/status.
+      Progress bar. Integração com quiz (pergunta 2A.1).
+      Leia docs/stories/epic-7/story-7.3.md e docs/architecture.md v7.0.
+      Gere o arquivo em docs/stories/epic-7/story-7.3.implementation.yaml
+    output:
+      file: "docs/stories/epic-7/story-7.3.implementation.yaml"
+
+  - id: build-7.3
+    name: "Build 7.3 — Upload de Vídeo"
+    agent: "@dev"
+    command: "*build 7.3"
+    blocking: true
+    dependsOn: [plan-7.3]
+    prompt: |
+      @dev — Execute *build 7.3
+      Componente de upload em components/quiz/question-types/video-upload.tsx.
+      API routes: /api/video/upload, /api/video/[id]/status.
+      Implementation plan em docs/stories/epic-7/story-7.3.implementation.yaml
+      Story em docs/stories/epic-7/story-7.3.md
+
+  # ---- STORY 7.4: Pipeline Transcrição + Frames ----
+  - id: plan-7.4
+    name: "Plan 7.4 — Pipeline Transcrição + Frames"
+    agent: "@architect"
+    command: "*create-plan"
+    blocking: true
+    dependsOn: [build-7.3]
+    prompt: |
+      @architect — Crie o implementation.yaml para a Story 7.4
+      (Pipeline: Transcrição + Frames).
+      AssemblyAI (transcrição + speaker_labels + sentiment_analysis).
+      FFmpeg (frame extraction a cada 5s, JPEG, 1280px max width).
+      Ambos rodam em paralelo (Promise.all). Timeout 3min total.
+      Error handling por etapa. Marca FAILED com mensagem específica.
+      Leia docs/stories/epic-7/story-7.4.md e docs/architecture.md v7.0.
+      Gere o arquivo em docs/stories/epic-7/story-7.4.implementation.yaml
+    output:
+      file: "docs/stories/epic-7/story-7.4.implementation.yaml"
+
+  - id: build-7.4
+    name: "Build 7.4 — Pipeline Transcrição"
+    agent: "@dev"
+    command: "*build 7.4"
+    blocking: true
+    dependsOn: [plan-7.4]
+    prompt: |
+      @dev — Execute *build 7.4
+      Pipeline crítico — error handling robusto em cada etapa.
+      Crie lib/video/processor.ts com processVideo() function.
+      Implementation plan em docs/stories/epic-7/story-7.4.implementation.yaml
+      Story em docs/stories/epic-7/story-7.4.md
+
+  # ---- STORY 7.5: Análise IA do Vídeo ----
+  - id: plan-7.5
+    name: "Plan 7.5 — Análise IA do Vídeo"
+    agent: "@architect"
+    command: "*create-plan"
+    blocking: true
+    dependsOn: [build-7.4]
+    prompt: |
+      @architect — Crie o implementation.yaml para a Story 7.5
+      (Análise IA do Vídeo).
+      GPT-4o Vision (frames como base64 image_url) → frame descriptions.
+      GPT-4o (transcrição + frame descriptions) → análise estrutural.
+      Consolida em fullDescription (Markdown com seções).
+      Salva no VideoAnalysis. Deleta temp files via try/finally.
+      Marca COMPLETED com processingTimeMs.
+      Leia docs/stories/epic-7/story-7.5.md e docs/architecture.md v7.0.
+      Gere o arquivo em docs/stories/epic-7/story-7.5.implementation.yaml
+    output:
+      file: "docs/stories/epic-7/story-7.5.implementation.yaml"
+
+  - id: build-7.5
+    name: "Build 7.5 — Análise IA do Vídeo"
+    agent: "@dev"
+    command: "*build 7.5"
+    blocking: true
+    dependsOn: [plan-7.5]
+    prompt: |
+      @dev — Execute *build 7.5
+      Continuação de lib/video/processor.ts — após Story 7.4 completar.
+      fullDescription alimenta geração do roteiro no caminho 2A (Story 6.5).
+      Última story do projeto.
+      Implementation plan em docs/stories/epic-7/story-7.5.implementation.yaml
+      Story em docs/stories/epic-7/story-7.5.md
+
+##############################################################################
+# SUMÁRIO DE EXECUÇÃO (v2.0 — corrigido)
+#
+# Total: 21 stories × 2 fases (plan + build) = 42 execuções de agente
+#
+# Wave 1 (Epic 1):   1.5                         →  2 execuções
+# Wave 2 (Epic 2):   2.2, 2.3, 2.4, 2.5          →  8 execuções
+# Wave 3 (Epic 3):   3.2                          →  2 execuções
+# Wave 4 (Epic 4):   4.2                          →  2 execuções
+# Wave 5 (Pricing):  P.2, P.3                     →  4 execuções
+# Wave 6 (Epic 6):   6.1–6.7                      → 14 execuções
+# Wave 7 (Epic 7):   7.1–7.5                      → 10 execuções
+#
+# Stories eliminadas vs v1.0:
+#   1.1 (já built), 3.1 (schema exists), 3.3 (checkout exists),
+#   3.4 (webhook exists), 5.5.1/5.5.2 (não existem → P.2/P.3)
+#
+# Redução: 50 → 42 execuções (-16%)
+##############################################################################

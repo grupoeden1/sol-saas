@@ -1,0 +1,530 @@
+##############################################################################
+# SOL QUIZ REFACTOR — AIOS WORKFLOW
+# Execução: *workflow sol-quiz-refactor
+#
+# Contexto: O SOL evolui de "chat-first" para "quiz-first + chat complementar".
+# A apresentação v2.0 (Março 2026) define 48 perguntas, 6 seções, 4 caminhos
+# condicionais, onboarding persistente, upload+processamento de vídeo e
+# geração de roteiro como output principal. O chat permanece como feature
+# complementar para iteração sobre roteiros gerados.
+#
+# Dependências entre fases:
+#   Fase 1 (PM) → output: PRD v9.0 atualizado
+#   Fase 2 (Architect) → input: PRD v9.0 → output: architecture.md v2.0
+#   Fase 3 (SM) → input: PRD v9.0 + architecture v2.0 → output: stories
+##############################################################################
+
+id: sol-quiz-refactor
+name: "SOL Quiz Refactor — PRD + Architecture + Stories"
+description: |
+  Refatoração completa do SOL de chat-first para quiz-first.
+  Incorpora onboarding persistente, quiz com caminhos condicionais,
+  processamento de vídeo (AssemblyAI + FFmpeg + IA), e chat como
+  feature complementar para iteração sobre roteiros.
+version: "1.0"
+createdAt: "2026-03-03"
+createdBy: "@aios-master"
+status: draft
+
+# Documentos de referência que TODOS os agentes devem carregar
+sharedContext:
+  - docs/prd.md # PRD atual (v8.0)
+  - docs/architecture.md # Arquitetura atual
+  - docs/framework/tech-stack.md # Stack obrigatório
+  - docs/framework/coding-standards.md # Padrões de código
+  - docs/framework/source-tree.md # Estrutura de pastas
+  # A apresentação HTML (quiz-structure-v2.html) deve ser fornecida
+  # como contexto adicional em cada fase — é a fonte de verdade
+  # para a estrutura do quiz, perguntas e caminhos condicionais.
+
+##############################################################################
+# FASE 1 — PRODUCT MANAGER: Atualizar PRD
+##############################################################################
+phases:
+  - id: phase-1-prd
+    name: "Fase 1 — Atualizar PRD"
+    agent: "@pm"
+    command: "*create-doc prd"
+    blocking: true # Fase 2 depende do output desta fase
+
+    prompt: |
+      @pm — O SOL está passando por uma evolução fundamental de produto.
+      O modelo atual é "chat-first" (aluno abre chat, digita, IA responde).
+      O novo modelo é "quiz-first + chat complementar".
+
+      ## FONTE DE VERDADE PARA O NOVO MODELO
+      A apresentação HTML anexada (quiz-structure-v2.html) é a especificação
+      definitiva do novo fluxo. Ela define:
+      - 48 perguntas distribuídas em 6 seções
+      - Onboarding (9 perguntas, preenchido 1 vez por produto)
+      - Quiz Inicial (7 perguntas + 1 condicional, a cada nova produção)
+      - Caminho 1A: Anúncio Criativo (5 perguntas)
+      - Caminho 1B: Vídeo Orgânico (3 perguntas)
+      - Caminho 2A: Vídeo Modelado (13 perguntas, inclui upload de vídeo)
+      - Caminho 2B: Vídeo do Zero (11 perguntas)
+      - 4 combinações possíveis: 1A+2A, 1A+2B, 1B+2A, 1B+2B
+      - Lógica condicional (ex: "sem aparecer" abre sub-pergunta 3.1)
+
+      ## DECISÕES DE PRODUTO JÁ TOMADAS
+      1. Chat COEXISTE com quiz — é feature complementar para:
+         - Iterar/refinar o roteiro gerado pelo quiz
+         - Discussões livres sobre criação de ofertas
+         - Futuras criações rápidas sem quiz completo
+      2. Modelo de créditos PERMANECE (créditos por tokens) — a geração
+         do roteiro via quiz consome tokens da mesma forma que o chat.
+         O gate pré-chamada e dedução real continuam funcionando.
+      3. "Meus Roteiros" substitui "Minhas Conversas" — cada roteiro
+         nasce de um quiz preenchido e pode ter chat de iteração depois.
+      4. Onboarding persiste e é reutilizável — aluno pode ter múltiplos
+         perfis de onboarding (um por produto) e reutilizar ou criar novo.
+      5. Upload de vídeo (caminho 2A) com processamento via AssemblyAI +
+         FFmpeg + IA é escopo do MVP, mas como epic SEPARADO do quiz.
+         O vídeo é processado → gera descrição textual → arquivo deletado.
+         Não precisa de storage persistente.
+
+      ## O QUE VOCÊ DEVE FAZER
+      Atualize o PRD (docs/prd.md) versão 9.0 com as seguintes mudanças:
+
+      ### A) Novo Epic: Quiz & Onboarding (Epic 6)
+      - Experiência central do SOL: quiz estruturado que coleta contexto
+        do aluno e gera roteiro via IA
+      - Onboarding persistente (9 perguntas) com suporte a múltiplos
+        perfis por usuário (um por produto/nicho)
+      - Quiz inicial (7+1 perguntas) com ramificação condicional
+      - 4 caminhos específicos (1A, 1B, 2A, 2B) com perguntas próprias
+      - Lógica condicional: perguntas aparecem/escondem baseado em
+        respostas anteriores (ex: "sem aparecer" → abre formato)
+      - Output: geração do roteiro completo via IA usando TODO o contexto
+        coletado (onboarding + quiz + caminho específico)
+      - Após geração, aluno pode iterar via chat (feature existente)
+      - TODAS as 48 perguntas da apresentação devem ser documentadas
+        no PRD com tipo (aberta, seleção, upload, condicional), opções
+        disponíveis e lógica de exibição
+
+      ### B) Novo Epic: Video Processing (Epic 7)
+      - Epic SEPARADO por ser infraestrutura pesada e independente
+      - Caminho 2A (Vídeo Modelado) depende deste epic
+      - Fluxo: aluno faz upload de vídeo → armazenamento temporário
+        em disco → AssemblyAI transcreve (speakers, emoção) → FFmpeg
+        extrai frames visuais → IA (Claude ou GPT-4o) analisa estrutura
+        (ganchos, CTA, cortes) → gera descrição textual rica →
+        arquivo de vídeo deletado
+      - A descrição textual é o que persiste e alimenta a geração
+        do roteiro — o vídeo em si é descartado após processamento
+      - Limites de tamanho de vídeo a definir (sugestão: até 5min,
+        ~500MB máx para processamento temporário)
+      - Processamento pode levar 30-120 segundos — precisa de UX
+        de loading/progresso adequada
+      - Novas dependências: AssemblyAI SDK, FFmpeg (binário no container)
+
+      ### C) Alterações em Epics/Stories Existentes
+      - Epic 2 (Chat Core): chat agora é feature COMPLEMENTAR, não core.
+        Renomear "Conversas" para "Roteiros" em toda a interface.
+        Chat acessível a partir de um roteiro gerado (iteração) ou
+        como "modo livre" para discussões sem quiz.
+      - Story 2.1: schema de Conversations renomeado para Roteiros
+        (ou manter Conversation internamente mas exibir como Roteiro).
+        Adicionar campo opcional linking quiz_session_id.
+      - Story 2.2: Chat UI permanece mas muda de tela principal para
+        tela secundária. Tela principal agora é o quiz.
+      - FR3, FR4: manter mas adicionar contexto de que chat é complementar
+      - Adicionar novos FRs para quiz, onboarding e processamento de vídeo
+
+      ### D) Novos Functional Requirements
+      Adicione FRs para:
+      - FR21+: Sistema de quiz com perguntas condicionais
+      - FR para onboarding persistente com múltiplos perfis
+      - FR para processamento de vídeo (upload → transcrição → análise)
+      - FR para geração de roteiro a partir de contexto do quiz
+      - FR para visualização de roteiros gerados ("Meus Roteiros")
+      - FR para iteração sobre roteiro via chat
+
+      ### E) User Interface Design Goals
+      Atualizar seção para refletir novo paradigma:
+      - Tela principal: quiz (não mais chat)
+      - Sidebar: navegação entre seções do quiz com progresso
+      - Barra de progresso por seção
+      - Mockups mobile e desktop conforme apresentação
+      - "Meus Roteiros" no lugar de "Minhas Conversas"
+      - Chat de iteração acessível a partir do roteiro
+
+      ### F) Technical Assumptions
+      Adicionar:
+      - AssemblyAI para transcrição de vídeo (SDK npm)
+      - FFmpeg para extração de frames (binário no Docker container)
+      - Armazenamento temporário em disco para vídeos em processamento
+      - Cleanup automático de arquivos temporários após processamento
+      - Timeout de processamento de vídeo (sugestão: 3 minutos max)
+
+      ### G) O QUE NÃO MUDA
+      Manter intacto tudo que continua válido:
+      - Epic 1 (Foundation & Auth) — 100% válido
+      - Sistema de créditos por tokens (Epic 3) — 100% válido
+      - Stripe Checkout + Webhooks — 100% válido
+      - Epic 4 (Admin) — 100% válido
+      - Epic 5.5 (Pricing Admin) — 100% válido
+      - Modelo de precificação (créditos por tokens) — 100% válido
+      - Stack técnico (Next.js 14, Prisma, PostgreSQL, Docker) — 100% válido
+      - NFRs — 100% válidos
+
+      ### H) Changelog
+      Adicionar entrada v9.0 com:
+      - Novo modelo de produto: quiz-first + chat complementar
+      - Novo Epic 6 (Quiz & Onboarding)
+      - Novo Epic 7 (Video Processing)
+      - Renomeação Conversas → Roteiros
+      - 48 perguntas documentadas com tipos e lógica condicional
+      - AssemblyAI + FFmpeg como novas dependências
+
+    output:
+      file: "docs/prd.md"
+      version: "9.0"
+      validation: |
+        Verificar que:
+        - Todos os 48 perguntas da apresentação estão documentadas
+        - Epic 6 e Epic 7 estão completos com goals claros
+        - FRs existentes não foram quebrados
+        - Epics 1, 3, 4, 5.5 estão intactos
+        - Chat está documentado como complementar, não removido
+        - Modelo de créditos inalterado
+
+  ##############################################################################
+  # FASE 2 — ARCHITECT: Refazer Arquitetura
+  ##############################################################################
+  - id: phase-2-architecture
+    name: "Fase 2 — Refazer Arquitetura"
+    agent: "@architect"
+    command: "*create-full-stack-architecture"
+    blocking: true # Fase 3 depende do output desta fase
+    dependsOn: [phase-1-prd]
+
+    prompt: |
+      @architect — O PRD do SOL foi atualizado para v9.0 (docs/prd.md).
+      O produto evoluiu de chat-first para quiz-first + chat complementar.
+      Atualize docs/architecture.md para v2.0.
+
+      ## CONTEXTO DA MUDANÇA
+      Leia o PRD v9.0 completo. As mudanças principais são:
+      - Novo Epic 6: Quiz & Onboarding (48 perguntas, 6 seções,
+        4 caminhos condicionais, onboarding persistente)
+      - Novo Epic 7: Video Processing (AssemblyAI + FFmpeg + IA)
+      - Chat agora é feature complementar (iteração sobre roteiros)
+      - "Conversas" renomeado para "Roteiros"
+
+      ## O QUE VOCÊ DEVE FAZER
+
+      ### A) Novos Data Models
+      Projete os seguintes modelos Prisma:
+
+      1. **OnboardingProfile** — perfil persistente do aluno
+         - id, userId (FK), name (nome do produto/nicho)
+         - answers (JSON ou relação com OnboardingAnswer)
+         - createdAt, updatedAt
+         - Múltiplos por usuário (um por produto)
+
+      2. **QuizSession** — uma execução do quiz
+         - id, userId (FK), onboardingProfileId (FK)
+         - path1 (enum: AD | ORGANIC — caminho 1A ou 1B)
+         - path2 (enum: MODELED | FROM_SCRATCH — caminho 2A ou 2B)
+         - status (enum: IN_PROGRESS | COMPLETED | ABANDONED)
+         - createdAt, completedAt
+         - Relação 1:1 com Conversation (roteiro gerado)
+
+      3. **QuizAnswer** — resposta individual do quiz
+         - id, quizSessionId (FK)
+         - section (enum: INITIAL | AD_CREATIVE | ORGANIC_VIDEO |
+           MODELED_VIDEO | FROM_SCRATCH_VIDEO)
+         - questionKey (string — identificador único da pergunta)
+         - answerType (enum: TEXT | SINGLE_SELECT | MULTI_SELECT | UPLOAD)
+         - answerValue (text — valor da resposta)
+         - createdAt
+
+      4. **VideoAnalysis** — resultado do processamento de vídeo
+         - id, quizSessionId (FK), quizAnswerId (FK — pergunta de upload)
+         - transcription (text — output AssemblyAI)
+         - frameDescriptions (text — output da análise de frames)
+         - structureAnalysis (text — output da IA: ganchos, CTA, cortes)
+         - fullDescription (text — descrição consolidada que alimenta
+           a geração do roteiro)
+         - processingStatus (enum: QUEUED | PROCESSING | COMPLETED | FAILED)
+         - processingTimeMs (int)
+         - createdAt
+
+      5. **Conversation (renomear display para "Roteiro")**
+         - Adicionar campo: quizSessionId (FK, nullable — null = chat livre)
+         - Manter modelo existente, apenas estender
+
+      ### B) Quiz Engine Architecture
+      Projete a engine de quiz:
+      - Definição das 48 perguntas como configuração estática (não no banco)
+        — arquivo TypeScript com schema de perguntas, opções, condições
+      - Lógica condicional: cada pergunta tem campo `showWhen` que define
+        condições baseadas em respostas anteriores
+      - Exemplo: pergunta 3.1 tem `showWhen: { questionKey: "q3", value: "B" }`
+      - API Route `POST /api/quiz/answer` — salva resposta e retorna
+        próxima pergunta (ou sinaliza fim da seção)
+      - API Route `GET /api/quiz/session/:id` — retorna estado atual
+        do quiz com respostas já dadas
+      - API Route `POST /api/quiz/generate` — coleta todo contexto
+        (onboarding + quiz + caminho) e gera roteiro via OpenAI
+
+      ### C) Video Processing Pipeline
+      Projete o pipeline de processamento de vídeo:
+
+      ```
+      Upload (multipart) → Temp Disk Storage
+        → AssemblyAI API (transcrição + speakers + sentiment)
+        → FFmpeg (extração de frames a cada N segundos)
+        → OpenAI GPT-4o Vision (análise de frames)
+        → OpenAI GPT-4o (consolidação: ganchos, CTA, estrutura)
+        → Salvar VideoAnalysis no banco
+        → Deletar arquivo temporário
+      ```
+
+      Detalhes técnicos:
+      - Arquivo temporário em `/tmp/sol-uploads/` dentro do container
+      - Cleanup via cron job ou após processamento (with try/finally)
+      - Timeout total: 3 minutos — falha retorna erro amigável
+      - FFmpeg como binário no Docker container (adicionar ao Dockerfile)
+      - AssemblyAI SDK (npm package `assemblyai`)
+      - Progresso reportado ao frontend via polling ou SSE
+      - Limites: 5 minutos de vídeo, ~500MB máximo
+
+      ### D) Fluxo de Geração de Roteiro
+      Projete o fluxo completo:
+
+      1. Montar contexto: onboarding profile + todas as respostas do quiz
+         + video analysis (se caminho 2A) → prompt estruturado
+      2. System prompt especializado por combinação de caminhos
+         (4 system prompts diferentes: AD+MODELED, AD+SCRATCH,
+         ORGANIC+MODELED, ORGANIC+SCRATCH)
+      3. Chamada OpenAI com streaming SSE (mesma infra do chat)
+      4. Gate de créditos funciona igual: contar tokens do prompt completo
+         (onboarding + quiz + video description), estimar máximo, verificar
+         saldo, deduzir real após completar
+      5. Roteiro gerado = primeira mensagem `assistant` na Conversation
+      6. Chat de iteração = mensagens subsequentes na mesma Conversation
+
+      ### E) Alterações na Estrutura de Pastas
+      Adicionar ao source-tree:
+      ```
+      apps/web/app/
+        (dashboard)/
+          quiz/
+            page.tsx              # Tela principal do quiz
+            [sessionId]/
+              page.tsx            # Quiz em andamento
+          roteiros/
+            page.tsx              # "Meus Roteiros" (lista)
+            [id]/
+              page.tsx            # Roteiro + chat de iteração
+          onboarding/
+            page.tsx              # Gerenciar perfis de onboarding
+        api/
+          quiz/
+            route.ts              # Criar quiz session
+            answer/route.ts       # Salvar resposta
+            generate/route.ts     # Gerar roteiro
+          video/
+            upload/route.ts       # Upload de vídeo
+            status/[id]/route.ts  # Status do processamento
+          onboarding/
+            route.ts              # CRUD de perfis
+      components/
+        quiz/
+          quiz-engine.tsx         # Engine de renderização de perguntas
+          quiz-progress.tsx       # Barra de progresso
+          question-types/         # Componentes por tipo de pergunta
+            text-question.tsx
+            select-question.tsx
+            upload-question.tsx
+        video/
+          video-upload.tsx        # Upload com progresso
+          processing-status.tsx   # Status do processamento
+      lib/
+        quiz/
+          questions.ts            # Definição das 48 perguntas
+          conditions.ts           # Lógica condicional
+          prompt-builder.ts       # Monta prompt a partir do quiz
+        video/
+          processor.ts            # Orquestra pipeline de vídeo
+          assemblyai.ts           # Client AssemblyAI
+          ffmpeg.ts               # Wrapper FFmpeg
+      ```
+
+      ### F) Diagrama de Arquitetura Atualizado
+      Atualizar o diagrama Mermaid para incluir:
+      - Fluxo Quiz → Geração de Roteiro → Chat de Iteração
+      - Pipeline de vídeo: Upload → AssemblyAI → FFmpeg → IA → DB
+      - Temp storage no container
+
+      ### G) Docker Updates
+      - Adicionar FFmpeg ao Dockerfile (apt-get install ffmpeg)
+      - Volume temporário para uploads de vídeo
+      - AssemblyAI como serviço externo no diagrama
+
+      ### H) Novas Variáveis de Ambiente
+      - ASSEMBLYAI_API_KEY
+      - VIDEO_MAX_DURATION_SECONDS=300
+      - VIDEO_MAX_SIZE_MB=500
+      - VIDEO_TEMP_DIR=/tmp/sol-uploads
+
+      ### I) O QUE NÃO MUDA
+      Manter intacto:
+      - Infra base (Docker, PostgreSQL, Turborepo)
+      - Auth (NextAuth v5)
+      - Sistema de créditos por tokens
+      - Stripe integration
+      - Admin panel
+      - Pricing admin
+      - SSE streaming (reutilizado para geração de roteiro)
+      - Security model
+
+    output:
+      file: "docs/architecture.md"
+      version: "2.0"
+      validation: |
+        Verificar que:
+        - Novos modelos Prisma estão completos e relacionados
+        - Pipeline de vídeo tem fluxo claro com error handling
+        - Quiz engine com lógica condicional documentada
+        - 4 system prompts por combinação de caminhos
+        - Estrutura de pastas atualizada
+        - Diagrama Mermaid inclui novos fluxos
+        - Docker updates documentados
+        - Novas env vars documentadas
+
+  ##############################################################################
+  # FASE 3 — SCRUM MASTER: Criar Stories
+  ##############################################################################
+  - id: phase-3-stories
+    name: "Fase 3 — Criar Stories dos Novos Epics"
+    agent: "@sm"
+    command: "*draft"
+    blocking: false
+    dependsOn: [phase-2-architecture]
+
+    prompt: |
+      @sm — O PRD (v9.0) e a Arquitetura (v2.0) do SOL foram atualizados.
+      Dois novos epics foram adicionados. Crie as user stories para ambos.
+
+      ## CONTEXTO
+      Leia docs/prd.md (v9.0) e docs/architecture.md (v2.0) completos.
+      Os novos epics são:
+      - Epic 6: Quiz & Onboarding
+      - Epic 7: Video Processing
+
+      ## DIRETRIZES PARA STORIES
+      - Siga o padrão das stories existentes (veja docs/stories/ como ref)
+      - Cada story deve ter: user story format, acceptance criteria
+        testáveis, dev notes com referências à arquitetura
+      - Stories dimensionadas para sessão de agente (1-3 dias)
+      - Respeitar dependências entre stories (schema antes de UI, etc)
+      - Manter numeração consistente (6.1, 6.2... e 7.1, 7.2...)
+
+      ## EPIC 6: QUIZ & ONBOARDING — Stories Sugeridas
+
+      ### Story 6.1 — Database Schema: Onboarding & Quiz
+      Schema Prisma para: OnboardingProfile, QuizSession, QuizAnswer.
+      Relação QuizSession → Conversation. Campo quizSessionId em
+      Conversation. Migrations e seed data.
+
+      ### Story 6.2 — Onboarding: Perfil Persistente do Aluno
+      CRUD de OnboardingProfile. 9 perguntas do onboarding conforme
+      apresentação. Aluno pode ter múltiplos perfis (um por produto).
+      Seleção de perfil existente ou criação de novo antes de cada quiz.
+      Dados persistem e são reutilizados em todas as produções futuras.
+
+      ### Story 6.3 — Quiz Engine: Renderização e Lógica Condicional
+      Componente quiz-engine que renderiza perguntas dinamicamente.
+      Definição das 48 perguntas em TypeScript com tipos, opções e
+      condições. Lógica condicional (showWhen). Barra de progresso
+      por seção. Navegação entre seções. Ramificação 1A/1B e 2A/2B.
+      Salvamento de respostas via API.
+
+      ### Story 6.4 — Quiz UI: Interface Mobile e Desktop
+      Implementar a interface dual (mobile + desktop) conforme a
+      apresentação. Sidebar de navegação por seções com estado de
+      progresso. Tipos de pergunta: texto aberto, seleção única,
+      seleção múltipla, upload. Visual dark/solar consistente.
+
+      ### Story 6.5 — Geração de Roteiro via Quiz
+      API Route POST /api/quiz/generate que coleta todo o contexto
+      (onboarding + quiz + caminho específico + video analysis se 2A),
+      monta prompt estruturado, faz chamada OpenAI com streaming SSE,
+      cria Conversation/Roteiro com quizSessionId, aplica gate de
+      créditos (mesma lógica do chat). Output = roteiro completo.
+
+      ### Story 6.6 — "Meus Roteiros": Listagem e Visualização
+      Página /roteiros lista roteiros gerados (Conversations com
+      quizSessionId). Cada roteiro mostra: título, data, caminho
+      usado (AD+MODELED, etc). Clicar abre o roteiro com opção
+      de chat de iteração. Renomear "Conversas" para "Roteiros"
+      na interface.
+
+      ### Story 6.7 — Chat de Iteração sobre Roteiro
+      Após geração do roteiro, aluno pode enviar mensagens no mesmo
+      Conversation para iterar/refinar. Reutiliza componentes de chat
+      existentes (Epic 2). System prompt inclui contexto do quiz +
+      roteiro gerado. Créditos deduzidos por mensagem (mesma lógica).
+
+      ## EPIC 7: VIDEO PROCESSING — Stories Sugeridas
+
+      ### Story 7.1 — Infraestrutura de Processamento de Vídeo
+      Docker: FFmpeg no container. Diretório temporário configurável.
+      Cleanup automático. Limites de tamanho e duração. AssemblyAI SDK
+      instalado e configurado. Novas env vars.
+
+      ### Story 7.2 — Database Schema: Video Analysis
+      Schema Prisma para VideoAnalysis com todos os campos definidos
+      na arquitetura. Relações com QuizSession e QuizAnswer.
+
+      ### Story 7.3 — Upload de Vídeo com Progresso
+      UI de upload no caminho 2A (Vídeo Modelado, pergunta 2).
+      Drag & drop + seleção de arquivo. Progresso de upload visível.
+      Validação client-side (tipo, tamanho, duração). API Route para
+      receber multipart e salvar em temp. Status de processamento
+      reportado ao frontend (polling ou SSE).
+
+      ### Story 7.4 — Pipeline de Processamento: Transcrição + Frames
+      Backend: recebe vídeo → envia para AssemblyAI (transcrição com
+      speakers e sentiment) → FFmpeg extrai frames (1 a cada 5s) →
+      salva resultados intermediários. Error handling para cada etapa.
+      Timeout de 3 minutos total. Atualiza status no banco.
+
+      ### Story 7.5 — Análise IA do Vídeo
+      Backend: pega transcrição + frames → envia para GPT-4o Vision
+      (análise de frames) → GPT-4o consolida tudo (ganchos, CTA,
+      estrutura, tom) → gera fullDescription textual → salva
+      VideoAnalysis no banco → deleta arquivo temporário.
+      fullDescription é o que alimenta a geração do roteiro.
+
+      ## STORIES EXISTENTES IMPACTADAS
+      Documente também as alterações necessárias em stories existentes:
+      - Story 2.1: adicionar quizSessionId em Conversation
+      - Story 2.2: chat agora é secundário, tela principal é quiz
+      - Story 1.4: header mostra "Meus Roteiros" no lugar de "Conversas"
+      - Story 3.5: painel do usuário lista "Roteiros" ao invés de "Conversas"
+
+    output:
+      files:
+        - "docs/stories/6.1.story.md"
+        - "docs/stories/6.2.story.md"
+        - "docs/stories/6.3.story.md"
+        - "docs/stories/6.4.story.md"
+        - "docs/stories/6.5.story.md"
+        - "docs/stories/6.6.story.md"
+        - "docs/stories/6.7.story.md"
+        - "docs/stories/7.1.story.md"
+        - "docs/stories/7.2.story.md"
+        - "docs/stories/7.3.story.md"
+        - "docs/stories/7.4.story.md"
+        - "docs/stories/7.5.story.md"
+      validation: |
+        Verificar que:
+        - Cada story tem AC testáveis e dev notes
+        - Dependências entre stories estão explícitas
+        - Schema stories vêm antes de UI stories
+        - Stories de vídeo estão no Epic 7, não no 6
+        - Referências à arquitetura v2.0 estão corretas
+        - Stories existentes impactadas estão documentadas

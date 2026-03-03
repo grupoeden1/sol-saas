@@ -1,0 +1,527 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Story P.3 — Atualizar Admin Console (Métricas)
+# Implementation Plan v1
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# CONTEXTO: Story P.1 migrou User.balanceCents → User.credits e removeu a
+# tabela exchange_rates. O admin console (/admin, Story 4.2) ainda referencia
+# o modelo anterior em métricas de usuários, financeiras, cotação e adição
+# manual de créditos. Esta story atualiza tudo para consistência.
+#
+# Dependência: Story P.1 deve estar COMPLETA antes de iniciar P.3.
+# Paralelo com: Story P.2 (Pricing Admin Panel) — independente.
+#
+# Mudanças-chave:
+#   1. "Sem saldo útil" = credits = 0 (era balanceCents < MIN_COST_CENTS)
+#   2. Lista de usuários: créditos inteiros (não R$)
+#   3. Receita: JOIN com credit_packages (não grossAmountCents)
+#   4. Custo OpenAI: estimado via tokens (não costUsd × exchangeRate)
+#   5. Remover seção de cotação → link para /admin/pricing
+#   6. Adição manual: créditos inteiros (não reais)
+# ─────────────────────────────────────────────────────────────────────────────
+
+storyId: "story-P.3"
+createdAt: "2026-03-03T20:00:00Z"
+createdBy: "@architect"
+status: pending
+complexity: STANDARD
+estimatedEffort: "2-3 days"
+
+# ─── Dependencies ────────────────────────────────────────────────────────────
+
+dependencies:
+  - name: zod
+    version: "^3.x"
+    purpose: "Validação de input na API route add-credits (já instalado)"
+    install: "N/A — já instalado"
+
+# ─── Phases ──────────────────────────────────────────────────────────────────
+
+phases:
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # PHASE 1 — Queries: métricas de usuários + métricas financeiras
+  # Subtasks podem ser executadas em PARALELO (mesmo arquivo mas funções independentes).
+  # Dependem de P.1 (User.credits, tabelas novas, tabelas removidas).
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  - id: "phase-1"
+    name: "Queries: métricas de usuários + financeiras"
+    description: >
+      Atualizar funções de métricas em packages/db/src/admin.ts.
+      getUserMetrics: credits = 0 (não balanceCents < MIN_COST_CENTS).
+      getFinancialMetrics: receita via JOIN, custo via tokens.
+      Subtasks 1.1 e 1.2 são PARALELAS — funções independentes no mesmo arquivo.
+
+    subtasks:
+
+      # ─── 1.1: Métricas de usuários ──────────────────────────────────────
+
+      - id: "1.1"
+        title: "Atualizar getUserMetrics e getUsersPage — créditos"
+        service: backend
+        files:
+          - path: "packages/db/src/admin.ts"
+            action: MODIFY
+        currentState: |
+          - getUserMetrics(): lowBalanceUsers usa `balanceCents < MIN_COST_CENTS`
+          - getUsersPage(): select inclui `balanceCents`, não `credits`
+          - Saldo total retido: `_sum: { balanceCents: true }`
+          - Interface UserMetrics: lowBalanceUsers
+          - Interface UserRow: balanceCents
+        targetState: |
+          - getUserMetrics(): usersWithoutCredits usa `credits: { equals: 0 }`
+          - getUsersPage(): select inclui `credits`
+          - Saldo total retido: `_sum: { credits: true }` → totalRetainedCredits
+          - Interface UserMetrics: usersWithoutCredits (renamed)
+          - Interface UserRow: credits (renamed)
+        actions:
+          - "Renomear lowBalanceUsers → usersWithoutCredits na interface UserMetrics"
+          - "Alterar query: `prisma.user.count({ where: { credits: { equals: 0 } } })`"
+          - "Atualizar getUsersPage: select credits (não balanceCents)"
+          - "Renomear balanceCents → credits na interface UserRow"
+          - "Atualizar saldo total retido: `prisma.user.aggregate({ _sum: { credits: true } })`"
+          - "Remover referência a MIN_COST_CENTS"
+        verification:
+          type: command
+          command: "cd c:/Projetos/Sol/sol-saas && pnpm --filter db exec tsc --noEmit"
+        status: pending
+        dependencies: []
+        notes: |
+          DELTA:
+          ```typescript
+          // Interface — ANTES:
+          export interface UserMetrics {
+            totalUsers: number
+            activeUsers7d: number
+            lowBalanceUsers: number
+            newUsers30d: number
+          }
+
+          // Interface — DEPOIS:
+          export interface UserMetrics {
+            totalUsers: number
+            activeUsers7d: number
+            usersWithoutCredits: number  // credits = 0
+            newUsers30d: number
+          }
+
+          // Query — ANTES:
+          prisma.user.count({ where: { balanceCents: { lt: MIN_COST_CENTS } } })
+
+          // Query — DEPOIS:
+          prisma.user.count({ where: { credits: { equals: 0 } } })
+          ```
+
+          NOTA: Renomear o campo no interface pode quebrar consumidores na page.tsx.
+          Será corrigido na Phase 2 (subtask 2.1).
+
+      # ─── 1.2: Métricas financeiras ──────────────────────────────────────
+
+      - id: "1.2"
+        title: "Atualizar getFinancialMetrics — receita via JOIN, custo via tokens"
+        service: backend
+        files:
+          - path: "packages/db/src/admin.ts"
+            action: MODIFY
+        currentState: |
+          - Receita: SUM(grossAmountCents) WHERE type = 'purchase'
+          - Custo OpenAI: SUM(costUsd × exchangeRate) via raw query
+          - Interface FinancialMetrics: totalRevenueCents, totalOpenAICostBRL, grossProfitBRL,
+            grossMarginPercent, markupPercent, creditsSoldCents, creditsConsumedCents,
+            totalRetainedBalanceCents
+          - Depende de grossAmountCents, costUsd, exchangeRate em CreditTransaction
+        targetState: |
+          - Receita: JOIN credit_transactions com credit_packages (amount = credits → priceInCents)
+          - Custo OpenAI: SUM((input_tokens/1M × $2.50) + (output_tokens/1M × $10.00)) via raw query
+          - Interface FinancialMetrics: totalRevenueCents, revenue30dCents, estimatedOpenAICostUsd,
+            creditsSold, creditsConsumed, totalRetainedCredits
+          - Lucro/margem/markup calculados no frontend com cotação informada pelo admin
+          - Sem referência a grossAmountCents, costUsd, exchangeRate
+        actions:
+          - "Reescrever query de receita: raw query com JOIN credit_transactions x credit_packages"
+          - "Reescrever query de custo OpenAI: SUM((input_tokens/1M × 2.50) + (output_tokens/1M × 10.00))"
+          - "Atualizar interface FinancialMetrics"
+          - "Remover cálculos de lucro/margem/markup da função (mover para frontend)"
+          - "Adicionar query revenue30dCents com filtro de data"
+          - "Atualizar creditsSold e creditsConsumed (amount em créditos, não centavos)"
+          - "totalRetainedCredits via SUM(credits) de users"
+          - "Remover imports de getExchangeRate e ExchangeRate"
+        verification:
+          type: command
+          command: "cd c:/Projetos/Sol/sol-saas && pnpm --filter db exec tsc --noEmit"
+        status: pending
+        dependencies: []
+        notes: |
+          Query de receita (raw SQL):
+          ```sql
+          SELECT COALESCE(SUM(cp.price_in_cents), 0) AS total_revenue_cents
+          FROM credit_transactions ct
+          JOIN credit_packages cp ON ct.amount = cp.credits
+          WHERE ct.type = 'purchase'
+          ```
+
+          NOTA: JOIN por `amount = credits` é uma aproximação que funciona enquanto
+          os pacotes não mudam de valor de créditos. Para precisão futura, considerar
+          guardar packageId na CreditTransaction (melhoria futura).
+
+          Query de custo estimado (raw SQL):
+          ```sql
+          SELECT COALESCE(
+            SUM(
+              (COALESCE(input_tokens, 0)::float / 1000000.0 * 2.50) +
+              (COALESCE(output_tokens, 0)::float / 1000000.0 * 10.00)
+            ), 0
+          ) AS estimated_cost_usd
+          FROM credit_transactions
+          WHERE type = 'consumption'
+            AND input_tokens IS NOT NULL
+          ```
+
+          Pricing GPT-4o (hardcoded — atualizar quando API pricing mudar):
+          - Input: $2.50 / 1M tokens
+          - Output: $10.00 / 1M tokens
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # PHASE 2 — UI: remover cotação + atualizar adição manual + page
+  # Subtasks podem ser executadas em PARALELO.
+  # Dependem da Phase 1 (interfaces atualizadas).
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  - id: "phase-2"
+    name: "UI: remover cotação + adição manual + page"
+    description: >
+      Remover seção de métricas de cotação, substituir por link para /admin/pricing.
+      Atualizar formulário de adição manual (créditos em vez de reais).
+      Atualizar página /admin para usar novas interfaces.
+      Subtasks 2.1, 2.2 e 2.3 são PARALELAS.
+
+    subtasks:
+
+      # ─── 2.1: Remover métricas de cotação ────────────────────────────────
+
+      - id: "2.1"
+        title: "Remover getExchangeMetrics e seção de cotação na page"
+        service: backend
+        files:
+          - path: "packages/db/src/admin.ts"
+            action: MODIFY
+          - path: "packages/db/src/index.ts"
+            action: MODIFY
+          - path: "apps/web/src/app/admin/page.tsx"
+            action: MODIFY
+        currentState: |
+          - getExchangeMetrics() existe em admin.ts (query exchange_rates)
+          - ExchangeMetrics interface existe
+          - Ambos exportados em index.ts
+          - page.tsx: Promise.all inclui getExchangeMetrics()
+          - page.tsx: seção de cotação com 3 MetricCards (atual, min 30d, max 30d)
+        targetState: |
+          - getExchangeMetrics() REMOVIDA
+          - ExchangeMetrics interface REMOVIDA
+          - Exports removidos de index.ts
+          - page.tsx: Promise.all SEM getExchangeMetrics
+          - page.tsx: seção de cotação substituída por card com link para /admin/pricing
+          - page.tsx: consumir novas interfaces (usersWithoutCredits, credits, etc.)
+        actions:
+          - "Remover função getExchangeMetrics() de admin.ts"
+          - "Remover interface ExchangeMetrics de admin.ts"
+          - "Remover exports de getExchangeMetrics e ExchangeMetrics de index.ts"
+          - "Na page.tsx: remover getExchangeMetrics do Promise.all"
+          - "Na page.tsx: remover destructuring de exchangeMetrics"
+          - "Na page.tsx: substituir seção de cotação por card com Link para /admin/pricing"
+          - "Na page.tsx: atualizar consumo das interfaces renomeadas (lowBalanceUsers → usersWithoutCredits, etc.)"
+        verification:
+          type: command
+          command: "cd c:/Projetos/Sol/sol-saas && pnpm --filter web exec tsc --noEmit"
+        status: pending
+        dependencies:
+          - "1.1"
+          - "1.2"
+        notes: |
+          Card substituto:
+          ```tsx
+          <Card>
+            <CardHeader>
+              <CardTitle>Precificação</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <p className="text-sm text-muted-foreground mb-3">
+                Gerencie constantes de precificação, pacotes e simule cenários.
+              </p>
+              <Link
+                href="/admin/pricing"
+                className="text-amber-400 hover:text-amber-300 font-medium"
+              >
+                Gerenciar Precificação →
+              </Link>
+            </CardContent>
+          </Card>
+          ```
+
+          NOTA: O link para /admin/pricing funcionará mesmo que P.2 não esteja
+          implementado ainda — Next.js mostrará 404 temporariamente.
+
+      # ─── 2.2: Atualizar adição manual de créditos ────────────────────────
+
+      - id: "2.2"
+        title: "Atualizar add-credits API e AddCreditsForm — créditos inteiros"
+        service: backend
+        files:
+          - path: "apps/web/src/app/api/admin/add-credits/route.ts"
+            action: MODIFY
+          - path: "apps/web/src/components/admin/AddCreditsForm.tsx"
+            action: MODIFY
+        currentState: |
+          - API: schema Zod espera amountBRL (float)
+          - API: converte para amountCents, busca exchangeRate
+          - API: addCredits com { type: 'adjustment', exchangeRate, ... }
+          - Form: label "Valor em R$", input step 0.01
+          - Form: body envia amountBRL
+          - Form: confirmação "Adicionar R$ X,XX ao saldo de [email]?"
+          - Form: toast "R$ X,XX adicionados..."
+        targetState: |
+          - API: schema Zod espera credits (int positivo)
+          - API: sem conversão, sem exchangeRate
+          - API: addCredits com { type: 'adjustment', adminEmail, description }
+          - API: retorna { success, userEmail, addedCredits, newCredits }
+          - Form: label "Créditos a adicionar", input step 1
+          - Form: body envia credits (int)
+          - Form: confirmação "Adicionar X créditos ao saldo de [email]?"
+          - Form: toast "X créditos adicionados..."
+        actions:
+          - "API: atualizar schema Zod: amountBRL → credits: z.number().int().positive()"
+          - "API: remover conversão amountCents = Math.round(amountBRL * 100)"
+          - "API: remover import e chamada de getExchangeRate"
+          - "API: chamar addCredits(user.id, parsed.data.credits, { type: 'adjustment', adminEmail, description })"
+          - "API: retornar { success, userEmail, addedCredits: parsed.data.credits, newCredits }"
+          - "Form: label 'Créditos a adicionar'"
+          - "Form: input type number step 1 (inteiro)"
+          - "Form: body envia { userEmail, credits: parseInt(form.credits), reason }"
+          - "Form: confirmação 'Adicionar X créditos ao saldo de [email]?'"
+          - "Form: toast 'X créditos adicionados ao saldo de email'"
+        verification:
+          type: command
+          command: "cd c:/Projetos/Sol/sol-saas && pnpm --filter web exec tsc --noEmit"
+        status: pending
+        dependencies:
+          - "1.1"
+        notes: |
+          DELTA da API:
+          ```typescript
+          // Schema — ANTES:
+          const schema = z.object({
+            userEmail: z.string().email(),
+            amountBRL: z.number().positive(),
+            reason: z.string().min(3).max(200),
+          })
+
+          // Schema — DEPOIS:
+          const schema = z.object({
+            userEmail: z.string().email(),
+            credits: z.number().int().positive(),
+            reason: z.string().min(3).max(200),
+          })
+
+          // Lógica — ANTES:
+          const amountCents = Math.round(amountBRL * 100)
+          const exchangeRate = await getExchangeRate('USD-BRL')
+          const { balanceCents } = await addCredits(user.id, amountCents, {
+            type: 'adjustment', exchangeRate, adminEmail, description
+          })
+
+          // Lógica — DEPOIS:
+          const { credits: newCredits } = await addCredits(user.id, parsed.data.credits, {
+            type: 'adjustment',
+            adminEmail: session.user.email!,
+            description: `Ajuste manual por ${session.user.email}: ${parsed.data.reason}`,
+          })
+          ```
+
+      # ─── 2.3: Atualizar componentes de UI ────────────────────────────────
+
+      - id: "2.3"
+        title: "Atualizar UsersTable e MetricCard — créditos"
+        service: frontend
+        files:
+          - path: "apps/web/src/components/admin/UsersTable.tsx"
+            action: MODIFY
+          - path: "apps/web/src/components/admin/MetricCard.tsx"
+            action: MODIFY
+        currentState: |
+          - UsersTable: coluna "Saldo" mostra balanceCents formatado em R$ (via formatBalance)
+          - MetricCard: label "Saldo Insuficiente" ou similar para lowBalanceUsers
+        targetState: |
+          - UsersTable: coluna "Saldo" mostra credits inteiro (ex: "47 créditos")
+          - MetricCard: label "Sem Créditos" para usersWithoutCredits
+          - Saldo total retido: exibido em créditos
+        actions:
+          - "UsersTable: substituir formatBalance(user.balanceCents) por user.credits + ' créditos'"
+          - "UsersTable: renomear prop/tipo de balanceCents para credits"
+          - "MetricCard: atualizar label de lowBalanceUsers para 'Sem Créditos' (usersWithoutCredits)"
+          - "MetricCard: saldo retido em créditos (não R$)"
+        verification:
+          type: command
+          command: "cd c:/Projetos/Sol/sol-saas && pnpm --filter web exec tsc --noEmit"
+        status: pending
+        dependencies:
+          - "1.1"
+        notes: |
+          Verificar se há um componente de formatação centralizado (formatBalance)
+          que precisa ser atualizado ou se cada componente formata localmente.
+
+          Se existe formatBalance em lib/format-balance.ts, pode ser necessário
+          criar formatCredits ou atualizar a função (já pode ter sido feito em P.1).
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # PHASE 3 — Validation: typecheck + testes
+  # Depende de todas as fases anteriores.
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  - id: "phase-3"
+    name: "Validation: typecheck + testes"
+    description: >
+      TypeScript typecheck, build, testes de métricas, testes de adição manual,
+      grep para referências residuais, e testes de não-regressão.
+
+    subtasks:
+
+      # ─── 3.1: Typecheck + Build ─────────────────────────────────────────
+
+      - id: "3.1"
+        title: "TypeScript typecheck + build"
+        service: qa
+        files: []
+        actions:
+          - "pnpm typecheck → zero errors"
+          - "pnpm build → zero errors"
+        verification:
+          type: command
+          command: "cd c:/Projetos/Sol/sol-saas && pnpm --filter db exec tsc --noEmit && pnpm --filter web exec tsc --noEmit && pnpm build"
+        status: pending
+        dependencies:
+          - "2.1"
+          - "2.2"
+          - "2.3"
+
+      # ─── 3.2: Grep — referências residuais no módulo admin ─────────────
+
+      - id: "3.2"
+        title: "Grep — zero referências ao modelo anterior no módulo admin"
+        service: qa
+        files: []
+        actions:
+          - "grep 'balanceCents' packages/db/src/admin.ts → ZERO"
+          - "grep 'getExchangeRate\\|ExchangeMetrics\\|getExchangeMetrics' packages/db/src/admin.ts → ZERO"
+          - "grep 'grossAmountCents\\|costUsd\\|exchangeRate' packages/db/src/admin.ts → ZERO"
+          - "grep 'MIN_COST_CENTS\\|lowBalanceUsers' packages/db/src/admin.ts → ZERO"
+          - "grep 'amountBRL\\|balanceCents\\|getExchangeRate' apps/web/src/app/api/admin/ -r → ZERO"
+          - "grep 'balanceCents\\|amountBRL\\|Valor em R' apps/web/src/components/admin/ -r → ZERO"
+        verification:
+          type: command
+          command: "cd c:/Projetos/Sol/sol-saas && grep -r 'balanceCents\\|getExchangeRate\\|ExchangeMetrics\\|grossAmountCents\\|MIN_COST_CENTS\\|amountBRL\\|lowBalanceUsers' packages/db/src/admin.ts apps/web/src/app/admin/ apps/web/src/components/admin/ apps/web/src/app/api/admin/ --include='*.ts' --include='*.tsx' -l | wc -l"
+        status: pending
+        dependencies:
+          - "3.1"
+
+      # ─── 3.3: Testes funcionais ─────────────────────────────────────────
+
+      - id: "3.3"
+        title: "Testes funcionais — métricas + adição manual"
+        service: qa
+        files: []
+        actions:
+          - "getUserMetrics(): usersWithoutCredits conta users com credits = 0 corretamente"
+          - "getUsersPage(): retorna credits (não balanceCents)"
+          - "getFinancialMetrics(): receita via JOIN com credit_packages"
+          - "getFinancialMetrics(): custo estimado via tokens × pricing"
+          - "getExchangeMetrics não existe (removida)"
+          - "POST /api/admin/add-credits com { credits: 50, ... } → 200, saldo incrementa 50"
+          - "POST /api/admin/add-credits com { amountBRL: 10 } → 400 (campo antigo rejeitado)"
+          - "CreditTransaction de adjustment: sem exchangeRate, com adminEmail"
+          - "Página /admin carrega sem erros"
+          - "Seção de cotação não aparece, link /admin/pricing aparece"
+          - "Lista de usuários mostra créditos inteiros"
+          - "Métricas de uso (mensagens, tokens, modelo) inalteradas"
+          - "Paginação funciona"
+          - "Chat e streaming inalterados"
+        verification:
+          type: manual
+          description: "Todos os cenários passam"
+        status: pending
+        dependencies:
+          - "3.1"
+          - "3.2"
+
+# ─── Execution Graph ─────────────────────────────────────────────────────────
+#
+#   Phase 1 (Queries)
+#   ├── 1.1 (métricas usuários) ────┐
+#   │                               │    ← 1.1 e 1.2 PARALELAS
+#   ├── 1.2 (métricas financeiras) ─┤
+#   │                               │
+#   Phase 2 (UI)                    │
+#   ├── 2.1 (remover cotação) ──────┤
+#   ├── 2.2 (adição manual) ────────┤    ← 2.1, 2.2, 2.3 PARALELAS
+#   ├── 2.3 (UI components) ────────┤
+#   │                               │
+#   Phase 3 (Validation)            │
+#   ├── 3.1 (typecheck + build) ────┤
+#   ├── 3.2 (grep refs) ───────────┤
+#   └── 3.3 (testes funcionais) ────┘
+#
+# ─── Parallel Execution Opportunities ────────────────────────────────────────
+#
+#   Wave 1: 1.1 + 1.2 (métricas de usuários + financeiras — PARALELAS)
+#   Wave 2: 2.1 + 2.2 + 2.3 (cotação + adição manual + UI — PARALELAS)
+#   Wave 3: 3.1 (typecheck) → 3.2 + 3.3 (grep + testes — PARALELAS)
+#
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ─── Risk Assessment ─────────────────────────────────────────────────────────
+
+risks:
+  - id: "R1"
+    description: "JOIN credit_transactions com credit_packages por amount = credits pode ser impreciso se pacotes mudam"
+    severity: MEDIUM
+    mitigation: |
+      Aceitável para MVP — pacotes iniciais (100, 500, 1200) são únicos.
+      Melhoria futura: guardar packageId na CreditTransaction.
+    affectedSubtasks: ["1.2"]
+
+  - id: "R2"
+    description: "Custo OpenAI estimado via tokens pode divergir do custo real (preços da API mudam)"
+    severity: LOW
+    mitigation: "Constantes de pricing hardcoded ($2.50 input, $10.00 output). Atualizar quando API pricing mudar."
+    affectedSubtasks: ["1.2"]
+
+  - id: "R3"
+    description: "Cotação manual na UI pode confundir admin"
+    severity: LOW
+    mitigation: "Label claro: 'Informe a cotação atual do dólar para cálculos de custo'. Campo opcional."
+    affectedSubtasks: ["2.1"]
+
+  - id: "R4"
+    description: "Remoção de getExchangeMetrics pode quebrar imports não detectados"
+    severity: LOW
+    mitigation: "Grep completo em 3.2 valida zero referências residuais. TypeScript typecheck pegaria erros de import."
+    affectedSubtasks: ["2.1"]
+
+  - id: "R5"
+    description: "Renomear interface fields (lowBalanceUsers → usersWithoutCredits) pode quebrar page.tsx"
+    severity: LOW
+    mitigation: "TypeScript typecheck na 3.1 detecta quebras. Corrigidas na subtask 2.1."
+    affectedSubtasks: ["1.1", "2.1"]
+
+# ─── Files Summary ───────────────────────────────────────────────────────────
+#
+# MODIFY (7 arquivos):
+#   packages/db/src/admin.ts ........................ Phase 1+2 (queries + remover getExchangeMetrics)
+#   packages/db/src/index.ts ........................ Phase 2 (remover exports)
+#   apps/web/src/app/admin/page.tsx ................. Phase 2 (cotação → link, novas interfaces)
+#   apps/web/src/app/api/admin/add-credits/route.ts  Phase 2 (credits int, não amountBRL)
+#   apps/web/src/components/admin/AddCreditsForm.tsx  Phase 2 (label, input, toast)
+#   apps/web/src/components/admin/MetricCard.tsx .... Phase 2 (labels de créditos)
+#   apps/web/src/components/admin/UsersTable.tsx .... Phase 2 (coluna créditos)
+#
+# ─────────────────────────────────────────────────────────────────────────────

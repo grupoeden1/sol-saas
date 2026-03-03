@@ -6,7 +6,8 @@
   "types": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts",
-    "./token-counter": "./src/token-counter.ts"
+    "./token-counter": "./src/token-counter.ts",
+    "./pricing": "./src/pricing.ts"
   },
   "scripts": {
     "db:generate": "dotenv -e ../../.env -- prisma generate",

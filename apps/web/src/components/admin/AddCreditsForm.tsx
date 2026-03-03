@@ -5,11 +5,11 @@ import { useRouter } from 'next/navigation';
 
 interface FormState {
   userEmail: string;
-  amountBRL: string;
+  credits: string;
   reason: string;
 }
 
-const initialState: FormState = { userEmail: '', amountBRL: '', reason: '' };
+const initialState: FormState = { userEmail: '', credits: '', reason: '' };
 
 type Status = 'idle' | 'confirm' | 'loading' | 'success' | 'error';
 
@@ -26,8 +26,8 @@ export default function AddCreditsForm() {
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    const amount = parseFloat(form.amountBRL);
-    if (!form.userEmail || isNaN(amount) || amount <= 0 || form.reason.trim().length < 3) {
+    const credits = parseInt(form.credits, 10);
+    if (!form.userEmail || isNaN(credits) || credits <= 0 || form.reason.trim().length < 3) {
       setErrorMsg('Preencha todos os campos corretamente.');
       setStatus('error');
       return;
@@ -44,7 +44,7 @@ export default function AddCreditsForm() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           userEmail: form.userEmail,
-          amountBRL: parseFloat(form.amountBRL),
+          credits: parseInt(form.credits, 10),
           reason: form.reason,
         }),
       });
@@ -57,13 +57,8 @@ export default function AddCreditsForm() {
         return;
       }
 
-      const newBalance = (data.newBalanceCents / 100).toLocaleString('pt-BR', {
-        minimumFractionDigits: 2,
-        style: 'currency',
-        currency: 'BRL',
-      });
       setSuccessMsg(
-        `Créditos adicionados com sucesso! Novo saldo de ${form.userEmail}: ${newBalance}`,
+        `Créditos adicionados com sucesso! Novo saldo de ${form.userEmail}: ${data.newCredits} créditos`,
       );
       setForm(initialState);
       setStatus('success');
@@ -87,14 +82,13 @@ export default function AddCreditsForm() {
   return (
     <div className="rounded-2xl border border-solar-800/20 bg-background-secondary/40 p-6 backdrop-blur-md">
 
-      {/* Confirmação */}
       {status === 'confirm' && (
         <div className="mb-6 rounded-xl border border-amber-500/30 bg-amber-500/10 p-4">
           <p className="text-sm font-medium text-amber-300">Confirmar operação</p>
           <p className="mt-1 text-sm text-foreground-muted">
             Adicionar{' '}
             <span className="font-semibold text-foreground">
-              R$ {parseFloat(form.amountBRL).toFixed(2)}
+              {form.credits} créditos
             </span>{' '}
             para <span className="font-semibold text-foreground">{form.userEmail}</span>
           </p>
@@ -116,7 +110,6 @@ export default function AddCreditsForm() {
         </div>
       )}
 
-      {/* Sucesso */}
       {status === 'success' && (
         <div className="mb-6 rounded-xl border border-green-500/30 bg-green-500/10 p-4">
           <p className="text-sm font-medium text-green-400">Operação realizada</p>
@@ -130,14 +123,12 @@ export default function AddCreditsForm() {
         </div>
       )}
 
-      {/* Erro */}
       {status === 'error' && (
         <div className="mb-4 rounded-xl border border-red-500/30 bg-red-500/10 p-3">
           <p className="text-sm text-red-400">{errorMsg}</p>
         </div>
       )}
 
-      {/* Formulário */}
       {(status === 'idle' || status === 'error') && (
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
@@ -157,17 +148,17 @@ export default function AddCreditsForm() {
 
           <div>
             <label className="mb-1.5 block text-sm font-medium text-foreground-muted">
-              Valor (R$)
+              Créditos
             </label>
             <input
               type="number"
-              name="amountBRL"
-              value={form.amountBRL}
+              name="credits"
+              value={form.credits}
               onChange={handleChange}
               required
-              min="0.01"
-              step="0.01"
-              placeholder="10.00"
+              min="1"
+              step="1"
+              placeholder="100"
               className="w-full rounded-lg border border-solar-800/30 bg-background-secondary px-3 py-2 text-sm text-foreground placeholder-foreground-muted/50 outline-none transition focus:border-solar-500/50 focus:ring-1 focus:ring-solar-500/20"
             />
           </div>
@@ -197,7 +188,6 @@ export default function AddCreditsForm() {
         </form>
       )}
 
-      {/* Loading */}
       {status === 'loading' && (
         <div className="flex items-center gap-2 text-sm text-foreground-muted">
           <svg className="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">

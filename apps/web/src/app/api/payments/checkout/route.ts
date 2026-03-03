@@ -1,7 +1,6 @@
 import { auth } from '@/lib/auth';
 import { prisma } from '@sol/db';
 import { getStripeClient } from '@/lib/stripe';
-import { findPackage } from '@/lib/credits-config';
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 
@@ -10,7 +9,6 @@ const checkoutSchema = z.object({
 });
 
 // Usa auth como wrapper (padrão NextAuth v5 para Route Handlers)
-// req.auth contém a sessão de forma confiável no beta.30
 export const POST = auth(async function handler(req) {
   try {
     const session = req.auth;
@@ -37,17 +35,18 @@ export const POST = auth(async function handler(req) {
 
     const { packageId } = parsed.data;
 
-    const pkg = findPackage(packageId);
-    if (!pkg) {
+    // Buscar pacote do banco
+    const pkg = await prisma.creditPackage.findUnique({
+      where: { id: packageId },
+    });
+
+    if (!pkg || !pkg.active) {
       return NextResponse.json({ error: `Package '${packageId}' not found` }, { status: 400 });
     }
 
     const baseUrl = process.env.NEXTAUTH_URL ?? 'http://localhost:3000';
 
     const checkoutSession = await getStripeClient().checkout.sessions.create({
-      // Cartão habilitado por padrão. Para adicionar PIX:
-      // 1. Ativar em Stripe Dashboard > Settings > Payment methods > Pix
-      // 2. Adicionar 'pix' ao array abaixo
       payment_method_types: ['card'],
       mode: 'payment',
       currency: 'brl',
@@ -56,10 +55,10 @@ export const POST = auth(async function handler(req) {
           quantity: 1,
           price_data: {
             currency: 'brl',
-            unit_amount: pkg.price,
+            unit_amount: pkg.priceBrl,
             product_data: {
-              name: `SOL — ${pkg.label}`,
-              description: pkg.description,
+              name: `SOL — ${pkg.name}`,
+              description: pkg.description ?? `${pkg.credits} créditos`,
             },
           },
         },
@@ -72,7 +71,7 @@ export const POST = auth(async function handler(req) {
       },
     });
 
-    console.log(`[Checkout] Session created packageId=${pkg.id}`);
+    console.log(`[Checkout] Session created packageId=${pkg.id} credits=${pkg.credits}`);
 
     return NextResponse.json({ sessionUrl: checkoutSession.url });
   } catch (error) {

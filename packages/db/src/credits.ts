@@ -1,16 +1,14 @@
-import { Prisma } from '@prisma/client'
 import { prisma } from './index'
 
 // ─── Types ─────────────────────────────────────────────────────────────────
 
 export interface DeductMetadata {
-  exchangeRate: Prisma.Decimal
   inputTokens: number
   outputTokens: number
   modelUsed: string
-  costUsd: Prisma.Decimal
+  creditsPerMInput: number
+  creditsPerMOutput: number
   conversationTitle: string
-  maxOutputTokens: number
   hasAttachments?: boolean
   attachmentTypes?: string[]
   attachmentTokens?: number
@@ -21,149 +19,138 @@ export interface DeductMetadata {
 export class InsufficientBalanceError extends Error {
   constructor(userId: string, current: number, required: number) {
     super(
-      `Saldo insuficiente: usuário ${userId} tem ${current} centavos, necessário ${required}`,
+      `Créditos insuficientes: usuário ${userId} tem ${current} créditos, necessário ${required}`,
     )
     this.name = 'InsufficientBalanceError'
   }
 }
 
-// ─── Adicionar créditos (compra via Stripe ou ajuste manual) ───────────────
+// ─── Adicionar créditos ────────────────────────────────────────────────────
 
 export type AddCreditOptions =
   | {
       type: 'purchase'
       stripePaymentId: string
-      exchangeRate: Prisma.Decimal
-      grossAmountCents: number
     }
   | {
       type: 'adjustment'
-      exchangeRate: Prisma.Decimal
       adminEmail: string
       description: string
     }
 
 /**
- * Incrementa o saldo do usuário em centavos e registra a transação atomicamente.
+ * Incrementa créditos do usuário e registra transação atomicamente.
  *
  * - type='purchase' : compra via Stripe (idempotente via stripePaymentId UNIQUE)
  * - type='adjustment': crédito manual por admin (auditado via adminEmail)
  *
- * @param userId      ID do usuário
- * @param amountCents Centavos de real a adicionar (positivo)
- * @param options     Discriminated union com dados específicos do tipo
- * @returns           Novo saldo em centavos
+ * @param userId  ID do usuário
+ * @param credits Créditos a adicionar (positivo)
+ * @param options Discriminated union com dados específicos do tipo
+ * @returns       Novo saldo em créditos
  */
 export async function addCredits(
   userId: string,
-  amountCents: number,
+  credits: number,
   options: AddCreditOptions,
-): Promise<{ balanceCents: number }> {
+): Promise<{ credits: number }> {
   const result = await prisma.$transaction(async (tx) => {
     const updated = await tx.user.update({
       where: { id: userId },
-      data: { balanceCents: { increment: amountCents } },
-      select: { balanceCents: true },
+      data: { credits: { increment: credits } },
+      select: { credits: true },
     })
 
     if (options.type === 'purchase') {
       await tx.creditTransaction.create({
         data: {
           userId,
-          amount: amountCents,
+          amount: credits,
           type: 'purchase',
           description: 'Compra de créditos via Stripe',
           stripePaymentId: options.stripePaymentId,
-          exchangeRate: options.exchangeRate,
-          grossAmountCents: options.grossAmountCents,
         },
       })
     } else {
       await tx.creditTransaction.create({
         data: {
           userId,
-          amount: amountCents,
+          amount: credits,
           type: 'adjustment',
           description: options.description,
-          exchangeRate: options.exchangeRate,
           adminEmail: options.adminEmail,
         },
       })
     }
 
-    return updated.balanceCents
+    return updated.credits
   })
 
-  console.log(`[Credits] addCredits type=${options.type} amountCents=${amountCents}`)
-  return { balanceCents: result }
+  console.log(`[Credits] addCredits type=${options.type} credits=${credits}`)
+  return { credits: result }
 }
 
-// ─── Deduzir créditos (consumo no chat) ───────────────────────────────────
+// ─── Deduzir créditos (consumo no chat) ────────────────────────────────────
 
 /**
- * Decrementa o saldo do usuário em centavos e registra a transação com metadata de auditoria.
- * Saldo nunca fica negativo — gate pré-chamada garante cobertura para pior caso.
- * UPDATE atômico com WHERE >= 0 como proteção adicional contra race conditions.
+ * Decrementa créditos do usuário e registra transação com metadata de auditoria.
+ * Créditos nunca ficam negativos — gate pré-chamada garante cobertura.
+ * UPDATE atômico com WHERE >= 0 como proteção contra race conditions.
  *
  * @param userId    ID do usuário
- * @param costCents Custo em centavos de real a deduzir (positivo)
- * @param metadata  Dados de auditoria (exchangeRate, tokens, model, costUsd, maxOutputTokens)
- * @returns         Novo saldo em centavos
+ * @param creditsUsed Créditos a deduzir (positivo)
+ * @param metadata  Dados de auditoria (tokens, model, config snapshot)
+ * @returns         Novo saldo em créditos
  * @throws          InsufficientBalanceError se saldo insuficiente
  */
 export async function deductCredits(
   userId: string,
-  costCents: number,
+  creditsUsed: number,
   metadata: DeductMetadata,
-): Promise<{ balanceCents: number }> {
+): Promise<{ credits: number }> {
   const result = await prisma.$transaction(async (tx) => {
-    // Atomic UPDATE com WHERE — previne race condition sob READ COMMITTED.
-    // A condição (balanceCents - cost >= 0) é avaliada no momento do write,
-    // não em um SELECT separado, eliminando a janela de concorrência.
-    const updated = await tx.$queryRaw<Array<{ balanceCents: number }>>`
+    const updated = await tx.$queryRaw<Array<{ credits: number }>>`
       UPDATE "User"
-      SET "balanceCents" = "balanceCents" - ${costCents},
+      SET "credits" = "credits" - ${creditsUsed},
           "updatedAt" = NOW()
       WHERE "id" = ${userId}
-        AND "balanceCents" - ${costCents} >= 0
-      RETURNING "balanceCents"
+        AND "credits" - ${creditsUsed} >= 0
+      RETURNING "credits"
     `
 
     if (updated.length === 0) {
-      // UPDATE não afetou nenhuma row — ou user não existe ou saldo insuficiente
       const user = await tx.user.findUnique({
         where: { id: userId },
-        select: { balanceCents: true },
+        select: { credits: true },
       })
 
       throw new InsufficientBalanceError(
         userId,
-        user?.balanceCents ?? 0,
-        costCents,
+        user?.credits ?? 0,
+        creditsUsed,
       )
     }
 
     await tx.creditTransaction.create({
       data: {
         userId,
-        amount: -costCents,
+        amount: -creditsUsed,
         type: 'consumption',
         description: metadata.conversationTitle,
-        exchangeRate: metadata.exchangeRate,
         inputTokens: metadata.inputTokens,
         outputTokens: metadata.outputTokens,
         modelUsed: metadata.modelUsed,
-        costUsd: metadata.costUsd,
-        maxOutputTokens: metadata.maxOutputTokens,
+        creditsPerMInput: metadata.creditsPerMInput,
+        creditsPerMOutput: metadata.creditsPerMOutput,
         hasAttachments: metadata.hasAttachments ?? false,
         attachmentTypes: metadata.attachmentTypes ?? [],
         attachmentTokens: metadata.attachmentTokens,
       },
     })
 
-    return updated[0].balanceCents
+    return updated[0].credits
   })
 
-  console.log(`[Credits] deductCredits completed costCents=${costCents}`)
-  return { balanceCents: result }
+  console.log(`[Credits] deductCredits completed credits=${creditsUsed}`)
+  return { credits: result }
 }

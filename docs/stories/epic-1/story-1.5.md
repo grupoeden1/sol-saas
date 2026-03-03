@@ -2,7 +2,7 @@
 
 **ID:** 1.5
 **Epic:** 1 - Foundation & Auth
-**Status:** DRAFT
+**Status:** DONE
 
 ## Statement
 

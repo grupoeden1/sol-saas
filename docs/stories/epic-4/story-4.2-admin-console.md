@@ -1,7 +1,7 @@
 # Story 4.2 — Admin Console: Métricas Operacionais e Financeiras
 
 **Epic:** 4 — Admin & Operações
-**Status:** In Progress
+**Status:** DONE
 **Created by:** River (SM — story-development-cycle workflow)
 **Story ID:** sol-4.2
 **Priority:** High

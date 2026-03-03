@@ -1,0 +1,473 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Story P.2 — Admin: Painel de Precificação com Simulador
+# Implementation Plan v1
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# CONTEXTO: Story P.1 criou as tabelas pricing_config e credit_packages, o
+# módulo lib/pricing.ts com getPricingConfig/invalidatePricingConfigCache,
+# e o modelo de créditos por tokens. Esta story cria o painel admin para
+# gerenciar precificação sem deploy.
+#
+# Dependência: Story P.1 deve estar COMPLETA antes de iniciar P.2.
+# Paralelo com: Story P.3 (Admin Console Metrics) — independente.
+#
+# Mudanças-chave:
+#   1. 3 novas API routes: GET/PUT /api/admin/pricing, CRUD /api/admin/packages
+#   2. Nova página /admin/pricing (Server + Client Components)
+#   3. Simulador em tempo real (6 seções)
+#   4. Cache invalidation ao salvar config
+#   5. Link de /admin para /admin/pricing
+# ─────────────────────────────────────────────────────────────────────────────
+
+storyId: "story-P.2"
+createdAt: "2026-03-03T20:00:00Z"
+createdBy: "@architect"
+status: pending
+complexity: HIGH
+estimatedEffort: "4-5 days"
+
+# ─── Dependencies ────────────────────────────────────────────────────────────
+
+dependencies:
+  - name: zod
+    version: "^3.x"
+    purpose: "Validação de input nas API routes"
+    install: "N/A — já instalado"
+  - name: sonner
+    version: "latest"
+    purpose: "Toast notifications (ou componente de toast existente no projeto)"
+    install: "Verificar se já existe — se não, pnpm --filter web add sonner"
+  - name: "@radix-ui/react-dialog"
+    version: "latest"
+    purpose: "Dialog de confirmação (via Shadcn/UI)"
+    install: "N/A — Shadcn/UI já instalado"
+
+# ─── Phases ──────────────────────────────────────────────────────────────────
+
+phases:
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # PHASE 1 — API: Rotas admin de pricing e packages
+  # Todas as routes dependem de P.1 (tabelas no banco).
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  - id: "phase-1"
+    name: "API: Rotas admin de pricing e packages"
+    description: >
+      Criar 3 novos arquivos de API routes:
+      GET/PUT /api/admin/pricing (config de precificação),
+      GET/POST /api/admin/packages (CRUD de pacotes),
+      PUT /api/admin/packages/[id] (editar pacote individual).
+      Todas verificam role ADMIN server-side com validação Zod.
+
+    subtasks:
+
+      # ─── 1.1: GET/PUT /api/admin/pricing ─────────────────────────────────
+
+      - id: "1.1"
+        title: "GET/PUT /api/admin/pricing — config de precificação"
+        service: backend
+        files:
+          - path: "apps/web/src/app/api/admin/pricing/route.ts"
+            action: CREATE
+        currentState: |
+          - Arquivo não existe
+          - Tabela pricing_config com seeds (P.1)
+          - getPricingConfig() e invalidatePricingConfigCache() em lib/pricing.ts (P.1)
+        targetState: |
+          - GET retorna config atual + pacotes
+          - PUT atualiza constantes no banco + invalida cache
+          - Ambos verificam role ADMIN server-side
+          - PUT usa validação Zod (inteiros positivos)
+          - PUT registra updatedBy (email do admin)
+        actions:
+          - "Criar arquivo apps/web/src/app/api/admin/pricing/route.ts"
+          - "Implementar GET: buscar pricing_config + credit_packages via Promise.all, retornar JSON"
+          - "Implementar PUT: validar via Zod, upsert em pricing_config, invalidatePricingConfigCache()"
+          - "Auth check: session?.user?.role !== 'ADMIN' → 403"
+          - "PUT registra updatedBy: session.user.email"
+        verification:
+          type: command
+          command: "cd c:/Projetos/Sol/sol-saas && pnpm --filter web exec tsc --noEmit"
+        status: pending
+        dependencies: []
+        notes: |
+          Código completo na Story P.2 Subtask 1.
+
+          Schema Zod para PUT:
+          ```typescript
+          const schema = z.object({
+            creditsPerMInput: z.number().int().positive().optional(),
+            creditsPerMOutput: z.number().int().positive().optional(),
+            maxOutputTokens: z.number().int().positive().optional(),
+          })
+          ```
+
+          PUT usa prisma.$transaction com upsert por key para atomicidade.
+          invalidatePricingConfigCache() DEVE ser chamada após update.
+
+      # ─── 1.2: GET/POST /api/admin/packages ──────────────────────────────
+
+      - id: "1.2"
+        title: "GET/POST /api/admin/packages — listar e criar pacotes"
+        service: backend
+        files:
+          - path: "apps/web/src/app/api/admin/packages/route.ts"
+            action: CREATE
+        currentState: |
+          - Arquivo não existe
+          - Tabela credit_packages com seeds (P.1)
+        targetState: |
+          - GET retorna todos os pacotes (ativos e inativos), ordenados por créditos
+          - POST cria novo pacote (ativo por default)
+          - Ambos verificam role ADMIN server-side
+          - POST usa validação Zod
+        actions:
+          - "Criar arquivo apps/web/src/app/api/admin/packages/route.ts"
+          - "Implementar GET: prisma.creditPackage.findMany({ orderBy: { credits: 'asc' } })"
+          - "Implementar POST: validar Zod, prisma.creditPackage.create, retornar 201"
+          - "Auth check em ambos"
+        verification:
+          type: command
+          command: "cd c:/Projetos/Sol/sol-saas && pnpm --filter web exec tsc --noEmit"
+        status: pending
+        dependencies: []
+        notes: |
+          Schema Zod para POST:
+          ```typescript
+          const packageSchema = z.object({
+            name: z.string().min(1).max(50),
+            credits: z.number().int().positive(),
+            priceInCents: z.number().int().positive(),
+          })
+          ```
+
+      # ─── 1.3: PUT /api/admin/packages/[id] ──────────────────────────────
+
+      - id: "1.3"
+        title: "PUT /api/admin/packages/[id] — editar pacote"
+        service: backend
+        files:
+          - path: "apps/web/src/app/api/admin/packages/[id]/route.ts"
+            action: CREATE
+        currentState: |
+          - Arquivo não existe
+        targetState: |
+          - PUT edita pacote existente (nome, créditos, preço, ativo/inativo)
+          - Verifica role ADMIN server-side
+          - Validação Zod com todos os campos opcionais
+          - 404 se pacote não encontrado
+        actions:
+          - "Criar arquivo com dynamic route [id]"
+          - "Implementar PUT: validar Zod, prisma.creditPackage.update"
+          - "Auth check"
+          - "Try/catch para P2025 (record not found) → 404"
+        verification:
+          type: command
+          command: "cd c:/Projetos/Sol/sol-saas && pnpm --filter web exec tsc --noEmit"
+        status: pending
+        dependencies: []
+        notes: |
+          Schema Zod para PUT:
+          ```typescript
+          const updateSchema = z.object({
+            name: z.string().min(1).max(50).optional(),
+            credits: z.number().int().positive().optional(),
+            priceInCents: z.number().int().positive().optional(),
+            active: z.boolean().optional(),
+          })
+          ```
+
+          Ativar/desativar pacote: { active: false } → pacote não aparece em /credits do aluno.
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # PHASE 2 — UI: Simulador completo + UI polish
+  # Subtasks 2.1 e 2.2 podem ser PARALELAS.
+  # Dependem da Phase 1 (APIs disponíveis para fetch).
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  - id: "phase-2"
+    name: "UI: Página /admin/pricing com simulador"
+    description: >
+      Criar a página /admin/pricing (Server Component) e todos os Client Components
+      do simulador. Subtask 2.1 (componentes funcionais) e 2.2 (polish UI) podem
+      ser executadas em paralelo se divididas entre devs, ou sequenciais se um dev.
+
+    subtasks:
+
+      # ─── 2.1: Página e componentes do simulador ─────────────────────────
+
+      - id: "2.1"
+        title: "Página /admin/pricing e 6 componentes do simulador"
+        service: frontend
+        files:
+          - path: "apps/web/src/app/admin/pricing/page.tsx"
+            action: CREATE
+          - path: "apps/web/src/components/admin/pricing/PricingConfigForm.tsx"
+            action: CREATE
+          - path: "apps/web/src/components/admin/pricing/MessageProfileSimulator.tsx"
+            action: CREATE
+          - path: "apps/web/src/components/admin/pricing/CustomCalculator.tsx"
+            action: CREATE
+          - path: "apps/web/src/components/admin/pricing/PackagesTable.tsx"
+            action: CREATE
+          - path: "apps/web/src/components/admin/pricing/StressTest.tsx"
+            action: CREATE
+          - path: "apps/web/src/components/admin/pricing/PricingExplainer.tsx"
+            action: CREATE
+        currentState: |
+          - Nenhum destes arquivos existe
+          - /admin existe com métricas (Story 4.2)
+        targetState: |
+          - Server Component page.tsx carrega dados iniciais (config + pacotes)
+          - PricingConfigForm: edição inline de 3 constantes + botão salvar com dialog de confirmação
+          - MessageProfileSimulator: tabela com 5 perfis, créditos calculados em tempo real
+          - CustomCalculator: input tokens → créditos (cálculo em tempo real)
+          - PackagesTable: lista de pacotes com CRUD (criar, editar, ativar/desativar)
+          - StressTest: campo cotação USD/BRL (não salva) → impacto na margem por pacote
+          - PricingExplainer: fórmulas explicativas (compra, consumo, câmbio)
+        actions:
+          - "Criar page.tsx: Server Component com auth check, carregamento de dados, layout com 6 seções"
+          - "Criar PricingConfigForm (Client): useState para valores editáveis, fetch PUT /api/admin/pricing, dialog de confirmação, toast"
+          - "Criar MessageProfileSimulator (Client): tabela com perfis fixos, useMemo para cálculos derivados dos valores do form"
+          - "Criar CustomCalculator (Client): 2 inputs (tokens in/out), resultado calculado, fórmula visível"
+          - "Criar PackagesTable (Client): fetch GET/POST/PUT packages, tabela com ações, modal de edição, toggle ativo/inativo"
+          - "Criar StressTest (Client): input cotação USD/BRL, cálculos de margem por pacote, label 'Apenas simulação'"
+          - "Criar PricingExplainer: componente estático com fórmulas de compra e consumo"
+        verification:
+          type: manual
+          description: "Página /admin/pricing carrega sem erros. Todas as 6 seções visíveis. Simulador recalcula em tempo real."
+        status: pending
+        dependencies:
+          - "1.1"
+          - "1.2"
+          - "1.3"
+        notes: |
+          Arquitetura de estado:
+          - page.tsx (Server) carrega dados iniciais e passa como props
+          - PricingConfigForm mantém estado local dos 3 valores editáveis
+          - Valores editáveis (não salvos) são compartilhados com MessageProfileSimulator,
+            CustomCalculator e StressTest via prop drilling ou context local
+          - PackagesTable gerencia seu próprio estado (CRUD)
+
+          Perfis de mensagem fixos:
+          - Curta: 800 input / 400 output
+          - Média: 2000 / 1500
+          - Longa: 3500 / 4000
+          - Pesada: 8000 / 6000
+          - Pipeline: 12000 / 8000
+
+          Custo OpenAI (GPT-4o pricing):
+          - Input: $2.50 / 1M tokens
+          - Output: $10.00 / 1M tokens
+
+      # ─── 2.2: UI polish e responsividade ─────────────────────────────────
+
+      - id: "2.2"
+        title: "UI polish: dark theme, responsivo, loading states, toasts"
+        service: frontend
+        files:
+          - path: "apps/web/src/components/admin/pricing/PricingConfigForm.tsx"
+            action: MODIFY
+          - path: "apps/web/src/components/admin/pricing/PackagesTable.tsx"
+            action: MODIFY
+          - path: "apps/web/src/app/admin/page.tsx"
+            action: MODIFY
+        currentState: |
+          - Componentes funcionais (2.1) criados
+          - Pode faltar: loading states, toasts, dark theme refinamento, link do /admin
+        targetState: |
+          - Dark theme solar (âmbar/dourado) consistente com /admin existente
+          - Shadcn/UI: Input, Button, Dialog, Table, Card, Badge, Toast
+          - Responsivo: tabelas com scroll horizontal em mobile
+          - Loading spinner nos botões ao salvar
+          - Toast via sonner (sucesso e erro)
+          - Dialog de confirmação obrigatória ao salvar pricing config
+          - Link "Gerenciar Precificação →" adicionado ao /admin
+        actions:
+          - "Refinar estilos de todos os componentes para dark/solar theme"
+          - "Adicionar loading states (useState loading, disabled nos botões)"
+          - "Adicionar toasts via sonner: sucesso ao salvar, erro ao falhar"
+          - "Garantir dialog de confirmação no PricingConfigForm"
+          - "Garantir responsividade: tabelas com overflow-x-auto em mobile"
+          - "Adicionar link /admin/pricing no /admin (page.tsx)"
+        verification:
+          type: manual
+          description: "Visual consistente com /admin. Funciona em mobile. Loading states visíveis. Toasts aparecem."
+        status: pending
+        dependencies:
+          - "2.1"
+        notes: |
+          Link no /admin (page.tsx):
+          ```tsx
+          <Card>
+            <CardHeader>
+              <CardTitle>Precificação</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <Link href="/admin/pricing" className="text-amber-400 hover:text-amber-300">
+                Gerenciar Precificação →
+              </Link>
+            </CardContent>
+          </Card>
+          ```
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # PHASE 3 — Validation: testes
+  # Depende de todas as fases anteriores.
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  - id: "phase-3"
+    name: "Validation: testes"
+    description: >
+      Typecheck, build, testes de API (auth, validação, CRUD),
+      testes de integração (cache invalidation, pacotes em /credits),
+      e testes de não-regressão (admin console, chat, webhook).
+
+    subtasks:
+
+      # ─── 3.1: Typecheck + Build ─────────────────────────────────────────
+
+      - id: "3.1"
+        title: "TypeScript typecheck + build"
+        service: qa
+        files: []
+        actions:
+          - "pnpm typecheck → zero errors"
+          - "pnpm build → zero errors"
+        verification:
+          type: command
+          command: "cd c:/Projetos/Sol/sol-saas && pnpm --filter web exec tsc --noEmit && pnpm build"
+        status: pending
+        dependencies:
+          - "2.1"
+          - "2.2"
+
+      # ─── 3.2: Testes de API ─────────────────────────────────────────────
+
+      - id: "3.2"
+        title: "Testes de API — auth, validação, CRUD"
+        service: qa
+        files: []
+        actions:
+          - "GET /api/admin/pricing: 200 para admin, 403 para user"
+          - "PUT /api/admin/pricing: 200 para admin, 403 para user, 400 para input inválido (negativo, float)"
+          - "PUT /api/admin/pricing: valores salvos no banco (verificar via Prisma Studio)"
+          - "PUT /api/admin/pricing: invalidatePricingConfigCache chamada (próxima getPricingConfig busca do banco)"
+          - "GET /api/admin/packages: 200 com todos os pacotes"
+          - "POST /api/admin/packages: 201, pacote criado no banco"
+          - "PUT /api/admin/packages/[id]: 200, pacote atualizado"
+          - "PUT /api/admin/packages/[id] com { active: false }: pacote desativado"
+          - "Pacote desativado não aparece em /credits do aluno"
+          - "Pacote criado aparece em /credits do aluno"
+        verification:
+          type: manual
+          description: "Todos os cenários de API passam"
+        status: pending
+        dependencies:
+          - "3.1"
+
+      # ─── 3.3: Testes de integração e regressão ──────────────────────────
+
+      - id: "3.3"
+        title: "Testes de integração e não-regressão"
+        service: qa
+        files: []
+        actions:
+          - "Alterar config → cache invalidado → próxima mensagem no chat usa nova config"
+          - "Simulador recalcula créditos em tempo real ao alterar constantes"
+          - "Calculadora custom calcula corretamente"
+          - "Stress test mostra impacto de cotação na margem"
+          - "/admin existente carrega normalmente"
+          - "Chat com dedução de créditos funciona"
+          - "Webhook Stripe funciona"
+          - "Auth inalterada"
+        verification:
+          type: manual
+          description: "Todos os cenários de integração e regressão passam"
+        status: pending
+        dependencies:
+          - "3.2"
+
+# ─── Execution Graph ─────────────────────────────────────────────────────────
+#
+#   Phase 1 (API)
+#   ├── 1.1 (GET/PUT pricing) ──────┐
+#   ├── 1.2 (GET/POST packages) ────┤    ← 1.1, 1.2, 1.3 PARALELAS
+#   ├── 1.3 (PUT packages/[id]) ────┤
+#   │                               │
+#   Phase 2 (UI)                    │
+#   ├── 2.1 (simulador completo) ───┤
+#   └── 2.2 (UI polish) ───────────┤    ← 2.1 primeiro, 2.2 refina
+#                                   │
+#   Phase 3 (Validation)            │
+#   ├── 3.1 (typecheck + build) ────┤
+#   ├── 3.2 (testes API) ──────────┤
+#   └── 3.3 (integração + regressão)┘
+#
+# ─── Parallel Execution Opportunities ────────────────────────────────────────
+#
+#   Wave 1: 1.1 + 1.2 + 1.3 (todas as routes — PARALELAS)
+#   Wave 2: 2.1 (simulador funcional)
+#   Wave 3: 2.2 (UI polish — pode ser parcialmente paralelo com 2.1 se outro dev)
+#   Wave 4: 3.1 (typecheck/build) → 3.2 (API tests) → 3.3 (integração)
+#
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ─── Risk Assessment ─────────────────────────────────────────────────────────
+
+risks:
+  - id: "R1"
+    description: "Simulador pode ficar lento com muitos cálculos em tempo real"
+    severity: LOW
+    mitigation: "Usar useMemo para cálculos derivados. Debounce em inputs se necessário."
+    affectedSubtasks: ["2.1"]
+
+  - id: "R2"
+    description: "Admin pode salvar valores incorretos (ex: CREDITS_PER_M_OUTPUT = 0)"
+    severity: MEDIUM
+    mitigation: "Validação Zod: z.number().int().positive(). Dialog de confirmação obrigatória."
+    affectedSubtasks: ["1.1", "2.1"]
+
+  - id: "R3"
+    description: "Cache invalidation pode não funcionar em deploy multi-instance"
+    severity: LOW
+    mitigation: "No MVP, single instance (VPS). Se escalar, considerar Redis pub/sub."
+    affectedSubtasks: ["1.1"]
+
+  - id: "R4"
+    description: "Cotação do stress test pode confundir admin (não é salva)"
+    severity: LOW
+    mitigation: "Label claro e destacado: 'NÃO salva no banco — apenas simulação'."
+    affectedSubtasks: ["2.1"]
+
+  - id: "R5"
+    description: "Shadcn/UI Dialog pode não estar instalado"
+    severity: LOW
+    mitigation: "Verificar components/ui/dialog.tsx. Se ausente: npx shadcn-ui@latest add dialog."
+    affectedSubtasks: ["2.1"]
+
+  - id: "R6"
+    description: "Muitos Client Components podem aumentar bundle size"
+    severity: LOW
+    mitigation: "Code splitting automático do Next.js. Lazy load de seções secundárias (StressTest, PricingExplainer)."
+    affectedSubtasks: ["2.1"]
+
+# ─── Files Summary ───────────────────────────────────────────────────────────
+#
+# CREATE (8 arquivos):
+#   apps/web/src/app/api/admin/pricing/route.ts .............. Phase 1 (GET/PUT config)
+#   apps/web/src/app/api/admin/packages/route.ts ............. Phase 1 (GET/POST pacotes)
+#   apps/web/src/app/api/admin/packages/[id]/route.ts ........ Phase 1 (PUT pacote)
+#   apps/web/src/app/admin/pricing/page.tsx .................. Phase 2 (Server Component)
+#   apps/web/src/components/admin/pricing/PricingConfigForm.tsx  Phase 2 (edição + confirmação)
+#   apps/web/src/components/admin/pricing/MessageProfileSimulator.tsx  Phase 2 (perfis)
+#   apps/web/src/components/admin/pricing/CustomCalculator.tsx  Phase 2 (calculadora)
+#   apps/web/src/components/admin/pricing/PackagesTable.tsx ... Phase 2 (CRUD pacotes)
+#   apps/web/src/components/admin/pricing/StressTest.tsx ...... Phase 2 (simulação câmbio)
+#   apps/web/src/components/admin/pricing/PricingExplainer.tsx  Phase 2 (fórmulas)
+#
+# MODIFY (1 arquivo):
+#   apps/web/src/app/admin/page.tsx .......................... Phase 2 (link para /admin/pricing)
+#
+# ─────────────────────────────────────────────────────────────────────────────

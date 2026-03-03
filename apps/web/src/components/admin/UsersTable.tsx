@@ -5,7 +5,7 @@ interface UserRow {
   id: string;
   email: string;
   role: string;
-  balanceCents: number;
+  credits: number;
   totalMessages: number;
   createdAt: Date;
 }
@@ -62,7 +62,7 @@ export default function UsersTable({ users, currentPage, totalPages }: UsersTabl
                           )}
                         </div>
                       </td>
-                      <td className="px-6 py-4 text-foreground">{formatBalance(user.balanceCents)}</td>
+                      <td className="px-6 py-4 text-foreground">{formatBalance(user.credits)}</td>
                       <td className="px-6 py-4 text-foreground-muted">{user.totalMessages}</td>
                       <td className="px-6 py-4 text-foreground-muted">{formatDate(user.createdAt)}</td>
                     </tr>
@@ -85,7 +85,7 @@ export default function UsersTable({ users, currentPage, totalPages }: UsersTabl
                   )}
                 </div>
                 <div className="mt-2 flex gap-4 text-xs text-foreground-muted">
-                  <span>{formatBalance(user.balanceCents)}</span>
+                  <span>{formatBalance(user.credits)}</span>
                   <span>{user.totalMessages} mensagens</span>
                 </div>
                 <p className="mt-1 text-xs text-foreground-muted/60">{formatDate(user.createdAt)}</p>

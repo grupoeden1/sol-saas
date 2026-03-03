@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import Stripe from 'stripe';
-import { Prisma, addCredits, getExchangeRate } from '@sol/db';
+import { Prisma, prisma, addCredits } from '@sol/db';
 import { getStripeClient } from '@/lib/stripe';
 
 export async function POST(req: NextRequest) {
@@ -31,45 +31,31 @@ export async function POST(req: NextRequest) {
 
     const userId =
       typeof session.metadata?.userId === 'string' ? session.metadata.userId : null;
+    const packageId =
+      typeof session.metadata?.packageId === 'string' ? session.metadata.packageId : null;
     const stripePaymentId =
       typeof session.payment_intent === 'string' ? session.payment_intent : null;
-    const amountTotal = session.amount_total;
 
-    if (!userId || !stripePaymentId || !amountTotal) {
+    if (!userId || !packageId || !stripePaymentId) {
       console.error('[Webhook] Metadata incompleto sessionId=', session.id);
       return NextResponse.json({ error: 'Incomplete metadata' }, { status: 400 });
     }
 
-    // Calcular créditos em centavos com CREDIT_PERCENTAGE (fração decimal, range 0.01–1.0)
-    const rawPercentage = parseFloat(process.env.CREDIT_PERCENTAGE ?? '0.40');
-    const creditPercentage =
-      isNaN(rawPercentage) || rawPercentage <= 0 || rawPercentage > 1.0
-        ? 0.40
-        : rawPercentage;
-    const amountCents = Math.floor(amountTotal * creditPercentage);
+    // Buscar pacote do banco para obter quantidade de créditos
+    const pkg = await prisma.creditPackage.findUnique({ where: { id: packageId } });
 
-    if (amountCents <= 0) {
-      console.error('[Webhook] amountCents calculado é zero ou negativo', {
-        amountTotal,
-        creditPercentage,
-        amountCents,
-        sessionId: session.id,
-      });
-      return NextResponse.json({ error: 'Invalid amount' }, { status: 400 });
+    if (!pkg) {
+      console.error('[Webhook] Pacote não encontrado packageId=', packageId);
+      return NextResponse.json({ error: 'Package not found' }, { status: 400 });
     }
 
     try {
-      // Buscar cotação para registro de auditoria
-      const exchangeRate = await getExchangeRate('USD-BRL');
-
-      await addCredits(userId, amountCents, {
+      await addCredits(userId, pkg.credits, {
         type: 'purchase',
         stripePaymentId,
-        exchangeRate,
-        grossAmountCents: amountTotal,
       });
       console.log(
-        `[Webhook] Créditos adicionados amountCents=${amountCents} percentage=${creditPercentage}`
+        `[Webhook] Créditos adicionados credits=${pkg.credits} package=${pkg.name}`
       );
     } catch (err: unknown) {
       // Idempotência: unique constraint em stripePaymentId rejeita webhook duplicado

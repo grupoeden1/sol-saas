@@ -22,17 +22,17 @@ export default function ConversationList({ conversations }: ConversationListProp
   return (
     <div className="rounded-2xl border border-solar-800/20 bg-background-secondary">
       <div className="border-b border-solar-800/20 px-6 py-4">
-        <h2 className="text-lg font-semibold text-foreground">Conversas</h2>
+        <h2 className="text-lg font-semibold text-foreground">Meus Roteiros</h2>
       </div>
 
       {conversations.length === 0 ? (
         <div className="px-6 py-12 text-center">
-          <p className="text-sm text-foreground-muted">Nenhuma conversa ainda</p>
+          <p className="text-sm text-foreground-muted">Nenhum roteiro ainda</p>
           <Link
-            href="/chat"
+            href="/quiz"
             className="mt-3 inline-flex items-center gap-1.5 text-sm font-medium text-solar-300 transition-all hover:text-solar-200"
           >
-            Iniciar uma conversa
+            Criar meu primeiro roteiro
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
               <line x1="5" y1="12" x2="19" y2="12" /><polyline points="12 5 19 12 12 19" />
             </svg>
@@ -43,7 +43,7 @@ export default function ConversationList({ conversations }: ConversationListProp
           {conversations.map((conv) => (
             <Link
               key={conv.id}
-              href={`/chat?id=${conv.id}`}
+              href={`/roteiros/${conv.id}`}
               className="flex items-center justify-between px-6 py-4 transition-all hover:bg-solar-500/5"
             >
               <div className="min-w-0 flex-1">

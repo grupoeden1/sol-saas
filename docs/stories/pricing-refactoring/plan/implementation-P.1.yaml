@@ -1,0 +1,936 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Story P.1 — Migration e Refatoração do Core de Créditos
+# Implementation Plan v1
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# CONTEXTO: O modelo de precificação anterior (centavos de real, câmbio diário
+# via AwesomeAPI, CREDIT_PERCENTAGE, MIN_COST_CENTS, grossAmountCents, costUsd,
+# exchangeRate por transação) está sendo completamente substituído por um modelo
+# simplificado de créditos por tokens.
+#
+# Mudanças-chave:
+#   1. User.balanceCents → User.credits (inteiro, não centavos)
+#   2. Novas tabelas: pricing_config, credit_packages
+#   3. Remover tabela: exchange_rates
+#   4. CreditTransaction: remover exchangeRate/costUsd/grossAmountCents/maxOutputTokens
+#   5. CreditTransaction: adicionar creditsPerMInput/creditsPerMOutput (snapshot)
+#   6. Novo arquivo lib/pricing.ts (getPricingConfig, calculateCredits, calculateMaxCredits)
+#   7. Refatorar lib/credits.ts (operar em créditos, não centavos)
+#   8. Remover lib/exchange-rate.ts e todas referências a AwesomeAPI
+#   9. Headers: X-Balance-Cents → X-Credits-Remaining + X-Credits-Used
+#  10. Webhook: créditos do pacote via metadata (sem conversão, sem porcentagem)
+#  11. Checkout: pacotes do banco (não hardcoded)
+#  12. Frontend: badge em créditos, não em R$
+# ─────────────────────────────────────────────────────────────────────────────
+
+storyId: "story-P.1"
+createdAt: "2026-03-03T20:00:00Z"
+createdBy: "@architect"
+status: pending
+complexity: HIGH
+estimatedEffort: "5-7 days"
+
+# ─── Dependencies ────────────────────────────────────────────────────────────
+
+dependencies:
+  - name: tiktoken
+    version: "^1.0.22"
+    purpose: "Contagem precisa de tokens (já instalado em packages/db)"
+    install: "N/A — já está em packages/db/package.json"
+  - name: zod
+    version: "^3.x"
+    purpose: "Validação de input nas API routes (já instalado)"
+    install: "N/A — já instalado"
+
+# ─── Environment Variables ───────────────────────────────────────────────────
+
+envVars:
+  - name: CREDIT_PERCENTAGE
+    default: "0.40"
+    description: "Fração do valor pago via Stripe — SERÁ REMOVIDA"
+    status: remove
+  - name: FALLBACK_USD_BRL_RATE
+    default: "6.00"
+    description: "Cotação USD-BRL de fallback — SERÁ REMOVIDA"
+    status: remove
+  - name: MIN_COST_CENTS
+    default: "100"
+    description: "Custo mínimo em centavos — SERÁ REMOVIDA (mínimo agora é 1 crédito, hardcoded)"
+    status: remove
+
+# ─── Constants ───────────────────────────────────────────────────────────────
+
+constants:
+  - name: CREDITS_PER_M_INPUT
+    value: 500
+    location: "tabela pricing_config (banco de dados)"
+    purpose: "Créditos cobrados por 1M de tokens de input"
+    status: new
+  - name: CREDITS_PER_M_OUTPUT
+    value: 2000
+    location: "tabela pricing_config (banco de dados)"
+    purpose: "Créditos cobrados por 1M de tokens de output"
+    status: new
+  - name: MAX_OUTPUT_TOKENS
+    value: 8192
+    location: "tabela pricing_config (banco de dados)"
+    purpose: "Teto de segurança para gate e max_tokens da OpenAI"
+    status: change  # mover de token-counter.ts para banco
+
+# ─── Phases ──────────────────────────────────────────────────────────────────
+
+phases:
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # PHASE 1 — Database: Migration + Seeds
+  # Tudo depende desta fase. Schema completo do novo modelo.
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  - id: "phase-1"
+    name: "Database: Migration + Seeds"
+    description: >
+      Migration Prisma completa: criar tabelas pricing_config e credit_packages,
+      renomear User.balanceCents → credits, alterar CreditTransaction (adicionar
+      snapshot, remover campos obsoletos), remover tabela exchange_rates.
+      Seeds para constantes e pacotes iniciais.
+      Toda refatoração de código depende desta fase.
+
+    subtasks:
+
+      # ─── 1.1: Migration Prisma ────────────────────────────────────────────
+
+      - id: "1.1"
+        title: "Migration Prisma — Novo schema de precificação"
+        service: database
+        files:
+          - path: "packages/db/prisma/schema.prisma"
+            action: MODIFY
+          - path: "packages/db/prisma/migrations/YYYYMMDD_pricing_credits_refactoring/migration.sql"
+            action: CREATE
+        currentState: |
+          - User tem campo `balanceCents Int @default(0)` — centavos de real
+          - CreditTransaction tem: exchangeRate Decimal?, costUsd Decimal?, grossAmountCents Int?, maxOutputTokens Int?
+          - Model ExchangeRate existe com campos: id, currency, date, rate, createdAt (@@unique([currency, date]))
+          - Não existem tabelas pricing_config nem credit_packages
+          - amount em CreditTransaction representa centavos
+        targetState: |
+          - User tem campo `credits Int @default(0)` — créditos inteiros
+          - CreditTransaction tem: creditsPerMInput Int?, creditsPerMOutput Int? (snapshot)
+          - CreditTransaction SEM: exchangeRate, costUsd, grossAmountCents, maxOutputTokens
+          - Model ExchangeRate REMOVIDO
+          - Nova tabela PricingConfig: id, key (unique), value (Int), updatedAt, updatedBy
+          - Nova tabela CreditPackage: id, name, credits, priceInCents, active, timestamps
+          - amount em CreditTransaction representa créditos
+        actions:
+          - "Em schema.prisma: renomear `balanceCents` → `credits` no model User"
+          - "Em schema.prisma: adicionar `creditsPerMInput Int?` e `creditsPerMOutput Int?` ao model CreditTransaction"
+          - "Em schema.prisma: remover `exchangeRate Decimal?`, `costUsd Decimal?`, `grossAmountCents Int?`, `maxOutputTokens Int?` do model CreditTransaction"
+          - "Em schema.prisma: remover model ExchangeRate inteiro"
+          - "Em schema.prisma: criar model PricingConfig com id, key (unique), value (Int), updatedAt, updatedBy"
+          - "Em schema.prisma: criar model CreditPackage com id, name, credits, priceInCents, active, timestamps"
+          - "Criar migration: pnpm --filter db exec -- npx prisma migrate dev --create-only --name pricing_credits_refactoring"
+          - "Revisar SQL gerado — deve conter RENAME COLUMN, ADD COLUMN, DROP COLUMN, DROP TABLE, CREATE TABLE"
+          - "Aplicar migration: pnpm --filter db exec -- npx prisma migrate dev"
+          - "Verificar: pnpm --filter db exec -- npx prisma generate"
+        verification:
+          type: command
+          command: "cd c:/Projetos/Sol/sol-saas && pnpm --filter db exec -- npx prisma validate"
+        status: pending
+        dependencies: []
+        notes: |
+          Migration SQL esperada:
+          ```sql
+          -- Renomear balanceCents → credits
+          ALTER TABLE "User" RENAME COLUMN "balanceCents" TO "credits";
+
+          -- Adicionar campos de snapshot ao CreditTransaction
+          ALTER TABLE "CreditTransaction" ADD COLUMN "creditsPerMInput" INTEGER;
+          ALTER TABLE "CreditTransaction" ADD COLUMN "creditsPerMOutput" INTEGER;
+
+          -- Remover campos obsoletos do CreditTransaction
+          ALTER TABLE "CreditTransaction" DROP COLUMN IF EXISTS "exchangeRate";
+          ALTER TABLE "CreditTransaction" DROP COLUMN IF EXISTS "costUsd";
+          ALTER TABLE "CreditTransaction" DROP COLUMN IF EXISTS "grossAmountCents";
+          ALTER TABLE "CreditTransaction" DROP COLUMN IF EXISTS "maxOutputTokens";
+
+          -- Remover tabela exchange_rates
+          DROP TABLE IF EXISTS "ExchangeRate";
+
+          -- Criar tabela pricing_config
+          CREATE TABLE "PricingConfig" (
+            "id" TEXT NOT NULL,
+            "key" TEXT NOT NULL,
+            "value" INTEGER NOT NULL,
+            "updatedAt" TIMESTAMP(3) NOT NULL,
+            "updatedBy" TEXT NOT NULL,
+            CONSTRAINT "PricingConfig_pkey" PRIMARY KEY ("id")
+          );
+          CREATE UNIQUE INDEX "PricingConfig_key_key" ON "PricingConfig"("key");
+
+          -- Criar tabela credit_packages
+          CREATE TABLE "CreditPackage" (
+            "id" TEXT NOT NULL,
+            "name" TEXT NOT NULL,
+            "credits" INTEGER NOT NULL,
+            "priceInCents" INTEGER NOT NULL,
+            "active" BOOLEAN NOT NULL DEFAULT true,
+            "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            "updatedAt" TIMESTAMP(3) NOT NULL,
+            CONSTRAINT "CreditPackage_pkey" PRIMARY KEY ("id")
+          );
+          ```
+
+          NOTA SOBRE CONVERSÃO DE SALDOS: A migration RENOMEIA a coluna (não recria).
+          Valores antigos (centavos) precisam ser convertidos para créditos.
+          Discutir lógica de conversão com PO ANTES de rodar em produção.
+          Em dev, pode-se resetar saldos para 0 ou usar fator de conversão manual.
+
+      # ─── 1.2: Seeds ────────────────────────────────────────────────────────
+
+      - id: "1.2"
+        title: "Seeds para pricing_config e credit_packages"
+        service: database
+        files:
+          - path: "packages/db/prisma/seed.ts"
+            action: MODIFY
+        currentState: |
+          - Seed cria usuário admin de teste
+          - Não há seeds para pricing_config ou credit_packages
+        targetState: |
+          - Seed cria 3 registros em pricing_config: CREDITS_PER_M_INPUT=500, CREDITS_PER_M_OUTPUT=2000, MAX_OUTPUT_TOKENS=8192
+          - Seed cria 3 pacotes em credit_packages: Starter(100, 2990), Pro(500, 9990), Max(1200, 19990)
+          - Seeds são idempotentes (upsert para re-runs)
+        actions:
+          - "Adicionar upsert de pricing_config com as 3 constantes"
+          - "Adicionar upsert de credit_packages com os 3 pacotes padrão"
+          - "Garantir idempotência via upsert (não createMany que falha em re-run)"
+        verification:
+          type: command
+          command: "cd c:/Projetos/Sol/sol-saas && pnpm --filter db exec -- npx prisma db seed"
+        status: pending
+        dependencies:
+          - "1.1"
+        notes: |
+          ```typescript
+          // pricing_config seeds (idempotente)
+          const pricingSeeds = [
+            { key: 'CREDITS_PER_M_INPUT', value: 500, updatedBy: 'system@sol.com' },
+            { key: 'CREDITS_PER_M_OUTPUT', value: 2000, updatedBy: 'system@sol.com' },
+            { key: 'MAX_OUTPUT_TOKENS', value: 8192, updatedBy: 'system@sol.com' },
+          ]
+          for (const seed of pricingSeeds) {
+            await prisma.pricingConfig.upsert({
+              where: { key: seed.key },
+              update: {},
+              create: seed,
+            })
+          }
+
+          // credit_packages seeds (idempotente via nome)
+          const packageSeeds = [
+            { name: 'Starter', credits: 100, priceInCents: 2990 },
+            { name: 'Pro', credits: 500, priceInCents: 9990 },
+            { name: 'Max', credits: 1200, priceInCents: 19990 },
+          ]
+          for (const seed of packageSeeds) {
+            const existing = await prisma.creditPackage.findFirst({ where: { name: seed.name } })
+            if (!existing) {
+              await prisma.creditPackage.create({ data: seed })
+            }
+          }
+          ```
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # PHASE 2 — Core: lib/pricing.ts + lib/credits.ts
+  # Subtasks podem ser executadas em PARALELO (independentes entre si).
+  # Ambas dependem da Phase 1 (schema atualizado).
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  - id: "phase-2"
+    name: "Core: lib/pricing.ts + lib/credits.ts"
+    description: >
+      Criar lib/pricing.ts (getPricingConfig com cache 60s, calculateCredits,
+      calculateMaxCredits, invalidatePricingConfigCache).
+      Refatorar lib/credits.ts (deductCredits e addCredits operam em créditos,
+      snapshot de config em CreditTransaction).
+      Subtasks 2.1 e 2.2 são PARALELAS — não dependem uma da outra.
+
+    subtasks:
+
+      # ─── 2.1: Criar lib/pricing.ts ─────────────────────────────────────────
+
+      - id: "2.1"
+        title: "Criar lib/pricing.ts — getPricingConfig, calculateCredits, calculateMaxCredits"
+        service: backend
+        files:
+          - path: "apps/web/src/lib/pricing.ts"
+            action: CREATE
+        currentState: |
+          - Arquivo não existe
+          - Lógica de custo em packages/db/src/token-counter.ts (estimateMaxCost, calculateRealCost)
+            opera em centavos com exchangeRate — será substituída
+          - MAX_OUTPUT_TOKENS e MIN_COST_CENTS exportados de token-counter.ts — serão movidos para banco
+        targetState: |
+          - Novo arquivo apps/web/src/lib/pricing.ts
+          - Interface PricingConfig: { creditsPerMInput, creditsPerMOutput, maxOutputTokens }
+          - getPricingConfig(): busca do banco com cache 60s em memória
+          - invalidatePricingConfigCache(): limpa cache (usado por admin ao salvar)
+          - calculateCredits(inputTokens, outputTokens, config): custo real em créditos
+          - calculateMaxCredits(inputTokens, config): custo máximo estimado (gate)
+          - Mínimo 1 crédito por mensagem (Math.max(1, Math.ceil(...)))
+        actions:
+          - "Criar arquivo apps/web/src/lib/pricing.ts"
+          - "Implementar interface PricingConfig"
+          - "Implementar getPricingConfig com cache em memória (cachedConfig, cacheTimestamp, CACHE_TTL_MS = 60_000)"
+          - "Implementar invalidatePricingConfigCache (seta cachedConfig = null)"
+          - "Implementar calculateCredits com fórmula: max(1, ceil((input/1M × creditsPerMInput) + (output/1M × creditsPerMOutput)))"
+          - "Implementar calculateMaxCredits com fórmula: max(1, ceil((input/1M × creditsPerMInput) + (maxOutputTokens/1M × creditsPerMOutput)))"
+        verification:
+          type: command
+          command: "cd c:/Projetos/Sol/sol-saas && pnpm --filter web exec tsc --noEmit"
+        status: pending
+        dependencies:
+          - "1.1"
+        notes: |
+          Código completo está na Story P.1 Subtask 2.
+
+          Testes a verificar:
+          - calculateCredits(1000, 500, defaults) → 2
+          - calculateCredits(0, 0, defaults) → 1 (mínimo)
+          - calculateMaxCredits(1000, defaults) → 17
+          - getPricingConfig() retorna defaults do banco
+          - Segunda chamada em <60s retorna cache (sem query)
+          - Após invalidatePricingConfigCache(), próxima chamada faz query
+
+          Fallback: se tabela vazia, usar defaults (500, 2000, 8192).
+
+      # ─── 2.2: Refatorar lib/credits.ts ──────────────────────────────────────
+
+      - id: "2.2"
+        title: "Refatorar deductCredits e addCredits — créditos com snapshot"
+        service: backend
+        files:
+          - path: "packages/db/src/credits.ts"
+            action: MODIFY
+        currentState: |
+          - deductCredits: opera em centavos (costCents), usa exchangeRate, costUsd, maxOutputTokens na metadata
+          - addCredits: discriminated union com exchangeRate obrigatório em ambos os modos
+          - InsufficientBalanceError referencia centavos
+          - WHERE do UPDATE atômico: balanceCents >= costCents
+          - DeductMetadata inclui exchangeRate, costUsd, maxOutputTokens
+          - AddCreditOptions inclui exchangeRate, grossAmountCents
+        targetState: |
+          - deductCredits(userId, credits, metadata): opera em créditos inteiros
+          - metadata inclui creditsPerMInput e creditsPerMOutput (snapshot da config)
+          - WHERE do UPDATE atômico: credits >= ${credits}
+          - addCredits(userId, credits, options): simplificado
+          - AddCreditsOptions: purchase (com stripePaymentId) | adjustment (com adminEmail, description)
+          - Sem exchangeRate, sem costUsd, sem grossAmountCents
+          - Retorna { credits: number } em vez de { balanceCents: number }
+        actions:
+          - "Atualizar interface DeductMetadata: remover exchangeRate/costUsd/maxOutputTokens, adicionar creditsPerMInput/creditsPerMOutput"
+          - "Atualizar deductCredits: WHERE credits >= ${credits}, decrement credits, amount: -credits"
+          - "Atualizar CreditTransaction.create: incluir creditsPerMInput e creditsPerMOutput do metadata"
+          - "Simplificar AddCreditsOptions: purchase { stripePaymentId } | adjustment { adminEmail, description }"
+          - "Atualizar addCredits: increment credits, sem exchangeRate"
+          - "Renomear InsufficientBalanceError → InsufficientCreditsError (ou atualizar mensagem)"
+          - "Retornar { credits } em vez de { balanceCents }"
+        verification:
+          type: command
+          command: "cd c:/Projetos/Sol/sol-saas && pnpm --filter db exec tsc --noEmit"
+        status: pending
+        dependencies:
+          - "1.1"
+        notes: |
+          Código completo na Story P.1 Subtask 3.
+
+          IMPORTANTE: Esta mudança quebra todos os callers de deductCredits e addCredits.
+          Os callers (chat/route.ts, webhook, add-credits) serão atualizados nas Phases 3 e 4.
+          TypeScript vai reportar erros nos callers até que sejam atualizados.
+
+          Testes:
+          - Dedução 5 créditos com saldo 10 → saldo 5, CreditTransaction com snapshot
+          - Dedução 5 créditos com saldo 3 → InsufficientCreditsError
+          - Purchase: incrementa créditos, registra stripePaymentId
+          - Adjustment: incrementa créditos, registra adminEmail + description
+          - Segundo purchase com mesmo stripePaymentId → P2002
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # PHASE 3 — Cleanup: Remover código de cotação
+  # Depende das Phases 1+2 (novo schema e novas funções prontas).
+  # Deve ser feita ANTES da Phase 4 para evitar conflitos de import.
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  - id: "phase-3"
+    name: "Cleanup: Remover código de cotação"
+    description: >
+      Remover lib/exchange-rate.ts, referências a AwesomeAPI, variáveis de ambiente
+      obsoletas (CREDIT_PERCENTAGE, FALLBACK_USD_BRL_RATE, MIN_COST_CENTS).
+      Limpar .env.example. Esta fase deve ser feita antes das routes (Phase 4)
+      para evitar imports fantasmas.
+
+    subtasks:
+
+      # ─── 3.1: Remover exchange-rate.ts e referências ───────────────────────
+
+      - id: "3.1"
+        title: "Remover lib/exchange-rate.ts e todas referências a cotação"
+        service: backend
+        files:
+          - path: "apps/web/src/lib/exchange-rate.ts"
+            action: DELETE
+          - path: "packages/db/src/exchange-rate.ts"
+            action: DELETE
+          - path: "packages/db/src/index.ts"
+            action: MODIFY
+          - path: ".env.example"
+            action: MODIFY
+        currentState: |
+          - exchange-rate.ts existe com getExchangeRate(), updateExchangeRate()
+          - packages/db/src/index.ts exporta funções de exchange-rate
+          - .env.example contém CREDIT_PERCENTAGE, FALLBACK_USD_BRL_RATE
+          - Múltiplos arquivos importam getExchangeRate
+          - Referências a AwesomeAPI no código
+          - packages/db/src/token-counter.ts exporta MAX_OUTPUT_TOKENS, MIN_COST_CENTS,
+            estimateMaxCost(), calculateRealCost() — funções que usam exchangeRate
+        targetState: |
+          - exchange-rate.ts removido
+          - Exports de exchange-rate removidos de index.ts
+          - .env.example sem CREDIT_PERCENTAGE, FALLBACK_USD_BRL_RATE, MIN_COST_CENTS
+          - .env.example com nota: "# Pricing config stored in database, not in .env"
+          - Zero referências a getExchangeRate, updateExchangeRate, AwesomeAPI no código
+          - estimateMaxCost(), calculateRealCost() removidas de token-counter.ts
+            (substituídas por calculateMaxCredits/calculateCredits em lib/pricing.ts)
+          - MAX_OUTPUT_TOKENS e MIN_COST_CENTS removidos de token-counter.ts
+            (MAX_OUTPUT_TOKENS agora vem do banco via getPricingConfig)
+        actions:
+          - "Deletar apps/web/src/lib/exchange-rate.ts (ou packages/db/src/exchange-rate.ts)"
+          - "Remover exports de exchange-rate de packages/db/src/index.ts"
+          - "Remover estimateMaxCost, calculateRealCost, MAX_OUTPUT_TOKENS, MIN_COST_CENTS de token-counter.ts"
+          - "Remover CREDIT_PERCENTAGE, FALLBACK_USD_BRL_RATE, MIN_COST_CENTS de .env.example"
+          - "Adicionar nota em .env.example: '# Pricing config (CREDITS_PER_M_INPUT, etc.) is stored in the database'"
+          - "Buscar e remover todos os imports de getExchangeRate, updateExchangeRate em todo o codebase"
+          - "Buscar e remover referências a AwesomeAPI"
+        verification:
+          type: command
+          command: "cd c:/Projetos/Sol/sol-saas && grep -r 'getExchangeRate\\|updateExchangeRate\\|AwesomeAPI\\|FALLBACK_USD_BRL\\|CREDIT_PERCENTAGE\\|MIN_COST_CENTS\\|estimateMaxCost\\|calculateRealCost' apps/ packages/ --include='*.ts' --include='*.tsx' -l | grep -v node_modules | grep -v migrations | wc -l"
+        status: pending
+        dependencies:
+          - "2.1"
+          - "2.2"
+        notes: |
+          CUIDADO: Esta fase VAI quebrar temporariamente os callers de exchange-rate
+          (chat/route.ts, webhook/route.ts, admin/add-credits/route.ts).
+          Esses callers serão corrigidos na Phase 4.
+
+          Verificar TODOS os arquivos que importam de exchange-rate antes de deletar:
+          - grep -r "exchange-rate" apps/ packages/ --include="*.ts" --include="*.tsx"
+
+          Atualizar .env.example:
+          ```
+          # ─── Pricing ─────────────────────────────────────────────
+          # Pricing config (CREDITS_PER_M_INPUT, CREDITS_PER_M_OUTPUT, MAX_OUTPUT_TOKENS)
+          # is stored in the database (pricing_config table), not in .env
+          # Edit via /admin/pricing panel
+          ```
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # PHASE 4 — Routes: chat + webhook + checkout
+  # Subtasks podem ser executadas em PARALELO (independentes entre si).
+  # Todas dependem das Phases 2+3 (funções novas + cleanup de imports).
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  - id: "phase-4"
+    name: "Routes: chat + webhook + checkout"
+    description: >
+      Atualizar as 3 API routes para usar o novo modelo de créditos:
+      POST /api/chat (gate + dedução em créditos), POST /api/webhooks/stripe
+      (créditos do pacote via metadata), POST /api/payments/checkout (pacotes do banco).
+      Subtasks 4.1, 4.2 e 4.3 são PARALELAS — não dependem umas das outras.
+
+    subtasks:
+
+      # ─── 4.1: POST /api/chat ─────────────────────────────────────────────
+
+      - id: "4.1"
+        title: "Atualizar POST /api/chat — gate e dedução em créditos"
+        service: backend
+        files:
+          - path: "apps/web/src/app/api/chat/route.ts"
+            action: MODIFY
+        currentState: |
+          - Importa: getExchangeRate, estimateMaxCost, calculateRealCost de packages/db
+          - Gate: balanceCents < maxCostCents → 402
+          - Dedução: deductCredits(userId, costCents, { exchangeRate, costUsd, maxOutputTokens, ... })
+          - Header: X-Balance-Cents (pré-dedução)
+          - Done event: balanceCents
+          - max_tokens: MAX_OUTPUT_TOKENS (importado de token-counter)
+        targetState: |
+          - Importa: getPricingConfig, calculateMaxCredits, calculateCredits de @/lib/pricing
+          - Importa: deductCredits de @sol/db (ou local)
+          - Gate: user.credits < maxCredits → 402
+          - Dedução: deductCredits(userId, creditsUsed, { creditsPerMInput, creditsPerMOutput, ... })
+          - Headers: X-Credits-Remaining (pós-dedução), X-Credits-Used (créditos gastos)
+          - Done event: creditsRemaining
+          - max_tokens: config.maxOutputTokens (do banco via getPricingConfig)
+        actions:
+          - "Substituir imports: getExchangeRate/estimateMaxCost/calculateRealCost → getPricingConfig/calculateMaxCredits/calculateCredits"
+          - "Adicionar: const config = await getPricingConfig()"
+          - "Gate: const maxCredits = calculateMaxCredits(totalInputTokens, config)"
+          - "Gate: user.credits < maxCredits → 402 com { error, required: maxCredits, available: user.credits }"
+          - "Stream: max_tokens: config.maxOutputTokens"
+          - "Pós-stream: const creditsUsed = calculateCredits(inputTokens, outputTokens, config)"
+          - "Dedução: deductCredits(userId, creditsUsed, { inputTokens, outputTokens, modelUsed, creditsPerMInput: config.creditsPerMInput, creditsPerMOutput: config.creditsPerMOutput, ... })"
+          - "Header: X-Credits-Remaining (pós-dedução), X-Credits-Used (creditsUsed)"
+          - "Done event: creditsRemaining em vez de balanceCents"
+          - "Remover: todas referências a balanceCents, costCents, exchangeRate, costUsd, MIN_COST_CENTS"
+        verification:
+          type: command
+          command: "cd c:/Projetos/Sol/sol-saas && pnpm --filter web exec tsc --noEmit"
+        status: pending
+        dependencies:
+          - "2.1"
+          - "2.2"
+          - "3.1"
+        notes: |
+          Fluxo atualizado:
+          ```
+          POST /api/chat
+            ├─ auth
+            ├─ parse request
+            ├─ [se anexos] validar + processar
+            ├─ contar totalInputTokens (tiktoken)
+            ├─ config = await getPricingConfig()
+            ├─ maxCredits = calculateMaxCredits(totalInputTokens, config)
+            ├─ user.credits < maxCredits → 402
+            ├─ stream OpenAI (max_tokens: config.maxOutputTokens)
+            │   ├─ success:
+            │   │   ├─ save msg
+            │   │   ├─ creditsUsed = calculateCredits(input, output, config)
+            │   │   ├─ deductCredits(userId, creditsUsed, { ...snapshot })
+            │   │   └─ done: { creditsRemaining }
+            │   └─ error: NO deduction
+            └─ headers: X-Credits-Remaining, X-Credits-Used
+          ```
+
+          PRESERVAR: streaming SSE, conversation management, error handling, model selection,
+          attachment processing, audit trail no catch do deductCredits.
+
+      # ─── 4.2: POST /api/webhooks/stripe ──────────────────────────────────
+
+      - id: "4.2"
+        title: "Atualizar webhook Stripe — créditos do pacote via metadata"
+        service: backend
+        files:
+          - path: "apps/web/src/app/api/webhooks/stripe/route.ts"
+            action: MODIFY
+        currentState: |
+          - Importa getExchangeRate
+          - Calcula amountCents = amountTotal × CREDIT_PERCENTAGE
+          - Chama addCredits(userId, amountCents, { type: 'purchase', stripePaymentId, exchangeRate, grossAmountCents })
+          - Lê amountTotal do session.amount_total
+        targetState: |
+          - Sem import de getExchangeRate
+          - Lê packageId e credits do session.metadata
+          - Chama addCredits(userId, packageCredits, { type: 'purchase', stripePaymentId })
+          - Sem conversão, sem porcentagem, sem exchangeRate
+        actions:
+          - "Remover import de getExchangeRate"
+          - "Remover cálculo de CREDIT_PERCENTAGE e amountCents"
+          - "Extrair packageId e credits do session.metadata"
+          - "Validar metadata presente (log error + 400 se ausente)"
+          - "Chamar addCredits(userId, Number(session.metadata.credits), { type: 'purchase', stripePaymentId })"
+          - "Manter idempotência via stripePaymentId UNIQUE"
+          - "Atualizar logs"
+        verification:
+          type: command
+          command: "cd c:/Projetos/Sol/sol-saas && pnpm --filter web exec tsc --noEmit"
+        status: pending
+        dependencies:
+          - "2.2"
+          - "3.1"
+        notes: |
+          DELTA:
+          ```typescript
+          // ANTES:
+          const exchangeRate = await getExchangeRate('USD-BRL')
+          const creditPercentage = parseFloat(process.env.CREDIT_PERCENTAGE ?? '0.40')
+          const amountCents = Math.floor((amountTotal ?? 0) * creditPercentage)
+          await addCredits(userId, amountCents, {
+            type: 'purchase', stripePaymentId, exchangeRate, grossAmountCents: amountTotal
+          })
+
+          // DEPOIS:
+          const packageCredits = Number(session.metadata?.credits)
+          if (!packageCredits || isNaN(packageCredits)) {
+            console.error('[Webhook] Missing credits in metadata', { sessionId: session.id })
+            return NextResponse.json({ error: 'Missing metadata' }, { status: 400 })
+          }
+          await addCredits(userId, packageCredits, {
+            type: 'purchase', stripePaymentId: session.payment_intent as string
+          })
+          ```
+
+          Idempotência mantida — stripePaymentId UNIQUE no banco.
+
+      # ─── 4.3: POST /api/payments/checkout ────────────────────────────────
+
+      - id: "4.3"
+        title: "Atualizar checkout — pacotes do banco"
+        service: backend
+        files:
+          - path: "apps/web/src/app/api/payments/checkout/route.ts"
+            action: MODIFY
+        currentState: |
+          - Pacotes hardcoded ou parcialmente do .env
+          - Cria sessão Stripe com valores fixos
+          - Metadata pode não incluir packageId e credits
+        targetState: |
+          - Busca pacote ativo por packageId na tabela credit_packages
+          - 404 se pacote não encontrado ou inativo
+          - Cria sessão Stripe com package.priceInCents
+          - Metadata inclui: userId, packageId, credits (para o webhook)
+        actions:
+          - "Adicionar import de prisma para buscar pacote"
+          - "Receber packageId no body"
+          - "Buscar pacote ativo: prisma.creditPackage.findFirst({ where: { id: packageId, active: true } })"
+          - "404 se não encontrado"
+          - "Criar sessão Stripe com unit_amount: pkg.priceInCents"
+          - "Incluir metadata: { userId, packageId: pkg.id, credits: String(pkg.credits) }"
+        verification:
+          type: command
+          command: "cd c:/Projetos/Sol/sol-saas && pnpm --filter web exec tsc --noEmit"
+        status: pending
+        dependencies:
+          - "1.1"
+        notes: |
+          Código completo na Story P.1 Subtask 7.
+
+          Metadata é crucial — o webhook (4.2) depende de:
+          - session.metadata.credits para saber quantos créditos creditar
+          - session.metadata.userId para identificar o usuário
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # PHASE 5 — Frontend: badge + exibição + /credits
+  # Depende da Phase 4 (headers e API atualizados).
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  - id: "phase-5"
+    name: "Frontend: badge, exibição, /credits"
+    description: >
+      Atualizar componentes frontend para o novo modelo de créditos:
+      badge no header (créditos inteiros), consumo dos novos headers
+      (X-Credits-Remaining, X-Credits-Used), página /credits com pacotes do banco.
+
+    subtasks:
+
+      # ─── 5.1: Badge e header ─────────────────────────────────────────────
+
+      - id: "5.1"
+        title: "Badge de créditos e consumo de headers no chat"
+        service: frontend
+        files:
+          - path: "apps/web/src/app/chat/page.tsx"
+            action: MODIFY
+          - path: "apps/web/src/components/layout/CreditsProvider.tsx"
+            action: MODIFY
+          - path: "apps/web/src/components/layout/CreditsBadge.tsx"
+            action: MODIFY
+          - path: "apps/web/src/lib/format-balance.ts"
+            action: MODIFY
+        currentState: |
+          - Badge exibe saldo formatado em R$ (via formatBalance que divide por 100)
+          - Chat page lê header X-Balance-Cents
+          - Done event: balanceCents
+          - CreditsProvider: updateCredits com balanceCents
+          - setNoCredits(balanceCents <= 0)
+        targetState: |
+          - Badge exibe créditos inteiros (ex: "47 créditos")
+          - Chat page lê header X-Credits-Remaining
+          - Chat page lê header X-Credits-Used → mostra "Gastou X crédito(s)"
+          - Done event: creditsRemaining
+          - CreditsProvider: updateCredits com credits (inteiro)
+          - setNoCredits(credits <= 0)
+          - formatBalance → formatCredits (ou simplificar para String(credits))
+        actions:
+          - "Atualizar CreditsBadge: exibir créditos inteiros sem formatação R$"
+          - "Atualizar formatBalance (ou criar formatCredits): retornar `${credits} crédito(s)`"
+          - "Chat page: X-Balance-Cents → X-Credits-Remaining"
+          - "Chat page: ler X-Credits-Used do header para feedback visual"
+          - "Chat page: done event balanceCents → creditsRemaining"
+          - "CreditsProvider: atualizar tipo de balanceCents para credits"
+          - "Adicionar feedback visual: 'Gastou X crédito(s)' após mensagem"
+        verification:
+          type: command
+          command: "cd c:/Projetos/Sol/sol-saas && pnpm --filter web exec tsc --noEmit"
+        status: pending
+        dependencies:
+          - "4.1"
+        notes: |
+          DELTA na chat page:
+          ```typescript
+          // ANTES:
+          const balanceHeader = res.headers.get('X-Balance-Cents')
+          // ...
+          if (typeof data.balanceCents === 'number') {
+            updateCredits(data.balanceCents)
+            setNoCredits(data.balanceCents <= 0)
+          }
+
+          // DEPOIS:
+          const creditsHeader = res.headers.get('X-Credits-Remaining')
+          const creditsUsedHeader = res.headers.get('X-Credits-Used')
+          // ...
+          if (typeof data.creditsRemaining === 'number') {
+            updateCredits(data.creditsRemaining)
+            setNoCredits(data.creditsRemaining <= 0)
+          }
+          if (creditsUsedHeader) {
+            // Feedback visual: "Gastou X crédito(s)"
+          }
+          ```
+
+      # ─── 5.2: Página /credits ───────────────────────────────────────────
+
+      - id: "5.2"
+        title: "Página /credits — pacotes do banco"
+        service: frontend
+        files:
+          - path: "apps/web/src/app/credits/page.tsx"
+            action: MODIFY
+        currentState: |
+          - Pacotes podem estar hardcoded ou lidos de constantes
+          - Compra via packageId fixo
+        targetState: |
+          - Server Component busca pacotes ativos: prisma.creditPackage.findMany({ where: { active: true } })
+          - Exibe: nome, créditos, preço em R$ (priceInCents / 100)
+          - Botão de compra envia packageId do banco
+        actions:
+          - "Buscar pacotes ativos via Server Component ou fetch"
+          - "Renderizar cards de pacotes com dados do banco"
+          - "Botão de compra: fetch('/api/payments/checkout', { body: { packageId: pkg.id } })"
+        verification:
+          type: manual
+          description: "Página /credits lista os 3 pacotes do banco. Desativar pacote via Prisma Studio → não aparece."
+        status: pending
+        dependencies:
+          - "4.3"
+        notes: |
+          Se a página já usa Server Components, basta trocar os dados hardcoded
+          pela query ao banco. Se usa Client Components, pode fazer fetch da API.
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # PHASE 6 — Validation: typecheck + lint + grep + testes manuais
+  # Depende de todas as fases anteriores.
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  - id: "phase-6"
+    name: "Validation: typecheck + testes"
+    description: >
+      Verificação end-to-end: TypeScript strict, lint, grep para referências
+      residuais, e testes manuais de todos os fluxos críticos.
+
+    subtasks:
+
+      # ─── 6.1: TypeScript typecheck ──────────────────────────────────────
+
+      - id: "6.1"
+        title: "TypeScript typecheck — zero errors"
+        service: qa
+        files: []
+        actions:
+          - "pnpm --filter db exec tsc --noEmit → zero errors"
+          - "pnpm --filter web exec tsc --noEmit → zero errors"
+          - "pnpm typecheck → zero errors (se existir script no root)"
+        verification:
+          type: command
+          command: "cd c:/Projetos/Sol/sol-saas && pnpm --filter db exec tsc --noEmit && pnpm --filter web exec tsc --noEmit"
+        status: pending
+        dependencies:
+          - "5.1"
+          - "5.2"
+
+      # ─── 6.2: Grep — referências residuais ─────────────────────────────
+
+      - id: "6.2"
+        title: "Grep — zero referências ao modelo anterior"
+        service: qa
+        files: []
+        actions:
+          - "grep -r 'balanceCents' --include='*.ts' --include='*.tsx' → ZERO (exceto migrations)"
+          - "grep -r 'CREDIT_PERCENTAGE' --include='*.ts' --include='*.tsx' --include='.env*' → ZERO"
+          - "grep -r 'MIN_COST_CENTS' --include='*.ts' --include='*.tsx' → ZERO"
+          - "grep -r 'getExchangeRate\\|updateExchangeRate' --include='*.ts' --include='*.tsx' → ZERO"
+          - "grep -r 'AwesomeAPI' --include='*.ts' --include='*.tsx' → ZERO"
+          - "grep -r 'X-Balance-Cents\\|X-Balance-Remaining' --include='*.ts' --include='*.tsx' → ZERO"
+          - "grep -r 'estimateMaxCost\\|calculateRealCost' --include='*.ts' --include='*.tsx' → ZERO"
+          - "grep -r 'grossAmountCents\\|costUsd' --include='*.ts' --include='*.tsx' → ZERO (exceto migrations)"
+          - "grep -r 'FALLBACK_USD_BRL' --include='*.ts' --include='*.tsx' --include='.env*' → ZERO"
+        verification:
+          type: command
+          command: "cd c:/Projetos/Sol/sol-saas && grep -r 'balanceCents\\|CREDIT_PERCENTAGE\\|MIN_COST_CENTS\\|getExchangeRate\\|AwesomeAPI\\|X-Balance-Cents\\|X-Balance-Remaining\\|estimateMaxCost\\|calculateRealCost\\|FALLBACK_USD_BRL' apps/ packages/ --include='*.ts' --include='*.tsx' -l | grep -v node_modules | grep -v migrations | wc -l"
+        status: pending
+        dependencies:
+          - "6.1"
+        notes: |
+          Migrations antigas podem conter termos antigos — isso é esperado e correto.
+          Apenas código fonte (apps/, packages/) deve estar limpo.
+
+      # ─── 6.3: Build ────────────────────────────────────────────────────
+
+      - id: "6.3"
+        title: "Build — pnpm build sem erros"
+        service: qa
+        files: []
+        actions:
+          - "pnpm build → sem erros"
+        verification:
+          type: command
+          command: "cd c:/Projetos/Sol/sol-saas && pnpm build"
+        status: pending
+        dependencies:
+          - "6.1"
+
+      # ─── 6.4: Testes manuais ───────────────────────────────────────────
+
+      - id: "6.4"
+        title: "Testes manuais — fluxos end-to-end"
+        service: qa
+        files: []
+        actions:
+          - "Gate aceita: saldo 50, maxCredits ~17 → stream → deduz créditos reais (~3)"
+          - "Gate rejeita: saldo 5, maxCredits ~17 → 402 com { required, available }"
+          - "OpenAI error: saldo qualquer → stream falha → zero créditos deduzidos"
+          - "Webhook: checkout.session.completed com metadata → créditos do pacote creditados"
+          - "Idempotência: webhook duplicado → sem créditos duplicados"
+          - "Chat com anexo: tokens de anexo incluídos no gate e dedução"
+          - "Badge: atualiza em tempo real via X-Credits-Remaining"
+          - "Feedback: 'Gastou X créditos' visível após mensagem"
+          - "Página /credits: lista 3 pacotes do banco"
+          - "CreditTransaction: snapshot de creditsPerMInput e creditsPerMOutput"
+          - "Auth: login/logout/register inalterados"
+          - "Admin: /admin carrega sem erros"
+        verification:
+          type: manual
+          description: "Todos os cenários passam sem regressões"
+        status: pending
+        dependencies:
+          - "6.1"
+          - "6.2"
+          - "6.3"
+
+# ─── Execution Graph ─────────────────────────────────────────────────────────
+#
+#   Phase 1 (Database)
+#   ├── 1.1 (migration) ───── 1.2 (seeds)
+#   │                              │
+#   Phase 2 (Core)                 │
+#   ├── 2.1 (pricing.ts) ─────────┤
+#   ├── 2.2 (credits.ts) ─────────┤    ← 2.1 e 2.2 PARALELAS
+#   │                              │
+#   Phase 3 (Cleanup)              │
+#   └── 3.1 (remover cotação) ─────┤
+#                                   │
+#   Phase 4 (Routes)                │
+#   ├── 4.1 (chat) ────────────────┤
+#   ├── 4.2 (webhook) ─────────────┤    ← 4.1, 4.2, 4.3 PARALELAS
+#   ├── 4.3 (checkout) ────────────┤
+#   │                              │
+#   Phase 5 (Frontend)             │
+#   ├── 5.1 (badge/headers) ───────┤
+#   ├── 5.2 (/credits page) ──────┤
+#   │                              │
+#   Phase 6 (Validation)           │
+#   ├── 6.1 (typecheck) ──────────┤
+#   ├── 6.2 (grep refs) ──────────┤
+#   ├── 6.3 (build) ──────────────┤
+#   └── 6.4 (manual tests) ───────┘
+#
+# ─── Parallel Execution Opportunities ────────────────────────────────────────
+#
+#   Wave 1: 1.1 (migration)
+#   Wave 2: 1.2 (seeds)
+#   Wave 3: 2.1 + 2.2 (pricing.ts + credits.ts — PARALELAS)
+#   Wave 4: 3.1 (cleanup cotação)
+#   Wave 5: 4.1 + 4.2 + 4.3 (chat + webhook + checkout — PARALELAS)
+#   Wave 6: 5.1 + 5.2 (badge + /credits — PARALELAS)
+#   Wave 7: 6.1 (typecheck) → 6.2 + 6.3 + 6.4 (grep/build/manual — PARALELAS)
+#
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ─── Risk Assessment ─────────────────────────────────────────────────────────
+
+risks:
+  - id: "R1"
+    description: "Conversão de saldos existentes (balanceCents → credits) pode perder dados ou precisão"
+    severity: HIGH
+    mitigation: |
+      Backup completo do banco antes da migration em produção.
+      Migration renomeia coluna (preserva valores). Conversão de centavos para créditos
+      discutida com PO antes de produção. Em dev, pode resetar saldos.
+    affectedSubtasks: ["1.1"]
+
+  - id: "R2"
+    description: "Drop da tabela exchange_rates é irreversível"
+    severity: MEDIUM
+    mitigation: "Backup antes de drop. Validar em staging. Dados históricos não são necessários no novo modelo."
+    affectedSubtasks: ["1.1"]
+
+  - id: "R3"
+    description: "Remoção de exchange-rate.ts quebra imports em múltiplos arquivos simultaneamente"
+    severity: MEDIUM
+    mitigation: |
+      Phase 3 (cleanup) é executada ANTES da Phase 4 (routes) deliberadamente.
+      TypeScript vai reportar erros — são corrigidos na Phase 4.
+      Alternativa: renomear/esvaziar o arquivo em vez de deletar (tombstone).
+    affectedSubtasks: ["3.1", "4.1", "4.2"]
+
+  - id: "R4"
+    description: "Cache de 60s do pricing config pode causar inconsistência temporária"
+    severity: LOW
+    mitigation: "Aceitável para MVP. Admin é avisado que mudanças levam até 60s. invalidatePricingConfigCache() para mudanças via admin."
+    affectedSubtasks: ["2.1"]
+
+  - id: "R5"
+    description: "Remoção de grossAmountCents perde dados de auditoria histórica"
+    severity: MEDIUM
+    mitigation: |
+      Alternativa: tornar nullable e deprecated em vez de remover.
+      Se dropado, backup preserva dados. Novo modelo calcula receita via JOIN com credit_packages.
+    affectedSubtasks: ["1.1"]
+
+  - id: "R6"
+    description: "Frontend e backend desacoplados — badge pode mostrar valor errado transitoriamente"
+    severity: LOW
+    mitigation: "Frontend consome header X-Credits-Remaining e done event creditsRemaining. Ambos atualizados na mesma release."
+    affectedSubtasks: ["4.1", "5.1"]
+
+# ─── Files Summary ───────────────────────────────────────────────────────────
+#
+# MODIFY (10 arquivos):
+#   packages/db/prisma/schema.prisma ................ Phase 1 (novo schema completo)
+#   packages/db/prisma/seed.ts ...................... Phase 1 (seeds pricing + packages)
+#   packages/db/src/credits.ts ...................... Phase 2 (deductCredits + addCredits em créditos)
+#   packages/db/src/index.ts ........................ Phase 3 (remover exports de exchange-rate)
+#   packages/db/src/token-counter.ts ................ Phase 3 (remover estimateMaxCost, calculateRealCost, constantes)
+#   apps/web/src/app/api/chat/route.ts .............. Phase 4 (gate + dedução em créditos)
+#   apps/web/src/app/api/webhooks/stripe/route.ts ... Phase 4 (créditos do pacote)
+#   apps/web/src/app/api/payments/checkout/route.ts . Phase 4 (pacotes do banco)
+#   apps/web/src/app/chat/page.tsx .................. Phase 5 (X-Credits-Remaining, creditsRemaining)
+#   apps/web/src/app/credits/page.tsx ............... Phase 5 (pacotes do banco)
+#   .env.example .................................... Phase 3 (remover vars obsoletas)
+#
+# MODIFY (frontend — verificar nomes exatos):
+#   apps/web/src/components/layout/CreditsProvider.tsx  Phase 5 (credits em vez de balanceCents)
+#   apps/web/src/components/layout/CreditsBadge.tsx ... Phase 5 (exibir créditos inteiros)
+#   apps/web/src/lib/format-balance.ts ................ Phase 5 (formatCredits)
+#
+# CREATE (2 arquivos):
+#   apps/web/src/lib/pricing.ts ..................... Phase 2 (getPricingConfig, calculateCredits, etc.)
+#   packages/db/prisma/migrations/.../migration.sql . Phase 1 (gerado pelo Prisma)
+#
+# DELETE (2 arquivos):
+#   apps/web/src/lib/exchange-rate.ts ............... Phase 3
+#   packages/db/src/exchange-rate.ts ................ Phase 3 (se existir separado)
+#
+# ─────────────────────────────────────────────────────────────────────────────

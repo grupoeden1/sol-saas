@@ -32,7 +32,7 @@ export async function POST(req: Request) {
         data: {
           email,
           passwordHash,
-          balanceCents: 0,
+          credits: 0,
         }
       });
     } catch (error) {
