@@ -1,5 +1,6 @@
 import { auth } from '@/lib/auth'
 import { prisma } from '@sol/db'
+import { rateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit'
 import * as fs from 'fs/promises'
 import * as path from 'path'
 import { getVideoDuration } from '@/lib/video/ffmpeg'
@@ -16,6 +17,10 @@ const ALLOWED_TYPES = ['video/mp4', 'video/quicktime', 'video/x-msvideo', 'video
  * POST /api/video/upload — Upload video for analysis (question 2A.2)
  */
 export async function POST(req: Request) {
+  // Rate limiting: 5 uploads per minute per IP
+  const rl = rateLimit(`video:${getClientIp(req)}`, { limit: 5, windowSeconds: 60 })
+  if (!rl.allowed) return rateLimitResponse(rl.resetAt)
+
   const session = await auth()
   if (!session?.user?.email) {
     return new Response('Unauthorized', { status: 401 })
@@ -23,11 +28,19 @@ export async function POST(req: Request) {
 
   const user = await prisma.user.findUnique({
     where: { email: session.user.email },
-    select: { id: true },
+    select: { id: true, credits: true },
   })
 
   if (!user) {
     return new Response('User not found', { status: 404 })
+  }
+
+  // Credit gate: video processing triggers OpenAI API calls
+  if (user.credits <= 0) {
+    return Response.json(
+      { error: 'Créditos insuficientes para processar vídeo' },
+      { status: 402 }
+    )
   }
 
   const formData = await req.formData()

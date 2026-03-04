@@ -1,5 +1,10 @@
 import { auth } from '@/lib/auth'
 import { prisma } from '@sol/db'
+import { z } from 'zod'
+
+const patchSchema = z.object({
+  status: z.enum(['COMPLETED', 'ABANDONED']),
+})
 
 /**
  * GET /api/quiz/session/[id] — Returns full quiz state with all answers
@@ -110,14 +115,16 @@ export async function PATCH(
   }
 
   const body = await req.json()
-  const { status } = body as { status: string }
+  const parsed = patchSchema.safeParse(body)
 
-  if (status !== 'COMPLETED' && status !== 'ABANDONED') {
+  if (!parsed.success) {
     return Response.json(
       { error: 'Status inválido. Use COMPLETED ou ABANDONED' },
       { status: 400 }
     )
   }
+
+  const { status } = parsed.data
 
   const updated = await prisma.quizSession.update({
     where: { id: params.id },

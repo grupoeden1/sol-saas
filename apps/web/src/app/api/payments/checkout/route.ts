@@ -47,7 +47,7 @@ export const POST = auth(async function handler(req) {
     const baseUrl = process.env.NEXTAUTH_URL ?? 'http://localhost:3000';
 
     const checkoutSession = await getStripeClient().checkout.sessions.create({
-      payment_method_types: ['card'],
+      payment_method_types: ['card', 'pix'],
       mode: 'payment',
       currency: 'brl',
       line_items: [

@@ -9,6 +9,7 @@ import {
 } from '@sol/db'
 import { countRawTokens } from '@sol/db/token-counter'
 import { buildQuizPrompt, type PromptContext } from '@/lib/quiz/prompt-builder'
+import { rateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit'
 import OpenAI from 'openai'
 import { z } from 'zod'
 
@@ -28,6 +29,10 @@ function getOpenAI() {
 
 export async function POST(req: Request) {
   try {
+    // Rate limiting: 10 generations per minute per IP
+    const rl = rateLimit(`generate:${getClientIp(req)}`, { limit: 10, windowSeconds: 60 })
+    if (!rl.allowed) return rateLimitResponse(rl.resetAt)
+
     const session = await auth()
     if (!session?.user?.email) {
       return new Response('Unauthorized', { status: 401 })

@@ -10,6 +10,7 @@ import {
   InsufficientBalanceError,
 } from '@sol/db';
 import { countTokens, countRawTokens } from '@sol/db/token-counter';
+import { rateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit';
 import OpenAI from 'openai';
 import { z } from 'zod';
 
@@ -31,6 +32,10 @@ function getOpenAI() {
 
 export async function POST(req: Request) {
   try {
+    // Rate limiting: 30 requests per minute per IP
+    const rl = rateLimit(`chat:${getClientIp(req)}`, { limit: 30, windowSeconds: 60 });
+    if (!rl.allowed) return rateLimitResponse(rl.resetAt);
+
     // Validar autenticação
     const session = await auth();
     if (!session?.user?.email) {

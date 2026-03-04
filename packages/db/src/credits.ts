@@ -54,6 +54,10 @@ export async function addCredits(
   credits: number,
   options: AddCreditOptions,
 ): Promise<{ credits: number }> {
+  if (credits <= 0) {
+    throw new Error(`addCredits called with non-positive amount: ${credits}`)
+  }
+
   const result = await prisma.$transaction(async (tx) => {
     const updated = await tx.user.update({
       where: { id: userId },
@@ -108,6 +112,10 @@ export async function deductCredits(
   creditsUsed: number,
   metadata: DeductMetadata,
 ): Promise<{ credits: number }> {
+  if (creditsUsed <= 0) {
+    throw new Error(`deductCredits called with non-positive amount: ${creditsUsed}`)
+  }
+
   const result = await prisma.$transaction(async (tx) => {
     const updated = await tx.$queryRaw<Array<{ credits: number }>>`
       UPDATE "User"

@@ -1,9 +1,9 @@
-# Fix Report — Quality Audit v3 2026-02-28
+# Fix Report — Quality Audit v4 2026-03-03
 
 **Agent:** @dev (Claude)
-**Workflow:** quality-audit — Etapa 3
-**Input:** Static analysis + Security audit + Frontend/Stories audit
-**Status:** **PASS** (4 CRITICAL/HIGH auto-fixed, 14 MEDIUM/LOW → backlog)
+**Workflow:** quality-audit — Phase 3
+**Input:** 01-static-analysis.md (34 findings), 02-quality-review.md (21 findings)
+**Status:** **PASS** (10 BLOCKER+HIGH auto-fixed, 35 MEDIUM+LOW → backlog)
 
 ---
 
@@ -11,65 +11,126 @@
 
 | Categoria | Total | Auto-fixed | Backlog |
 |-----------|-------|------------|---------|
-| CRITICAL  | 2     | 2          | 0       |
-| HIGH      | 2     | 2          | 0       |
-| MEDIUM    | 11    | 0          | 11      |
-| LOW       | 3     | 0          | 3       |
-| **Total** | **18**| **4**      | **14**  |
+| BLOCKER   | 2     | 2          | 0       |
+| HIGH      | 7     | 7          | 0       |
+| MEDIUM*   | 2     | 2          | 0       |
+| MEDIUM    | 18    | 0          | 18      |
+| LOW       | 17    | 0          | 17      |
+| **Total** | **46**| **11**     | **35**  |
+
+*SA-013 e QA-011 foram promovidos para auto-fix por serem quick-wins de segurança.
 
 ---
 
-## Correções Aplicadas (v3 — 2026-02-28)
+## Correções Aplicadas (v4 — 2026-03-03)
 
-### Fix 1 | SEC-1 (CRITICAL) — userId metadata type validation
+### Fix 1 | QA-001 (BLOCKER) — CHECK constraint credits >= 0
 
-**Arquivo:** [webhooks/stripe/route.ts:32](apps/web/src/app/api/webhooks/stripe/route.ts#L32)
+**Arquivo:** `packages/db/prisma/migrations/20260303230000_add_credits_non_negative_check/migration.sql`
 
-**Antes:** `const { userId } = session.metadata ?? {}` — destructuring cego aceita qualquer tipo (object, number, etc.)
+**Problema:** Constraint `user_credits_non_negative` criada em migration 20260225, dropada durante pricing refactoring, nunca re-adicionada. Banco sem safety net contra créditos negativos.
 
-**Depois:** `typeof session.metadata?.userId === 'string'` — rejeita tipos inválidos com 400.
-
-**Risco mitigado:** Corrupção de dados no banco por userId de tipo inválido.
+**Correção:** Nova migration: `ALTER TABLE "User" ADD CONSTRAINT "user_credits_non_negative" CHECK ("credits" >= 0);`
 
 **TypeCheck:** PASS
 
 ---
 
-### Fix 2 | SEC-2 (CRITICAL) — CREDIT_PERCENTAGE range validation
+### Fix 2 | SA-017 / SA-016 / QA-010 (BLOCKER + HIGH) — Rate limiting
 
-**Arquivo:** [webhooks/stripe/route.ts:43](apps/web/src/app/api/webhooks/stripe/route.ts#L43)
+**Arquivo:** `apps/web/src/lib/rate-limit.ts` (novo) + 4 rotas
 
-**Antes:** `isNaN()` check apenas — aceita valores como `999.0` ou `-1.0`.
+**Problema:** Zero rate limiting em todo o codebase. Rotas que fazem chamadas OpenAI pagas expostas a abuso.
 
-**Depois:** Range `(0, 1.0]` com fallback seguro `0.40`. Rejeita NaN, negativos, e valores > 1.0.
-
-**Risco mitigado:** Creditar 999x o valor pago por env var corrompida.
-
-**TypeCheck:** PASS
-
----
-
-### Fix 3 | SEC-3 (HIGH) — Auth session type safety
-
-**Arquivo:** [lib/auth.ts:62-66](apps/web/src/lib/auth.ts#L62-L66)
-
-**Antes:** `as string` e `as 'USER' | 'ADMIN'` — casts cegos que confiam em dados do JWT.
-
-**Depois:** `typeof` guards: só atribui se o valor for do tipo correto. JWT malformado não quebra a session.
+**Correção:** Rate limiter in-memory por IP com sliding window. Aplicado em:
+- `POST /api/chat` — 30 req/min/IP
+- `POST /api/auth/register` — 5 req/hora/IP
+- `POST /api/quiz/generate` — 10 req/min/IP
+- `POST /api/video/upload` — 5 req/min/IP
 
 **TypeCheck:** PASS
 
 ---
 
-### Fix 4 | SEC-4 (HIGH) — Server-side file upload size check
+### Fix 3 | QA-002 (HIGH) — addCredits validation
 
-**Arquivo:** [api/chat/route.ts:65](apps/web/src/app/api/chat/route.ts#L65)
+**Arquivo:** `packages/db/src/credits.ts`
 
-**Antes:** Sem validação server-side de tamanho — `formData()` bufferiza qualquer payload.
+**Problema:** `addCredits()` aceita valor 0 ou negativo sem validação. Corrompe saldo se pacote mal configurado.
 
-**Depois:** Check de `Content-Length > 30 MB` retorna 413 antes de consumir o body.
+**Correção:** Guard `if (credits <= 0) throw new Error(...)` no início da função.
 
-**Risco mitigado:** OOM por upload malicioso que bypassa validação client-side.
+**TypeCheck:** PASS
+
+---
+
+### Fix 4 | QA-003 (HIGH) — deductCredits validation
+
+**Arquivo:** `packages/db/src/credits.ts`
+
+**Problema:** `deductCredits()` aceita valor 0 ou negativo. Defense-in-depth.
+
+**Correção:** Guard `if (creditsUsed <= 0) throw new Error(...)` no início da função.
+
+**TypeCheck:** PASS
+
+---
+
+### Fix 5 | QA-004 (HIGH) — PIX payment method
+
+**Arquivo:** `apps/web/src/app/api/payments/checkout/route.ts`
+
+**Problema:** `payment_method_types: ['card']` — PIX ausente. Story 3.3 AC4 requer PIX.
+
+**Correção:** `payment_method_types: ['card', 'pix']`
+
+**TypeCheck:** PASS
+
+---
+
+### Fix 6 | SA-014 (HIGH) — Middleware missing routes
+
+**Arquivo:** `apps/web/src/middleware.ts`
+
+**Problema:** `/onboarding`, `/quiz`, `/roteiros` não protegidos pelo middleware. Usuário não autenticado vê loading/error antes de redirect.
+
+**Correção:** Adicionados ao `isProtectedRoute` check.
+
+**TypeCheck:** PASS
+
+---
+
+### Fix 7 | SA-023 (HIGH) — Video upload no credit check
+
+**Arquivo:** `apps/web/src/app/api/video/upload/route.ts`
+
+**Problema:** Video upload dispara chamadas OpenAI (GPT-4o Vision + consolidation) sem verificar créditos. Usuário com 0 créditos gasta budget da API.
+
+**Correção:** Credit gate: `if (user.credits <= 0)` retorna 402 antes de salvar arquivo.
+
+**TypeCheck:** PASS
+
+---
+
+### Fix 8 | QA-011 (MEDIUM → auto-fix) — Webhook pkg.credits validation
+
+**Arquivo:** `apps/web/src/app/api/webhooks/stripe/route.ts`
+
+**Problema:** Webhook não valida `pkg.credits > 0` antes de chamar `addCredits`. Pacote com 0 créditos corrompe saldo.
+
+**Correção:** `if (!pkg || pkg.credits <= 0)` retorna 400.
+
+**TypeCheck:** PASS
+
+---
+
+### Fix 9 | SA-013 (MEDIUM → auto-fix) — Zod no quiz session PATCH
+
+**Arquivo:** `apps/web/src/app/api/quiz/session/[id]/route.ts`
+
+**Problema:** `body as { status: string }` — unsafe cast sem Zod. Única rota API sem validação de input.
+
+**Correção:** Schema Zod `z.object({ status: z.enum(['COMPLETED', 'ABANDONED']) })`.
 
 **TypeCheck:** PASS
 
@@ -79,22 +140,9 @@
 
 Registrado em [docs/stories/backlog/tech-debt.md](docs/stories/backlog/tech-debt.md)
 
-| Severidade | # | Descrição |
-|---|---|---|
-| MEDIUM | 1 | Rate limiting em rotas de API (requer Upstash/Redis) |
-| MEDIUM | 2 | Race condition streaming → deduction (requer refatoração arquitetural) |
-| MEDIUM | 3 | Console.log com metadata financeiro em produção → structured logging |
-| MEDIUM | 4 | CORS headers para futuro multi-domain |
-| MEDIUM | 5 | Docs mismatch: admin metrics 30d vs this/lastMonth |
-| MEDIUM | 6 | Webhook signature validation ausente do PRD |
-| MEDIUM | 7 | `as unknown as {}` pattern no Prisma singleton |
-| MEDIUM | 8 | Offline detection no chat |
-| MEDIUM | 9 | Dashboard error boundary (Promise.all sem try/catch) |
-| MEDIUM | 10 | Admin page error boundary (Promise.all sem try/catch) |
-| MEDIUM | 11 | BuyButton falta labels de acessibilidade |
-| LOW | 12 | AddCreditsForm falta `<label htmlFor>` |
-| LOW | 13 | TransactionHistory falta `<caption>` na table |
-| LOW | 14 | Missing CHECK constraint `balanceCents >= 0` no schema |
+**MEDIUM (17 itens):** docs mismatch (SA-001,003,005,010), revenue JOIN fragile (SA-019/QA-008), pagination (SA-020), console.log admin emails (SA-018), CSRF (SA-026), N+1 frame analysis (SA-030), answerValue length (SA-032), video duplicate (SA-033), checkout metadata (SA-034/QA-005), SSE field names (QA-006), $queryRawUnsafe (QA-007), File cast (QA-009), concurrent video (SA-024), chat history 20 vs 10 (SA-022).
+
+**LOW (18 itens):** docs undocumented routes (SA-006,007,008,009), Prisma singleton as unknown (SA-011), type assertions (SA-012), dead code conversations.ts (SA-015), pagination quiz (SA-021), seed password (SA-025), X-Credits header (SA-027), webhook user exists (SA-028), InsufficientBalanceError message (SA-031), offline handling (QA-012), SSE timeout (QA-013), success page timing (QA-014), Stripe cast (QA-015), console.log (QA-016), role typing (QA-017), Prisma naming (QA-018).
 
 ---
 
@@ -103,13 +151,20 @@ Registrado em [docs/stories/backlog/tech-debt.md](docs/stories/backlog/tech-debt
 | Check | Resultado |
 |-------|-----------|
 | TypeScript (`tsc --noEmit`) | **0 errors** |
-| Files modified | 3 (stripe webhook, auth, chat API) |
-| CRITICAL+HIGH corrigidos | **4/4** |
-| MEDIUM+LOW → backlog | **14** |
+| Files modified | 11 |
+| BLOCKER+HIGH corrigidos | **10/10** |
+| MEDIUM+LOW → backlog | **35** |
 
 ---
 
 ## Status: PASS
 
-Todos os itens CRITICAL e HIGH foram corrigidos com typecheck passando.
+Todos os itens BLOCKER e HIGH foram corrigidos com typecheck passando.
 Items MEDIUM e LOW registrados como débito técnico para sprints futuros.
+
+---
+
+## Histórico
+
+- **v3 (2026-02-28):** 4 CRITICAL+HIGH corrigidos, 14 backlog
+- **v4 (2026-03-03):** 10 BLOCKER+HIGH corrigidos, 35 backlog (codebase expandiu com Epics 5-7)

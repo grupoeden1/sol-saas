@@ -44,9 +44,9 @@ export async function POST(req: NextRequest) {
     // Buscar pacote do banco para obter quantidade de créditos
     const pkg = await prisma.creditPackage.findUnique({ where: { id: packageId } });
 
-    if (!pkg) {
-      console.error('[Webhook] Pacote não encontrado packageId=', packageId);
-      return NextResponse.json({ error: 'Package not found' }, { status: 400 });
+    if (!pkg || pkg.credits <= 0) {
+      console.error('[Webhook] Pacote inválido ou sem créditos packageId=', packageId);
+      return NextResponse.json({ error: 'Invalid package' }, { status: 400 });
     }
 
     try {

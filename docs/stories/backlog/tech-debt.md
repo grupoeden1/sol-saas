@@ -1,6 +1,6 @@
 # Tech Debt Backlog — SOL SaaS
 
-Last updated: 2026-02-28 (Quality Audit v3)
+Last updated: 2026-03-03 (Quality Audit v4)
 Items registered by @dev after quality-audit workflow.
 
 ---
@@ -202,3 +202,18 @@ Items registered by @dev after quality-audit workflow.
 | SEC-2 | CREDIT_PERCENTAGE: range validation (0, 1.0] | **CORRIGIDO** |
 | SEC-3 | Auth session: typeof guards em vez de `as string` | **CORRIGIDO** |
 | SEC-4 | Chat API: Content-Length check (30 MB) antes de formData() | **CORRIGIDO** |
+
+## CORRIGIDOS (Audit v4 — 2026-03-03)
+
+| ID | Descrição | Status |
+|----|-----------|--------|
+| SA-017 / QA-010 | Rate limiting em todas as rotas críticas (chat, register, generate, video) | **CORRIGIDO** |
+| SA-014 | Middleware protege /onboarding, /quiz, /roteiros | **CORRIGIDO** |
+| SA-016 | Rate limiting no register (5 req/hora/IP) | **CORRIGIDO** |
+| SA-023 | Video upload exige créditos > 0 antes de processar | **CORRIGIDO** |
+| SA-013 | Quiz session PATCH usa Zod em vez de `as { status: string }` | **CORRIGIDO** |
+| QA-001 | CHECK constraint `credits >= 0` re-adicionado via migration | **CORRIGIDO** |
+| QA-002 | addCredits valida `credits > 0` | **CORRIGIDO** |
+| QA-003 | deductCredits valida `creditsUsed > 0` | **CORRIGIDO** |
+| QA-004 | PIX adicionado ao payment_method_types do Stripe Checkout | **CORRIGIDO** |
+| QA-011 | Webhook valida `pkg.credits > 0` antes de addCredits | **CORRIGIDO** |
