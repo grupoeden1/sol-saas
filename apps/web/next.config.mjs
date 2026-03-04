@@ -6,7 +6,7 @@ const nextConfig = {
   // Exclude native/WASM packages from webpack bundling — they only run server-side
   // tiktoken: WASM (token counting), pdf-parse: pdfjs-dist, mammoth: DOCX, sharp: native C++
   experimental: {
-    serverComponentsExternalPackages: ['tiktoken', 'pdf-parse', 'mammoth', 'sharp'],
+    serverComponentsExternalPackages: ['tiktoken', 'pdf-parse', 'mammoth', 'sharp', 'ffmpeg-static', '@ffprobe-installer/ffprobe'],
   },
 
   webpack: (config, { isServer }) => {
