@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback, useEffect, useRef } from 'react'
 import type { QuestionDefinition } from '@/lib/quiz/questions'
 import { QUIZ_SECTIONS, getActiveSections } from '@/lib/quiz/questions'
 import {
@@ -224,6 +224,7 @@ export function QuizEngine({
               question={currentQuestion}
               value={answers[currentQuestion.questionKey] ?? ''}
               onChange={(val) => handleAnswer(currentQuestion.questionKey, val)}
+              sessionId={sessionId}
             />
           )}
         </div>
@@ -340,41 +341,156 @@ function SingleSelectQuestion({
   )
 }
 
+type UploadStatus = 'idle' | 'uploading' | 'processing' | 'done' | 'error'
+
 function UploadQuestion({
   question,
   value,
   onChange,
+  sessionId,
 }: {
   question: QuestionDefinition
   value: string
   onChange: (val: string) => void
+  sessionId: string
 }) {
-  // Upload is a placeholder — full implementation in Story 7.x (Video Processing)
-  return (
-    <div className="rounded-lg border-2 border-dashed border-solar-800/30 p-8 text-center">
-      <div className="mb-2 text-2xl">📁</div>
-      <p className="mb-2 text-sm text-foreground">
-        Upload de vídeo referência
-      </p>
-      <p className="text-xs text-muted-foreground">
-        {question.example ?? 'Arraste e solte ou clique para selecionar'}
-      </p>
-      {value && (
-        <p className="mt-2 text-xs text-solar-400">
-          Arquivo selecionado: {value}
-        </p>
-      )}
-      <input
-        type="file"
-        accept="video/*"
-        className="mt-3 text-xs text-muted-foreground file:mr-3 file:rounded-lg file:border-0 file:bg-solar-500/20 file:px-3 file:py-1.5 file:text-xs file:text-solar-400"
-        onChange={(e) => {
-          const file = e.target.files?.[0]
-          if (file) {
-            onChange(file.name)
+  const [status, setStatus] = useState<UploadStatus>(value ? 'done' : 'idle')
+  const [fileName, setFileName] = useState(value || '')
+  const [errorMsg, setErrorMsg] = useState('')
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current) }, [])
+
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+
+    setStatus('uploading')
+    setFileName(file.name)
+    setErrorMsg('')
+
+    try {
+      const formData = new FormData()
+      formData.append('video', file)
+      formData.append('quizSessionId', sessionId)
+
+      const res = await fetch('/api/video/upload', { method: 'POST', body: formData })
+
+      if (res.status === 402) {
+        setStatus('error')
+        setErrorMsg('Créditos insuficientes para processar vídeo.')
+        return
+      }
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        setStatus('error')
+        setErrorMsg((data as { error?: string }).error || 'Erro ao fazer upload do vídeo.')
+        return
+      }
+
+      const { videoAnalysisId } = await res.json() as { videoAnalysisId: string }
+      setStatus('processing')
+
+      // Poll every 5s until COMPLETED or FAILED
+      pollRef.current = setInterval(async () => {
+        try {
+          const statusRes = await fetch(`/api/video/status/${videoAnalysisId}`)
+          if (!statusRes.ok) return
+          const statusData = await statusRes.json() as { status: string; errorMessage?: string }
+
+          if (statusData.status === 'COMPLETED') {
+            clearInterval(pollRef.current!)
+            setStatus('done')
+            onChange(file.name) // marks question as answered
+          } else if (statusData.status === 'FAILED') {
+            clearInterval(pollRef.current!)
+            setStatus('error')
+            setErrorMsg(statusData.errorMessage || 'Falha ao processar vídeo. Tente novamente.')
           }
-        }}
-      />
+        } catch {
+          // transient network error — keep polling
+        }
+      }, 5000)
+    } catch {
+      setStatus('error')
+      setErrorMsg('Erro ao conectar com o servidor.')
+    }
+  }
+
+  return (
+    <div className="rounded-lg border-2 border-dashed border-solar-800/30 p-6 text-center">
+      {status === 'idle' && (
+        <>
+          <div className="mb-2 text-2xl">🎬</div>
+          <p className="mb-1 text-sm font-medium text-foreground">Upload de vídeo referência</p>
+          <p className="mb-3 text-xs text-muted-foreground">
+            {question.example ?? 'MP4, MOV, AVI ou WebM · máx. 500MB · até 5 min'}
+          </p>
+          <label className="cursor-pointer rounded-lg border border-solar-500/30 bg-solar-500/10 px-4 py-2 text-xs font-medium text-solar-400 transition-all hover:bg-solar-500/20">
+            Selecionar vídeo
+            <input type="file" accept="video/*" className="hidden" onChange={handleFileChange} />
+          </label>
+        </>
+      )}
+
+      {status === 'uploading' && (
+        <>
+          <div className="mb-3 flex justify-center">
+            <div className="h-8 w-8 animate-spin rounded-full border-2 border-solar-500 border-t-transparent" />
+          </div>
+          <p className="text-sm font-medium text-solar-300">Enviando vídeo…</p>
+          <p className="mt-1 text-xs text-muted-foreground truncate max-w-[240px] mx-auto">{fileName}</p>
+        </>
+      )}
+
+      {status === 'processing' && (
+        <>
+          <div className="mb-3 flex justify-center gap-1">
+            <div className="h-2 w-2 animate-bounce rounded-full bg-solar-400 [animation-delay:0ms]" />
+            <div className="h-2 w-2 animate-bounce rounded-full bg-solar-400 [animation-delay:150ms]" />
+            <div className="h-2 w-2 animate-bounce rounded-full bg-solar-400 [animation-delay:300ms]" />
+          </div>
+          <p className="text-sm font-medium text-solar-300">Analisando vídeo com IA…</p>
+          <p className="mt-1 text-xs text-muted-foreground">Isso pode levar 1-2 minutos.</p>
+          <p className="mt-1 text-xs text-muted-foreground truncate max-w-[240px] mx-auto">{fileName}</p>
+        </>
+      )}
+
+      {status === 'done' && (
+        <>
+          <div className="mb-2 flex justify-center">
+            <div className="flex h-10 w-10 items-center justify-center rounded-full bg-green-500/10">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="text-green-400">
+                <polyline points="20 6 9 17 4 12" />
+              </svg>
+            </div>
+          </div>
+          <p className="text-sm font-medium text-green-400">Vídeo analisado com sucesso!</p>
+          <p className="mt-1 text-xs text-muted-foreground truncate max-w-[240px] mx-auto">{fileName}</p>
+          <label className="mt-3 inline-block cursor-pointer text-xs text-solar-400 underline hover:text-solar-300">
+            Trocar vídeo
+            <input type="file" accept="video/*" className="hidden" onChange={handleFileChange} />
+          </label>
+        </>
+      )}
+
+      {status === 'error' && (
+        <>
+          <div className="mb-2 flex justify-center">
+            <div className="flex h-10 w-10 items-center justify-center rounded-full bg-red-500/10">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-red-400">
+                <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+              </svg>
+            </div>
+          </div>
+          <p className="text-sm font-medium text-red-400">Erro no upload</p>
+          <p className="mt-1 text-xs text-muted-foreground">{errorMsg}</p>
+          <label className="mt-3 inline-block cursor-pointer rounded-lg border border-solar-500/30 bg-solar-500/10 px-4 py-2 text-xs font-medium text-solar-400 transition-all hover:bg-solar-500/20">
+            Tentar novamente
+            <input type="file" accept="video/*" className="hidden" onChange={handleFileChange} />
+          </label>
+        </>
+      )}
     </div>
   )
 }
