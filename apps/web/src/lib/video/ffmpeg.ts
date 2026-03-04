@@ -1,11 +1,17 @@
 // FFmpeg wrapper for video processing — SOL SaaS
-// Extracts frames from video at specified intervals
+// Uses ffmpeg-static and @ffprobe-installer/ffprobe so no system install is needed.
 
 import { spawn } from 'child_process'
 import * as fs from 'fs/promises'
 import * as path from 'path'
+import * as os from 'os'
+import ffmpegStatic from 'ffmpeg-static'
+import ffprobeInstaller from '@ffprobe-installer/ffprobe'
 
-const VIDEO_TEMP_DIR = process.env.VIDEO_TEMP_DIR || '/tmp/sol-uploads/'
+const FFMPEG_BIN = ffmpegStatic ?? 'ffmpeg'
+const FFPROBE_BIN = ffprobeInstaller.path
+
+const VIDEO_TEMP_DIR = process.env.VIDEO_TEMP_DIR || path.join(os.tmpdir(), 'sol-uploads')
 
 /**
  * Extracts frames from a video file at the specified interval.
@@ -21,7 +27,7 @@ export async function extractFrames(
   const outputPattern = path.join(framesDir, 'frame-%04d.jpg')
 
   return new Promise((resolve, reject) => {
-    const ffmpeg = spawn('ffmpeg', [
+    const ffmpeg = spawn(FFMPEG_BIN, [
       '-i', videoPath,
       '-vf', `fps=1/${intervalSeconds}`,
       '-q:v', '2',
@@ -63,7 +69,7 @@ export async function extractFrames(
  */
 export async function getVideoDuration(videoPath: string): Promise<number> {
   return new Promise((resolve, reject) => {
-    const ffprobe = spawn('ffprobe', [
+    const ffprobe = spawn(FFPROBE_BIN, [
       '-v', 'error',
       '-show_entries', 'format=duration',
       '-of', 'csv=p=0',
