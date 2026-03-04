@@ -30,10 +30,10 @@ export default async function CreditsSuccessPage() {
         {/* Action Links */}
         <div className="flex flex-col items-center gap-3 sm:flex-row sm:justify-center">
           <Link
-            href="/chat"
+            href="/quiz"
             className="group inline-flex items-center gap-2 rounded-xl bg-solar-500 px-6 py-3 text-sm font-semibold text-background transition-all hover:bg-solar-600 hover:shadow-lg hover:shadow-solar-500/25"
           >
-            Ir para o chat
+            Criar novo roteiro
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="transition-transform group-hover:translate-x-0.5">
               <line x1="5" y1="12" x2="19" y2="12" /><polyline points="12 5 19 12 12 19" />
             </svg>

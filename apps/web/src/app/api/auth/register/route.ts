@@ -1,8 +1,27 @@
 import { NextResponse } from 'next/server';
-import { prisma, Prisma } from '@sol/db';
+import { prisma } from '@sol/db';
 import * as bcrypt from 'bcryptjs';
 import { z } from 'zod';
 import { rateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit';
+
+// Prisma error helpers — instanceof can fail with Next.js module bundling
+function isPrismaError(err: unknown, code: string): boolean {
+  return (
+    typeof err === 'object' &&
+    err !== null &&
+    'code' in err &&
+    (err as Record<string, unknown>).code === code
+  );
+}
+function isPrismaInitError(err: unknown): boolean {
+  return (
+    typeof err === 'object' &&
+    err !== null &&
+    'errorCode' in err &&
+    typeof (err as Record<string, unknown>).message === 'string' &&
+    ((err as Record<string, unknown>).message as string).includes('Can\'t reach database')
+  ) || (err instanceof Error && err.constructor.name === 'PrismaClientInitializationError');
+}
 
 const registerSchema = z.object({
   email: z.string().email('Formato de email inválido'),
@@ -30,37 +49,37 @@ export async function POST(req: Request) {
     // Hash da senha com 12 rounds (OWASP recommendation)
     const passwordHash = await bcrypt.hash(password, 12);
 
-    // Tenta criar usuário — se email já existe, retorna mesma resposta
-    // para não revelar existência de contas (PRD Story 1.3 AC7)
-    try {
-      await prisma.user.create({
-        data: {
-          email,
-          passwordHash,
-          credits: 0,
-        }
-      });
-    } catch (error) {
-      // Unique constraint violation = email already exists
-      if (
-        error instanceof Prisma.PrismaClientKnownRequestError &&
-        error.code === 'P2002'
-      ) {
-        // Return same success response to prevent email enumeration
-        return NextResponse.json(
-          { message: 'Verifique seu email para continuar' },
-          { status: 201 }
-        );
+    await prisma.user.create({
+      data: {
+        email,
+        passwordHash,
+        credits: 0,
       }
-      throw error;
-    }
+    });
 
     return NextResponse.json(
-      { message: 'Verifique seu email para continuar' },
+      { message: 'Conta criada com sucesso' },
       { status: 201 }
     );
   } catch (error) {
-    console.error('[Register] Error:', error instanceof Error ? error.message : 'Unknown error');
+    // Email já cadastrado (P2002 = unique constraint violation)
+    if (isPrismaError(error, 'P2002')) {
+      return NextResponse.json(
+        { error: 'Este email já está cadastrado. Tente fazer login.' },
+        { status: 409 }
+      );
+    }
+
+    // Banco de dados inacessível
+    if (isPrismaInitError(error)) {
+      console.error('[Register] Database connection error:', error instanceof Error ? error.message : error);
+      return NextResponse.json(
+        { error: 'Serviço temporariamente indisponível. Tente novamente em instantes.' },
+        { status: 503 }
+      );
+    }
+
+    console.error('[Register] Unexpected error:', error instanceof Error ? error.message : error);
     return NextResponse.json(
       { error: 'Erro interno do servidor' },
       { status: 500 }

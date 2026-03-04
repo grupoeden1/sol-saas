@@ -45,7 +45,7 @@ export default async function AdminDashboardPage({ searchParams }: AdminPageProp
   }
 
   if (session.user.role !== 'ADMIN') {
-    redirect('/chat');
+    redirect('/roteiros');
   }
 
   const resolvedParams = await searchParams;
@@ -136,7 +136,7 @@ export default async function AdminDashboardPage({ searchParams }: AdminPageProp
 
       <header className="fixed left-0 right-0 top-4 z-50 mx-auto flex h-14 w-[calc(100%-2rem)] max-w-6xl items-center justify-between rounded-full border border-solar-800/30 bg-background-secondary/70 px-4 backdrop-blur-xl md:px-6">
         <div className="flex items-center gap-4">
-          <Link href="/chat" className="flex items-center gap-2 text-solar-300 transition-all hover:opacity-80">
+          <Link href="/roteiros" className="flex items-center gap-2 text-solar-300 transition-all hover:opacity-80">
             <Logo size={24} />
             <LogoWithText height={14} className="hidden sm:block" />
           </Link>

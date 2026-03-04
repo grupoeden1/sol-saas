@@ -41,10 +41,10 @@ export default async function CreditsErrorPage() {
             </svg>
           </Link>
           <Link
-            href="/chat"
+            href="/roteiros"
             className="inline-flex items-center gap-2 rounded-xl border border-solar-800/30 px-6 py-3 text-sm font-medium text-foreground-muted transition-all hover:border-solar-500/30 hover:text-foreground"
           >
-            Voltar ao chat
+            Meus roteiros
           </Link>
         </div>
       </div>

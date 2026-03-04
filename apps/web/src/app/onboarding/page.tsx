@@ -160,7 +160,7 @@ export default function OnboardingPage() {
       <div className="pointer-events-none absolute inset-0 z-0 opacity-20 bg-[radial-gradient(circle_at_top_left,_var(--tw-gradient-stops))] from-solar-500/30 via-transparent to-transparent" />
 
       <header className="fixed left-0 right-0 top-4 z-50 mx-auto flex h-14 w-[calc(100%-2rem)] max-w-4xl items-center justify-between rounded-full border border-solar-800/30 bg-background-secondary/70 px-4 backdrop-blur-xl md:px-6">
-        <Link href="/chat" className="flex items-center gap-2 text-solar-300 transition-all hover:opacity-80">
+        <Link href="/roteiros" className="flex items-center gap-2 text-solar-300 transition-all hover:opacity-80">
           <Logo size={24} />
           <span className="text-sm font-semibold">SOL</span>
         </Link>

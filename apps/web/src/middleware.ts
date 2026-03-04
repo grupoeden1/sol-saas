@@ -5,7 +5,6 @@ export default auth((req) => {
   const isLoggedIn = !!req.auth;
   const isAdminRoute = req.nextUrl.pathname.startsWith('/admin');
   const isProtectedRoute = req.nextUrl.pathname.startsWith('/dashboard') ||
-    req.nextUrl.pathname.startsWith('/chat') ||
     req.nextUrl.pathname.startsWith('/credits') ||
     req.nextUrl.pathname.startsWith('/onboarding') ||
     req.nextUrl.pathname.startsWith('/quiz') ||
