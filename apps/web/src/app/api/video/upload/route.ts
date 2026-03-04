@@ -128,12 +128,23 @@ export async function POST(req: Request) {
     },
   })
 
-  // Create VideoAnalysis with QUEUED status
-  const videoAnalysis = await prisma.videoAnalysis.create({
-    data: {
+  // Upsert VideoAnalysis — re-upload resets the record and reprocesses
+  const videoAnalysis = await prisma.videoAnalysis.upsert({
+    where: { quizSessionId },
+    create: {
       quizSessionId,
       quizAnswerId: quizAnswer.id,
       processingStatus: 'QUEUED',
+    },
+    update: {
+      quizAnswerId: quizAnswer.id,
+      processingStatus: 'QUEUED',
+      transcription: null,
+      frameDescriptions: null,
+      structureAnalysis: null,
+      fullDescription: null,
+      errorMessage: null,
+      processingTimeMs: null,
     },
   })
 
