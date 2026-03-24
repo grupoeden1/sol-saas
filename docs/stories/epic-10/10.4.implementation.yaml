@@ -1,0 +1,164 @@
+story: "10.4"
+title: "Engine de Entrega de Popups e Upsell Automatico"
+status: pending
+depends_on: ["10.2", "10.3"]
+
+phases:
+  - name: Setup
+    subtasks:
+      - id: setup_1
+        description: "Create segmentation matcher utility: matchUserToFilters(userId: string, filters: Json) that evaluates campaign segmentation filters against a specific user's profile. Queries user's current credits (user.credits), last activity date (most recent conversation.createdAt), and total conversations count. Returns boolean indicating if user matches all filter criteria (AND logic). Reuses filter logic from campaign-segmentation.ts but for a single user check"
+        files:
+          - apps/web/src/lib/campaign-segmentation.ts
+        status: pending
+
+      - id: setup_2
+        description: "Create PromoDelivery upsert helper: upsertDeliveryEvent(campaignId: string, userId: string, event: 'viewed' | 'clicked' | 'converted' | 'dismissed') that performs a Prisma upsert on PromoDelivery with unique constraint (campaignId, userId). On create, sets the event timestamp field (viewedAt, clickedAt, convertedAt, or dismissedAt). On update (conflict), only updates the specific event timestamp field if not already set (preserves first event time)"
+        files:
+          - apps/web/src/lib/promo-delivery.ts
+        status: pending
+
+  - name: Implementation
+    subtasks:
+      - id: impl_1
+        description: "Create GET /api/promos/active route: authenticate user, query PromoCampaigns where status=ACTIVE AND (startsAt IS NULL OR startsAt <= now) AND (endsAt IS NULL OR endsAt >= now). Exclude campaigns where a PromoDelivery already exists for this user (LEFT JOIN / NOT EXISTS subquery). For remaining campaigns, evaluate segmentation filters against user profile using matchUserToFilters. Return first matching campaign with fields: id, title, message, offerType, offerId, discountPercent. Return { campaign: null } if no eligible campaign found"
+        files:
+          - apps/web/src/app/api/promos/active/route.ts
+        verification: "Returns single most relevant active campaign for user, null if none eligible. Already-delivered campaigns excluded"
+        depends_on: [setup_1]
+        status: pending
+
+      - id: impl_2
+        description: "Create POST /api/promos/track route: authenticate user, validate body with Zod schema { campaignId: string, event: enum('viewed', 'clicked', 'converted', 'dismissed') }. Call upsertDeliveryEvent helper to create/update PromoDelivery record. Return { success: true, deliveryId }. Handle unique constraint gracefully (upsert pattern ensures idempotent tracking)"
+        files:
+          - apps/web/src/app/api/promos/track/route.ts
+        verification: "Track events create PromoDelivery on first call, update event timestamps on subsequent calls. Unique constraint handled via upsert"
+        depends_on: [setup_2]
+        status: pending
+
+      - id: impl_3
+        description: "Create PromoPopup client component: modal overlay that displays campaign promotional offer. Shows campaign.title as heading, campaign.message as body text, CTA button integrated with OneClickButton component (passes campaign.offerId as packageId and campaign.id as campaignId), and dismiss/close button. On mount: call POST /api/promos/track with event 'viewed'. On CTA click: call track with event 'clicked', then trigger one-click or checkout flow. On dismiss: call track with event 'dismissed'. On successful purchase (callback from OneClickButton): call track with event 'converted'. Apply discountPercent display if present (e.g., '30% OFF' badge)"
+        files:
+          - apps/web/src/components/promo/PromoPopup.tsx
+        verification: "Popup renders campaign data, tracks all 4 events (viewed on mount, clicked on CTA, dismissed on close, converted after purchase)"
+        depends_on: [impl_2]
+        status: pending
+
+      - id: impl_4
+        description: "Create PromoPopup controller hook: usePromoPopup() custom hook that manages popup display logic. On mount (once per session): check sessionStorage for 'promo_popup_shown' key — if set, return { shouldShow: false }. Call GET /api/promos/active to fetch eligible campaign. If campaign exists and shouldShow conditions met, return { shouldShow: true, campaign }. Expose show(), dismiss() methods. dismiss() sets sessionStorage 'promo_popup_shown' = 'true' and hides popup. Accepts isStreaming and isGenerating boolean params — if either is true, defer popup display until both are false"
+        files:
+          - apps/web/src/hooks/usePromoPopup.ts
+        verification: "Hook returns shouldShow:false when sessionStorage flag set, when no active campaign, or when streaming/generating. Shows popup only once per session"
+        depends_on: [impl_1, impl_3]
+        status: pending
+
+      - id: impl_5
+        description: "Create UpsellBanner client component: inline banner (not popup/modal) displayed when user credits are low. Shows warning message about low credits with CTA button to buy more (links to /credits/buy or triggers OneClickButton). Reads UPSELL_LOW_CREDITS_THRESHOLD from PricingConfig via API or session data. Checks UPSELL_ENABLED flag — if false, component returns null. Compares user.credits <= threshold to decide visibility. Dismissible per session (sessionStorage 'upsell_banner_dismissed')"
+        files:
+          - apps/web/src/components/promo/UpsellBanner.tsx
+        verification: "Banner visible when credits <= threshold and UPSELL_ENABLED=true. Hidden when UPSELL_ENABLED=false or credits above threshold"
+        depends_on: []
+        status: pending
+
+      - id: impl_6
+        description: "Create useUpsellBanner() custom hook: fetches user's current credit balance and PricingConfig values (UPSELL_ENABLED, UPSELL_LOW_CREDITS_THRESHOLD). Returns { shouldShow: boolean, credits: number, threshold: number }. shouldShow is true when UPSELL_ENABLED=1 AND credits <= threshold AND sessionStorage 'upsell_banner_dismissed' is not set. Expose dismiss() to set sessionStorage flag"
+        files:
+          - apps/web/src/hooks/useUpsellBanner.ts
+        verification: "Hook correctly evaluates all 3 conditions (enabled, below threshold, not dismissed) to determine banner visibility"
+        depends_on: [impl_5]
+        status: pending
+
+      - id: impl_7
+        description: "Create GET /api/promos/upsell-config route: authenticate user, query PricingConfig for UPSELL_ENABLED and UPSELL_LOW_CREDITS_THRESHOLD values. Also return user's current credit balance. Return { upsellEnabled: boolean, threshold: number, credits: number }. This consolidates the data needed by the UpsellBanner in a single API call"
+        files:
+          - apps/web/src/app/api/promos/upsell-config/route.ts
+        verification: "Returns correct upsellEnabled boolean, threshold integer, and user's current credit balance"
+        depends_on: []
+        status: pending
+
+  - name: Integration
+    subtasks:
+      - id: int_1
+        description: "Integrate PromoPopup into the main dashboard layout or page: import usePromoPopup hook, pass isStreaming/isGenerating state from chat context. Render PromoPopup conditionally when shouldShow=true. Ensure popup never appears during active streaming (check chat store or context for isStreaming flag)"
+        files:
+          - apps/web/src/app/dashboard/page.tsx
+        verification: "PromoPopup appears on dashboard when eligible campaign exists, never during streaming, maximum once per session"
+        depends_on: [impl_4]
+        status: pending
+
+      - id: int_2
+        description: "Integrate PromoPopup into the chat page: import usePromoPopup hook, pass isStreaming from chat state. Only show popup when chat is idle (not streaming response, not generating script). Popup appears after page load with slight delay (e.g., 2-3 seconds) to not disrupt initial page render"
+        files:
+          - apps/web/src/app/roteiros/page.tsx
+          - apps/web/src/app/roteiros/[id]/page.tsx
+        verification: "PromoPopup shows on chat pages when eligible, never during AI response streaming or script generation"
+        depends_on: [impl_4]
+        status: pending
+
+      - id: int_3
+        description: "Integrate UpsellBanner into dashboard and credit-related pages: render UpsellBanner component in dashboard layout (below header or above main content area). Banner shows when credits are low and upsell is enabled. Position as inline banner, not overlay"
+        files:
+          - apps/web/src/app/dashboard/page.tsx
+          - apps/web/src/components/layout/
+        verification: "UpsellBanner visible on dashboard when credits <= threshold, hidden otherwise. Does not overlap with PromoPopup"
+        depends_on: [impl_6, impl_7]
+        status: pending
+
+      - id: int_4
+        description: "Wire up 'converted' tracking with OneClickButton callback: after successful one-click purchase triggered from PromoPopup, call POST /api/promos/track with event 'converted' and the campaignId. Ensure this fires for both one-click success and checkout-fallback success (via redirect callback or webhook-triggered state update)"
+        files:
+          - apps/web/src/components/promo/PromoPopup.tsx
+          - apps/web/src/components/payments/OneClickButton.tsx
+        verification: "PromoDelivery.convertedAt is set after successful purchase from popup, for both one-click and fallback checkout flows"
+        depends_on: [impl_3]
+        status: pending
+
+  - name: Testing
+    subtasks:
+      - id: test_1
+        description: "Test GET /api/promos/active segmentation: create 3 campaigns with different filters, create users with varying profiles (credits, activity, message count). Verify each user gets the correct campaign (or null) based on their profile matching the filters"
+        verification: "User with 30 credits matches campaign with creditsMax:50, user with 200 credits does not. AND filters work correctly"
+        depends_on: [int_4]
+        status: pending
+
+      - id: test_2
+        description: "Test campaign exclusion: create a campaign, create a PromoDelivery for user A (already delivered), verify GET /api/promos/active returns null for user A but returns the campaign for user B (never delivered)"
+        verification: "Already-delivered campaigns excluded from active query for that specific user"
+        depends_on: [int_4]
+        status: pending
+
+      - id: test_3
+        description: "Test 1-popup-per-session: call GET /api/promos/active, display popup, dismiss it (setting sessionStorage flag). Navigate to another page, verify popup does not show again. Clear sessionStorage, verify popup shows on next visit"
+        verification: "After dismiss, no popup shown for remainder of browser session. New session shows popup again"
+        depends_on: [int_4]
+        status: pending
+
+      - id: test_4
+        description: "Test streaming guard: start a chat streaming response (isStreaming=true), verify PromoPopup is not displayed. Complete streaming, verify popup appears after streaming ends (if eligible campaign exists and session allows)"
+        verification: "Popup deferred during streaming, displayed once streaming completes and idle state detected"
+        depends_on: [int_2]
+        status: pending
+
+      - id: test_5
+        description: "Test event tracking: display popup (verify POST track with event=viewed), click CTA (verify event=clicked), complete purchase (verify event=converted). Separately, display popup and dismiss (verify event=dismissed). Verify PromoDelivery record has correct timestamps for each event"
+        verification: "All 4 events tracked with correct timestamps in PromoDelivery record"
+        depends_on: [int_4]
+        status: pending
+
+      - id: test_6
+        description: "Test UpsellBanner visibility: set UPSELL_ENABLED=1 and threshold=50. User with 30 credits sees banner. User with 100 credits does not. Set UPSELL_ENABLED=0, user with 30 credits does not see banner. Test dismiss per session"
+        verification: "Banner visibility correctly controlled by enabled flag, threshold comparison, and session dismiss state"
+        depends_on: [int_3]
+        status: pending
+
+      - id: test_7
+        description: "Test unique constraint on PromoDelivery: track 'viewed' event twice for same campaign+user, verify only one PromoDelivery record exists (upsert pattern). Verify viewedAt is set to first view time (not overwritten by second call)"
+        verification: "Single PromoDelivery record per campaign+user pair, event timestamps preserved from first occurrence"
+        depends_on: [int_4]
+        status: pending
+
+      - id: test_8
+        description: "Test date range filtering: create campaign with startsAt in the future, verify not returned by GET /api/promos/active. Create campaign with endsAt in the past, verify not returned. Create campaign with current time within range, verify returned. Create campaign with null startsAt and null endsAt (always active), verify returned"
+        verification: "Date range filtering correctly includes/excludes campaigns based on startsAt and endsAt relative to current time"
+        depends_on: [int_4]
+        status: pending

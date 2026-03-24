@@ -1,0 +1,1410 @@
+# ============================================
+# SOL v10.0 — Full Refactor Workflow
+#
+# Orquestra 6 mudancas estruturais simultaneas:
+# 1. Migracao OpenAI → Claude API
+# 2. Prompt Strategy Architecture (3 camadas)
+# 3. 7 Categorias de Conteudo
+# 4. Perfil do Expert (35 campos)
+# 5. Epic 8 Feedback Loop
+# 6. Atualizacao PRD v10.0
+#
+# Fases sao sequenciais.
+# Waves dentro de cada fase podem ser paralelas quando nao ha dependencia.
+#
+# @version 1.0.0
+# @author @aios-master (Orion)
+# @trigger *workflow sol-v10
+# ============================================
+
+workflow:
+  id: sol-v10
+  name: "SOL v10.0 — Full Refactor Workflow"
+  version: "1.0.0"
+  description: >-
+    Workflow executavel com um unico comando que orquestra 6 mudancas estruturais
+    do SOL v10.0: Migracao OpenAI → Claude API, Prompt Strategy Architecture com
+    3 camadas e classificacao automatica, 7 categorias de conteudo, Perfil do Expert
+    separado do quiz (35 campos), Epic 8 Feedback Loop com metricas e inteligencia,
+    e atualizacao completa do PRD. 6 fases sequenciais com waves paralelas internas.
+
+  type: sequential
+  project_types:
+    - saas
+    - fullstack
+    - refactoring
+    - major-enhancement
+
+  # ═══════════════════════════════════════════════════════════════════════════════════
+  #                              TRIGGER CONFIGURATION
+  # ═══════════════════════════════════════════════════════════════════════════════════
+
+  triggers:
+    - event: command
+      command: "*workflow sol-v10"
+      action: start
+
+    - event: command
+      command: "*sol-v10"
+      action: start
+
+    # Executar fases individuais
+    - event: command
+      command: "*sol-v10-docs"
+      action: run_phase
+      phase: 1
+
+    - event: command
+      command: "*sol-v10-prompts"
+      action: run_phase
+      phase: 2
+
+    - event: command
+      command: "*sol-v10-claude"
+      action: run_phase
+      phase: 3
+
+    - event: command
+      command: "*sol-v10-features"
+      action: run_phase
+      phase: 4
+
+    - event: command
+      command: "*sol-v10-feedback"
+      action: run_phase
+      phase: 5
+
+    - event: command
+      command: "*sol-v10-validate"
+      action: run_phase
+      phase: 6
+
+  # ═══════════════════════════════════════════════════════════════════════════════════
+  #                              CONFIGURATION
+  # ═══════════════════════════════════════════════════════════════════════════════════
+
+  config:
+    # Reference documents
+    architectureDoc: "docs/architecture.md"
+    prdDoc: "docs/prd.md"
+    techStackDoc: "docs/framework/tech-stack.md"
+    storiesDir: "docs/stories"
+    promptsDir: "docs/prompts"
+
+    # Reference prompt files (source of truth)
+    promptStrategyDoc: "docs/prompts/prompt-strategy.md"
+    baseSystemPromptDoc: "docs/prompts/base-system-prompt.md"
+    classificationPromptDoc: "docs/prompts/classification-prompt.md"
+
+    # Branch strategy
+    branchName: "feature/sol-v10"
+    baseBranch: "main"
+    commitLanguage: "pt-BR"
+    commitPrefixes: ["feat:", "fix:", "chore:", "docs:"]
+
+    # Timeouts per phase (milliseconds)
+    docsTimeout: 3600000          # 60 min
+    promptsTimeout: 1800000       # 30 min
+    claudeMigrationTimeout: 7200000  # 2 hours
+    featuresTimeout: 14400000     # 4 hours
+    feedbackTimeout: 10800000     # 3 hours
+    validationTimeout: 3600000    # 60 min
+
+    # TypeScript check
+    typecheckCommand: "pnpm exec tsc --noEmit"
+    typecheckAfterFix: true
+
+    # Models
+    claudeSonnet: "claude-sonnet-4-5-20250929"
+    claudeHaiku: "claude-haiku-4-5-20251001"
+
+    # Priority order (if need to cut scope)
+    priority: "Phase 3 > Phase 4 (4.2, 4.4) > Phase 4 (4.1, 4.3) > Phase 5 > Phase 1"
+
+  # ═══════════════════════════════════════════════════════════════════════════════════
+  #                              INPUTS
+  # ═══════════════════════════════════════════════════════════════════════════════════
+
+  inputs:
+    start_phase:
+      type: number
+      required: false
+      default: 1
+      description: "Fase inicial (1-6). Usar para retomar de uma fase especifica."
+
+    skip_migration:
+      type: boolean
+      required: false
+      default: false
+      description: "Se true, pula Fase 3 (migracao Claude). Util se ja foi feita."
+
+  # ═══════════════════════════════════════════════════════════════════════════════════
+  #                              PHASES OVERVIEW
+  # ═══════════════════════════════════════════════════════════════════════════════════
+
+  phases:
+    - phase_1: "Documentacao e PRD (nao bloqueia codigo)"
+    - phase_2: "Arquivos de Prompt (nao bloqueia codigo, paralelo com Fase 1)"
+    - phase_3: "Migracao Claude API (pre-requisito tecnico para codigo)"
+    - phase_4: "Features Core (depende de Fase 3)"
+    - phase_5: "Epic 8 — Feedback Loop (depende de Fase 4)"
+    - phase_6: "Validacao Final"
+
+  # ═══════════════════════════════════════════════════════════════════════════════════
+  #                              WORKFLOW SEQUENCE
+  # ═══════════════════════════════════════════════════════════════════════════════════
+
+  sequence:
+
+    # ═════════════════════════════════════════════════════════════════════════════════
+    #  FASE 1 — DOCUMENTACAO E PRD (nao bloqueia codigo)
+    #  Waves 1.1 e 1.2 sao paralelas. Wave 1.3 depende de 1.1.
+    # ═════════════════════════════════════════════════════════════════════════════════
+
+    - phase: 1
+      name: "Documentacao e PRD"
+
+    # ── Wave 1.1 — PRD v10.0 ──────────────────────────────────────────────────────
+
+    - id: task-1.1.1-prd-v10
+      step: prd_update
+      phase: 1
+      wave: "1.1"
+      agent: pm
+      action: "Atualizar docs/prd.md para v10.0"
+      duration_estimate: "30-60 min"
+      creates: ["docs/prd.md"]
+      parallel_with: ["task-1.2.1-architecture", "task-1.2.2-tech-stack"]
+      prompt: |
+        Atualizar docs/prd.md para v10.0. Mudancas:
+
+        CHANGELOG:
+        Adicionar entrada v10.0: "Migracao OpenAI → Claude API. Prompt Strategy Architecture
+        com 3 camadas e classificacao automatica. 7 categorias de conteudo (nao apenas venda).
+        Perfil do Expert separado do quiz (35 campos). Epic 8 Feedback Loop. FR4-FR5-FR11
+        atualizados. FR28-FR39 adicionados. NFR9-NFR10 adicionados. Stories 6.8-6.10 criadas.
+        Stories 8.1-8.6 criadas."
+
+        FUNCTIONAL REQUIREMENTS — ATUALIZAR:
+        - FR4: Substituir "OpenAI (GPT-4o / GPT-4o-mini)" por "Anthropic Claude API
+          (claude-sonnet-4-5-20250929 para geracao e chat, claude-haiku-4-5-20251001
+          para classificacao de mercado)"
+        - FR5: Remover referencia a tiktoken. Manter logica de tokens mas notar que
+          Claude API retorna usage.input_tokens e usage.output_tokens no response.
+          Estimativa pre-chamada via regra de caracteres (~3.5 chars/token)
+        - FR11: Substituir "OpenAI Vision API" por "Claude Vision (nativo no Sonnet)"
+        - FR22: Atualizar de "9 perguntas de onboarding" para "9 perguntas de produto
+          por perfil (Bloco A). Perfil pessoal do Expert e feature separada (FR34)"
+
+        FUNCTIONAL REQUIREMENTS — ADICIONAR:
+        - FR28: Classificacao automatica de consciencia (Schwartz 1-5), sofisticacao (1-5),
+          persona, angulo recomendado, categorias e formatos via chamada intermediaria
+          Claude Haiku antes da geracao. Prompt em docs/prompts/classification-prompt.md
+        - FR29: Coleta de metricas de performance por snapshot temporal (dia 1, 3, 7, 14, 30).
+          Trafego pago: impressoes, CTR, CPC, CPM, CPA, ROAS, hook rate, retencao.
+          Organico: views, likes, comments, shares, saves, seguidores ganhos
+        - FR30: Upload de video produzido + analise comparativa roteiro vs execucao via
+          Claude Vision. Nota de execucao 1-5, sugestoes de melhoria
+        - FR31: Classificacao automatica PESSIMO/RUIM/MEDIANO/BOM/EXCELENTE baseada em
+          ROAS (pago) ou retencao (organico). Thresholds configuraveis via admin
+        - FR32: Inteligencia acumulada por nicho — correlacao modulos x resultados,
+          melhores angulos e formatos por nicho
+        - FR33: Painel admin /admin/results com distribuicao de classificacao, performance
+          por nicho/modulo, gap de execucao, evolucao temporal
+        - FR34: Perfil do Expert — feature separada do quiz, acessivel via icone de perfil.
+          35 campos em 6 secoes (Dados Basicos, Personalidade, Valores, Historia, Comunidade,
+          Referencias). 14 obrigatorios, 21 opcionais. Preenchido uma vez, atualizavel.
+          Barra de progresso. Badge de perfil completo. Usado como contexto na geracao
+          quando aluno opta por incluir
+        - FR35: No quiz, antes da geracao, pergunta unica de contexto pessoal:
+          (A) Usar perfil completo, (B) Usar perfil + contexto extra, (C) Gerar sem perfil,
+          (D) Contextualizar ideia/historia especifica. Se perfil nao preenchido, opcoes
+          adaptadas com sugestao de completar
+        - FR36: O SOL suporta 7 categorias de conteudo: Venda Direta, Autoridade/Educacao,
+          Opiniao/Posicionamento, Bastidores/Vulnerabilidade, Comunidade/Pertencimento,
+          Storytelling/Narrativa, Ponte (pessoal→nicho). Cada categoria tem regras
+          especificas de CTA, estrutura, tom e formato. O SOL identifica ou pergunta
+          qual categoria antes de gerar
+        - FR37: O aluno pode chegar com input alternativo ao quiz: ideia solta, roteiro
+          breve, historia pessoal, tema, referencia. O SOL transforma em roteiro
+          estruturado completo usando perfil de produto + perfil pessoal como contexto
+        - FR38: O SOL gera roteiros multi-idioma — detecta o idioma do aluno automaticamente
+          e gera no mesmo idioma
+        - FR39: Todo roteiro gerado segue estrutura obrigatoria: Ficha Tecnica (com categoria
+          e objetivo estrategico), Direcao de Cena, Figurino/Props (quando relevante),
+          Roteiro em 3 atos com marcacoes inline de edicao, Legenda, Checklist de Producao
+          (items dinamicos por modulo), Variacoes Sugeridas, Notas de Adaptacao
+
+        NON-FUNCTIONAL REQUIREMENTS — ADICIONAR:
+        - NFR9: Dados de performance armazenados para analise agregada por nicho, modulo e periodo
+        - NFR10: Arquivos de prompt (.md) em docs/prompts/ sao a fonte de verdade do conhecimento
+          do SOL. Alteracoes nos prompts sao versionadas no changelog.md de prompts
+
+        TECHNICAL ASSUMPTIONS — ATUALIZAR:
+        - Substituir OPENAI_API_KEY por ANTHROPIC_API_KEY
+        - Remover tiktoken das dependencias
+        - Adicionar @anthropic-ai/sdk como dependencia
+        - Modelos: claude-sonnet-4-5-20250929 (geracao, chat, vision),
+          claude-haiku-4-5-20251001 (classificacao)
+        - Nova secao "Prompt Architecture" referenciando docs/prompts/prompt-strategy.md
+        - Nova secao "Expert Profile" descrevendo: feature separada, 35 campos, 6 secoes
+        - Atualizar NFR4: model_used registra modelos Claude
+
+        EPIC LIST — ATUALIZAR:
+        - Adicionar Epic 8: "Feedback Loop & Inteligencia de Resultados"
+
+        EPIC 6 — ATUALIZAR:
+        - Expandir Story 6.5: ACs de prompt dinamico, classificacao previa, selecao de modulos,
+          modules_used em CreditTransaction, formato de output obrigatorio
+        - Criar Story 6.8: Classificacao Automatica de Mercado
+        - Criar Story 6.9: Perfil do Expert
+        - Criar Story 6.10: Pergunta de Contexto Pessoal no Quiz
+
+        EPIC 8 — CRIAR COMPLETO:
+        - Story 8.1: Database Schema: Performance & Metrics
+        - Story 8.2: Registro de Performance do Roteiro
+        - Story 8.3: Coleta de Metricas
+        - Story 8.4: Upload e Analise do Video Produzido
+        - Story 8.5: Painel Admin Metricas de Resultado
+        - Story 8.6: Inteligencia Acumulada
+
+        Incluir ACs detalhados para TODAS as stories.
+        Referencias: docs/prompts/prompt-strategy.md, docs/prompts/base-system-prompt.md
+
+      outputs:
+        - "docs/prd.md"
+      timeout: "{config.docsTimeout}"
+
+    # ── Wave 1.2 — Arquitetura e Tech Stack (paralelo com 1.1) ───────────────────
+
+    - id: task-1.2.1-architecture
+      step: architecture_update
+      phase: 1
+      wave: "1.2"
+      agent: architect
+      action: "Atualizar docs/architecture.md para v10.0"
+      duration_estimate: "30-60 min"
+      creates: ["docs/architecture.md"]
+      parallel_with: ["task-1.1.1-prd-v10", "task-1.2.2-tech-stack"]
+      prompt: |
+        Atualizar docs/architecture.md:
+
+        1. Substituir OpenAI por Anthropic Claude API em todo o documento
+        2. Tech Stack table: openai → @anthropic-ai/sdk, GPT-4o → claude-sonnet-4-5-20250929,
+           GPT-4o-mini → claude-haiku-4-5-20251001, REMOVER tiktoken
+        3. Diagrama de arquitetura: adicionar componentes internos ao apps/web:
+           - "Prompt Engine" (montagem dinamica de prompts)
+           - "Market Classifier" (classificacao via Claude Haiku)
+           - "Expert Profile" (perfil pessoal do aluno)
+           - "Feedback Collector" (metricas e analise de execucao)
+        4. Novos data models:
+           - ExpertProfile (35 campos, 6 secoes, 1:1 com User)
+           - MarketClassification (JSON dentro de quiz_sessions)
+           - ScriptPerformance (1:1 com Conversation)
+           - PerformanceMetrics (N:1 com ScriptPerformance, por snapshot)
+           - ExecutionAnalysis (1:1 com ScriptPerformance)
+           - PerformanceThreshold (configuravel via admin)
+        5. Novos Architectural Patterns:
+           - "Prompt Engine Pattern" — montagem dinamica de modulos em runtime
+           - "Pre-Generation Classification" — Haiku classifica antes de Sonnet gerar
+           - "Expert Profile Pattern" — perfil pessoal separado do perfil de produto
+           - "Feedback Loop Pattern" — metricas reais alimentam inteligencia
+           - "Content Category System" — 7 categorias com regras distintas
+        6. Novos API endpoints:
+           - GET/PUT /api/profile (Expert Profile CRUD)
+           - POST /api/quiz/classify (classificacao de mercado)
+           - POST/PUT/GET /api/scripts/[id]/performance
+           - POST/GET /api/scripts/[id]/metrics
+           - POST /api/scripts/[id]/upload-video
+           - GET /api/scripts/[id]/execution-analysis
+           - GET /api/admin/results
+           - GET /api/admin/intelligence
+           - PUT /api/admin/performance-thresholds
+        7. Atualizar Security: rate limiting em classificacao e uploads
+
+        Referencias: docs/prompts/prompt-strategy.md, docs/prompts/base-system-prompt.md
+
+      outputs:
+        - "docs/architecture.md"
+      timeout: "{config.docsTimeout}"
+
+    - id: task-1.2.2-tech-stack
+      step: tech_stack_update
+      phase: 1
+      wave: "1.2"
+      agent: architect
+      action: "Atualizar docs/framework/tech-stack.md"
+      duration_estimate: "15-30 min"
+      creates: ["docs/framework/tech-stack.md"]
+      parallel_with: ["task-1.1.1-prd-v10", "task-1.2.1-architecture"]
+      prompt: |
+        Atualizar docs/framework/tech-stack.md:
+
+        Secao "Inteligencia Artificial" — substituir completamente:
+
+        ### Inteligencia Artificial
+        - Provider: Anthropic Claude API
+        - Modelos: claude-sonnet-4-5-20250929 (geracao, chat, vision),
+          claude-haiku-4-5-20251001 (classificacao, tarefas leves)
+        - SDK: @anthropic-ai/sdk (npm oficial)
+        - Streaming: SSE via Claude streaming nativo
+        - Vision: Nativo no Claude Sonnet (imagens como content blocks)
+        - Contagem de tokens: Retornada pela API (usage.input_tokens,
+          usage.output_tokens). Sem biblioteca externa
+        - Proibido: OpenAI, Gemini, tiktoken, qualquer provider alternativo
+
+        Regras para os Agentes — adicionar:
+        7. Toda chamada a IA usa exclusivamente Anthropic Claude API
+        8. Nunca usar tiktoken ou qualquer biblioteca de contagem de tokens
+        9. System prompts montados pelo Prompt Engine (lib/prompt-engine.ts), nunca hardcoded
+        10. Arquivos de prompt (.md) em docs/prompts/ sao fonte de verdade do conhecimento
+        11. O SOL suporta 7 categorias de conteudo — nunca assumir que todo video e pra vender
+        12. Perfil do Expert e feature separada do quiz — nunca misturar dados pessoais
+            com dados de produto no mesmo modelo
+
+      outputs:
+        - "docs/framework/tech-stack.md"
+      timeout: "{config.docsTimeout}"
+
+    # ── Wave 1.3 — Stories (depende de 1.1) ───────────────────────────────────────
+
+    - id: task-1.3.1-stories
+      step: stories_create_update
+      phase: 1
+      wave: "1.3"
+      agent: sm
+      action: "Criar e atualizar stories com base no PRD v10.0"
+      duration_estimate: "60-120 min"
+      requires: "task-1.1.1-prd-v10"
+      creates:
+        - "docs/stories/epic-6/story-6.8-market-classification.md"
+        - "docs/stories/epic-6/story-6.9-expert-profile.md"
+        - "docs/stories/epic-6/story-6.10-personal-context.md"
+        - "docs/stories/epic-8/story-8.1-performance-schema.md"
+        - "docs/stories/epic-8/story-8.2-performance-registration.md"
+        - "docs/stories/epic-8/story-8.3-metrics-collection.md"
+        - "docs/stories/epic-8/story-8.4-video-upload-analysis.md"
+        - "docs/stories/epic-8/story-8.5-admin-results.md"
+        - "docs/stories/epic-8/story-8.6-accumulated-intelligence.md"
+      prompt: |
+        Criar e atualizar stories com base no PRD v10.0:
+
+        CRIAR (com ACs detalhados, Dev Notes, Tasks/Subtasks, seguindo padrao existente):
+
+        1. Story 6.8 — Classificacao Automatica de Mercado
+           ACs: POST /api/quiz/classify, chamada Claude Haiku, response JSON com
+           consciousness_level, sophistication_level, persona_summary, recommended_angle,
+           recommended_categories, recommended_formats. Validacao, fallback (3/3 + defaults),
+           salvar em quiz_sessions.classification (JSON). Custo incluido no gate.
+           Referencia: docs/prompts/classification-prompt.md
+
+        2. Story 6.9 — Perfil do Expert
+           ACs: Tabela expert_profiles (35 campos, 6 secoes). API GET/PUT /api/profile
+           (upsert). UI no icone de perfil com 3 estados (incompleto/completo/parcial).
+           Barra de progresso. Badge de completo. CTA "Completar perfil" / "Editar perfil".
+           Secoes preenchíveis independentemente. Visual dark/solar.
+
+        3. Story 6.10 — Pergunta de Contexto Pessoal no Quiz
+           ACs: No quiz, antes de gerar, exibir pergunta "Deseja usar informacoes pessoais?"
+           com 4 opcoes (A/B/C/D). Campo de texto livre para B e D.
+           Se perfil nao preenchido: opcoes adaptadas + sugestao de completar.
+
+        4. Story 8.1 — Database Schema: Performance & Metrics
+           ACs: Migrations para script_performances, performance_metrics,
+           execution_analyses, performance_thresholds. Seeds com thresholds iniciais.
+
+        5. Story 8.2 — Registro de Performance do Roteiro
+           ACs: POST/PUT/GET /api/scripts/[id]/performance. UI em /roteiros/[id].
+
+        6. Story 8.3 — Coleta de Metricas
+           ACs: POST/GET /api/scripts/[id]/metrics. Formulario dinamico pago vs organico.
+           Snapshots dia 1/3/7/14/30. Classificacao automatica via thresholds.
+
+        7. Story 8.4 — Upload e Analise do Video Produzido
+           ACs: POST /api/scripts/[id]/upload-video. Pipeline AssemblyAI+FFmpeg+Claude.
+           Analise comparativa roteiro original vs execucao. Nota 1-5. Custo em creditos.
+
+        8. Story 8.5 — Painel Admin: Metricas de Resultado
+           ACs: /admin/results. Distribuicao classificacao. Performance por nicho/modulo.
+
+        9. Story 8.6 — Inteligencia Acumulada
+           ACs: /admin/intelligence. Top modulos correlacionados com BOM/EXCELENTE.
+           MVP: relatorio estatico.
+
+        ATUALIZAR:
+        10. Story 2.3 — Substituir OpenAI por Claude em ACs
+        11. Story 2.5 — OpenAI Vision → Claude Vision nativo
+        12. Story 3.2 — Remover tiktoken, usar usage do response Claude
+        13. Story 6.5 — Adicionar ACs de prompt dinamico, classificacao previa,
+            modules_used em CreditTransaction, formato de output obrigatorio
+        14. Story 7.5 — GPT-4o Vision → Claude Sonnet Vision
+
+        Para cada story: seguir padrao de docs/stories/
+
+      outputs:
+        - "docs/stories/epic-6/"
+        - "docs/stories/epic-8/"
+      timeout: "{config.docsTimeout}"
+
+    - id: task-1.3.2-implementation-plans
+      step: implementation_plans
+      phase: 1
+      wave: "1.3"
+      agent: architect
+      action: "Criar implementation.yaml para novas stories"
+      duration_estimate: "30-60 min"
+      requires: "task-1.3.1-stories"
+      creates:
+        - "docs/stories/epic-6/plan/"
+        - "docs/stories/epic-8/plan/"
+      prompt: |
+        Criar implementation.yaml para novas stories:
+        - Story 6.8: phases para schema, API, lib/market-classifier.ts, integracao
+        - Story 6.9: phases para schema, API, UI de perfil, integracao com quiz
+        - Story 6.10: phases para componente de pergunta, integracao com Prompt Engine
+        - Stories 8.1-8.6: phases individuais com dependencies entre elas
+        Seguir padrao de implementation.yaml existente.
+
+      outputs:
+        - "docs/stories/epic-6/plan/implementation-6.8.yaml"
+        - "docs/stories/epic-6/plan/implementation-6.9.yaml"
+        - "docs/stories/epic-6/plan/implementation-6.10.yaml"
+        - "docs/stories/epic-8/plan/"
+      timeout: "{config.docsTimeout}"
+
+    # ═════════════════════════════════════════════════════════════════════════════════
+    #  FASE 2 — ARQUIVOS DE PROMPT (paralelo com Fase 1, nao bloqueia codigo)
+    # ═════════════════════════════════════════════════════════════════════════════════
+
+    - phase: 2
+      name: "Arquivos de Prompt"
+      parallel_with_phase: 1
+
+    - id: task-2.1-prompt-files
+      step: prompt_file_structure
+      phase: 2
+      agent: dev
+      action: "Criar estrutura de diretorios e arquivos de prompt"
+      duration_estimate: "15-30 min"
+      creates:
+        - "docs/prompts/modules/"
+        - "docs/prompts/patterns/"
+        - "docs/prompts/output-formats/"
+        - "docs/prompts/changelog.md"
+      prompt: |
+        Criar estrutura de diretorios e arquivos de prompt.
+
+        Se os seguintes arquivos JA EXISTEM com conteudo real (nao placeholder),
+        NAO sobrescrever — apenas verificar que existem:
+        - docs/prompts/prompt-strategy.md
+        - docs/prompts/base-system-prompt.md
+        - docs/prompts/classification-prompt.md
+
+        Criar os que NAO existem:
+
+        mkdir -p docs/prompts/modules
+        mkdir -p docs/prompts/patterns
+        mkdir -p docs/prompts/output-formats
+
+        Arquivos placeholder (conteudo sera escrito por Eden Corporate):
+        - docs/prompts/modules/consciousness-unaware.md (nivel 1)
+        - docs/prompts/modules/consciousness-problem.md (nivel 2)
+        - docs/prompts/modules/consciousness-solution.md (nivel 3)
+        - docs/prompts/modules/consciousness-product.md (nivel 4)
+        - docs/prompts/modules/consciousness-aware.md (nivel 5)
+        - docs/prompts/modules/sophistication-low.md (sof 1-2)
+        - docs/prompts/modules/sophistication-mid.md (sof 3)
+        - docs/prompts/modules/sophistication-high.md (sof 4-5)
+        - docs/prompts/modules/combination-ad-modeled.md
+        - docs/prompts/modules/combination-ad-scratch.md
+        - docs/prompts/modules/combination-organic-modeled.md
+        - docs/prompts/modules/combination-organic-scratch.md
+        - docs/prompts/patterns/socratic-method.md
+        - docs/prompts/patterns/confrontation-structure.md
+        - docs/prompts/patterns/cta-third-party.md
+        - docs/prompts/patterns/scene-direction.md
+        - docs/prompts/patterns/scarcity-yielded.md
+        - docs/prompts/patterns/anti-patterns.md
+        - docs/prompts/patterns/first-frame.md
+        - docs/prompts/patterns/strategic-pyramid.md
+        - docs/prompts/output-formats/script-ad.md
+        - docs/prompts/output-formats/script-organic.md
+        - docs/prompts/output-formats/script-modeled.md
+        - docs/prompts/output-formats/script-scratch.md
+        - docs/prompts/changelog.md
+
+        Cada placeholder deve conter:
+        # [Nome do Modulo]
+        > TODO: Conteudo a ser escrito por Eden Corporate.
+        > Este arquivo e carregado pelo Prompt Engine em runtime.
+        > Referencia de estrutura: docs/prompts/prompt-strategy.md
+
+      outputs:
+        - "docs/prompts/"
+      timeout: "{config.promptsTimeout}"
+
+    # ═════════════════════════════════════════════════════════════════════════════════
+    #  FASE 3 — MIGRACAO CLAUDE API (pre-requisito tecnico para codigo)
+    #  Waves 3.1 → 3.2 → 3.3 sequenciais.
+    # ═════════════════════════════════════════════════════════════════════════════════
+
+    - phase: 3
+      name: "Migracao Claude API"
+      condition: "!inputs.skip_migration"
+      requires_phases: [1, 2]
+
+    # ── Wave 3.1 — Infraestrutura ─────────────────────────────────────────────────
+
+    - id: task-3.1.1-claude-infra
+      step: claude_infrastructure
+      phase: 3
+      wave: "3.1"
+      agent: dev
+      action: "Migracao de dependencias e configuracao Claude"
+      duration_estimate: "30-60 min"
+      creates:
+        - "apps/web/lib/claude.ts"
+      prompt: |
+        Migracao de dependencias e configuracao:
+
+        1. npm uninstall openai tiktoken (se existirem)
+        2. npm install @anthropic-ai/sdk
+        3. Criar apps/web/lib/claude.ts:
+           - Import Anthropic from '@anthropic-ai/sdk'
+           - Singleton com ANTHROPIC_API_KEY
+           - Export tipado
+        4. Deletar apps/web/lib/openai.ts (se existir)
+        5. Atualizar .env.example: remover OPENAI_API_KEY, adicionar
+           ANTHROPIC_API_KEY=sk-ant-your-key-here
+        6. Atualizar .env local
+        7. grep -r para garantir ZERO referencias a openai/tiktoken/gpt-4 em todo o codebase
+
+        TypeScript strict, sem any, singleton pattern conforme coding-standards.md
+
+      outputs:
+        - "apps/web/lib/claude.ts"
+        - ".env.example"
+      timeout: "{config.claudeMigrationTimeout}"
+
+    # ── Wave 3.2 — API Routes (depende de 3.1) ───────────────────────────────────
+
+    - id: task-3.2.1-api-routes
+      step: api_routes_migration
+      phase: 3
+      wave: "3.2"
+      agent: dev
+      action: "Atualizar TODAS as API routes que chamam IA"
+      duration_estimate: "60-120 min"
+      requires: "task-3.1.1-claude-infra"
+      prompt: |
+        Atualizar TODAS as API routes que usam openai:
+
+        Para cada arquivo (chat/route.ts, quiz/generate/route.ts, video/analyze/route.ts, etc):
+
+        1. Substituir import openai por claude (lib/claude.ts)
+        2. openai.chat.completions.create() → claude.messages.create()
+        3. Formato mensagens: { role, content: string } → { role, content: [{ type: 'text', text }] }
+        4. Streaming: adaptar para @anthropic-ai/sdk streaming
+        5. Model: 'claude-sonnet-4-5-20250929' (geracao/chat) ou 'claude-haiku-4-5-20251001' (classificacao)
+        6. max_tokens: 8192 (obrigatorio na Claude API)
+        7. Tokens: response.usage.input_tokens e response.usage.output_tokens
+        8. Vision: image_url → source: { type: 'base64', media_type, data }
+        9. Gate de creditos: estimativa pre-chamada via Math.ceil(text.length / 3.5)
+        10. credit_transactions.model_used: registrar modelo Claude usado
+        11. Remover QUALQUER uso de tiktoken
+
+      outputs:
+        - "apps/web/src/app/api/chat/route.ts"
+        - "apps/web/src/app/api/quiz/generate/route.ts"
+      timeout: "{config.claudeMigrationTimeout}"
+
+    # ── Wave 3.3 — Validacao (depende de 3.2) ────────────────────────────────────
+
+    - id: task-3.3.1-validate-migration
+      step: migration_validation
+      phase: 3
+      wave: "3.3"
+      agent: qa
+      action: "Validar migracao Claude: zero refs OpenAI, streaming, vision, creditos"
+      duration_estimate: "20-40 min"
+      requires: "task-3.2.1-api-routes"
+      prompt: |
+        Validar migracao Claude:
+        - [ ] grep -r "openai" --include="*.ts" --include="*.tsx" → 0 resultados
+        - [ ] grep -r "tiktoken" → 0 resultados
+        - [ ] grep -r "gpt-4" → 0 resultados
+        - [ ] grep -r "OPENAI" --include="*.env*" --include="*.yml" → 0 resultados
+        - [ ] Chat funciona com streaming Claude
+        - [ ] Vision funciona
+        - [ ] Gate de creditos funciona sem tiktoken
+        - [ ] model_used registra modelos Claude
+        - [ ] .env.example atualizado
+        - [ ] Nenhuma regressao em: auth, pagamentos, admin, webhook Stripe
+
+      outputs:
+        - validationPassed
+      timeout: "{config.claudeMigrationTimeout}"
+
+    # ═════════════════════════════════════════════════════════════════════════════════
+    #  FASE 4 — FEATURES CORE (depende de Fase 3)
+    #  Wave 4.1 (schemas) → Wave 4.2 (engine + classifier, paralelo) →
+    #  Wave 4.3 (expert UI, paralelo com 4.2) → Wave 4.4 (integracao)
+    # ═════════════════════════════════════════════════════════════════════════════════
+
+    - phase: 4
+      name: "Features Core"
+      requires_phases: [3]
+
+    # ── Wave 4.1 — Schemas (paralelos entre si) ──────────────────────────────────
+
+    - id: task-4.1.1-expert-schema
+      step: expert_profile_schema
+      phase: 4
+      wave: "4.1"
+      agent: dev
+      action: "Schema Prisma: ExpertProfile + campos quiz_sessions + credit_transactions"
+      duration_estimate: "20-30 min"
+      parallel_with: ["task-4.1.2-performance-schema"]
+      creates:
+        - "packages/db/prisma/migrations/"
+      prompt: |
+        Schema: Perfil do Expert (Story 6.9)
+
+        Migration Prisma para tabela expert_profiles:
+
+        model ExpertProfile {
+          id                    String   @id @default(cuid())
+          userId                String   @unique
+          // Secao 1: Dados Basicos (8 campos)
+          fullName              String?
+          age                   Int?
+          gender                String?
+          location              String?
+          maritalStatus         String?
+          hasChildren           String?
+          occupation            String?
+          education             String?
+          // Secao 2: Personalidade (6 campos)
+          communicationStyle    String[]
+          appearsOnCamera       String?
+          preferredTone         String?
+          usesHumor             String?
+          commonExpressions     String?
+          avoidExpressions      String?
+          // Secao 3: Valores (7 campos)
+          coreValues            String?
+          religion              String?
+          politicalPosition     String?
+          causes                String[]
+          marketFrustration     String?
+          controversialOpinion  String?
+          avoidTopics           String?
+          // Secao 4: Historia (6 campos)
+          bio                   String?
+          careerOrigin          String?
+          hardestMoment         String?
+          proudestMoment        String?
+          personalStory         String?
+          dailyRoutine          String?
+          // Secao 5: Comunidade (4 campos)
+          audienceIdentity      String?
+          communityName         String?
+          bestCompliment        String?
+          commonCriticism       String?
+          // Secao 6: Referencias (4 campos)
+          inspirations          String?
+          preferredFormats      String[]
+          bestPerformingVideo   String?
+          worstPerformingVideo  String?
+          // Meta
+          completionPercentage  Int      @default(0)
+          createdAt             DateTime @default(now())
+          updatedAt             DateTime @updatedAt
+          user                  User     @relation(fields: [userId], references: [id])
+        }
+
+        Adicionar relacao em User: expertProfile ExpertProfile?
+        Adicionar campo classification (Json?) em quiz_sessions para Story 6.8.
+        Adicionar campo personalContext (String?) em quiz_sessions para Story 6.10.
+        Adicionar campo useExpertProfile (Boolean, default false) em quiz_sessions.
+        Adicionar campo modulesUsed (String[]) em credit_transactions.
+
+      outputs:
+        - "packages/db/prisma/schema.prisma"
+      timeout: "{config.featuresTimeout}"
+
+    - id: task-4.1.2-performance-schema
+      step: performance_schema
+      phase: 4
+      wave: "4.1"
+      agent: dev
+      action: "Schema Prisma: ScriptPerformance + PerformanceMetrics + ExecutionAnalysis + PerformanceThreshold"
+      duration_estimate: "20-30 min"
+      parallel_with: ["task-4.1.1-expert-schema"]
+      creates:
+        - "packages/db/prisma/migrations/"
+      prompt: |
+        Schema: Performance & Metrics (Story 8.1)
+
+        Migrations para: ScriptPerformance, PerformanceMetrics, ExecutionAnalysis,
+        PerformanceThreshold conforme PRD v10.0.
+
+        Seeds: thresholds iniciais:
+        - PAID/ROAS: terrible=0.5, bad=1.0, average=2.0, good=4.0
+        - ORGANIC/RETENTION: terrible=0.10, bad=0.25, average=0.40, good=0.60
+
+        Relacoes: Conversation → ScriptPerformance, User → ScriptPerformance[],
+        ScriptPerformance → PerformanceMetrics[], ScriptPerformance → ExecutionAnalysis?
+
+      outputs:
+        - "packages/db/prisma/schema.prisma"
+        - "packages/db/prisma/seed.ts"
+      timeout: "{config.featuresTimeout}"
+
+    # ── Wave 4.2 — Prompt Engine + Classificacao (depende de 4.1) ─────────────────
+
+    - id: task-4.2.1-prompt-engine
+      step: prompt_engine
+      phase: 4
+      wave: "4.2"
+      agent: dev
+      action: "Criar apps/web/lib/prompt-engine.ts (Story 6.5 expandida)"
+      duration_estimate: "60-90 min"
+      requires: "task-4.1.1-expert-schema"
+      parallel_with: ["task-4.2.2-market-classifier"]
+      creates:
+        - "apps/web/src/lib/prompt-engine.ts"
+      prompt: |
+        Criar apps/web/lib/prompt-engine.ts (Story 6.5 expandida)
+
+        Responsabilidades:
+        1. Carregar arquivos .md de docs/prompts/ via fs.readFileSync (server-side only)
+        2. Selecionar modulo de consciencia baseado em classification.consciousness_level
+        3. Selecionar modulo de sofisticacao baseado em classification.sophistication_level
+        4. Selecionar modulo de combinacao baseado em path1 + path2
+        5. Selecionar padroes baseado na matriz de relevancia (secao 5 do prompt-strategy.md)
+        6. Injetar ExpertProfile no placeholder {{STUDENT_CONTEXT}} se aluno optou por usar
+        7. Injetar categoria de conteudo escolhida
+        8. Concatenar tudo: base + modulos + padroes + contexto + video analysis
+        9. Retornar: { systemPrompt, modulesUsed, estimatedTokens }
+
+        Cache: carregar .md uma vez em memoria (Map<string, string>).
+        Invalidar em dev mode. TypeScript strict.
+
+        Interface:
+        interface PromptEngineInput {
+          classification: MarketClassification
+          quizAnswers: QuizAnswer[]
+          onboardingProfile: OnboardingProfile
+          expertProfile?: ExpertProfile
+          personalContext?: string
+          contentCategory?: string
+          path1: 'AD' | 'ORGANIC'
+          path2: 'MODELED' | 'FROM_SCRATCH'
+          videoAnalysis?: VideoAnalysis
+        }
+
+      outputs:
+        - "apps/web/src/lib/prompt-engine.ts"
+      timeout: "{config.featuresTimeout}"
+
+    - id: task-4.2.2-market-classifier
+      step: market_classifier
+      phase: 4
+      wave: "4.2"
+      agent: dev
+      action: "Criar apps/web/lib/market-classifier.ts (Story 6.8)"
+      duration_estimate: "30-60 min"
+      requires: "task-4.1.1-expert-schema"
+      parallel_with: ["task-4.2.1-prompt-engine"]
+      creates:
+        - "apps/web/src/lib/quiz/market-classifier.ts"
+        - "apps/web/src/app/api/quiz/classify/route.ts"
+      prompt: |
+        Criar apps/web/lib/market-classifier.ts (Story 6.8)
+
+        1. Carregar docs/prompts/classification-prompt.md
+        2. Injetar respostas de onboarding + quiz + ExpertProfile (se existir)
+        3. Chamar Claude Haiku (claude-haiku-4-5-20251001)
+        4. Parsear JSON response
+        5. Validar: levels 1-5, campos obrigatorios presentes,
+           recommended_categories tem 3 items, recommended_formats tem 3 items
+        6. Fallback se falhar: consciousness=3, sophistication=3, defaults conservadores
+        7. Logar erro se fallback ativado
+        8. Retornar MarketClassification tipado
+
+        Criar API route POST /api/quiz/classify
+
+      outputs:
+        - "apps/web/src/lib/quiz/market-classifier.ts"
+        - "apps/web/src/app/api/quiz/classify/route.ts"
+      timeout: "{config.featuresTimeout}"
+
+    # ── Wave 4.3 — Perfil do Expert UI (depende de 4.1, paralelo com 4.2) ────────
+
+    - id: task-4.3.1-expert-profile-ui
+      step: expert_profile_ui
+      phase: 4
+      wave: "4.3"
+      agent: dev
+      action: "Implementar Story 6.9 — Perfil do Expert (API + UI)"
+      duration_estimate: "60-120 min"
+      requires: "task-4.1.1-expert-schema"
+      parallel_with: ["task-4.2.1-prompt-engine", "task-4.2.2-market-classifier"]
+      creates:
+        - "apps/web/src/app/api/profile/route.ts"
+        - "apps/web/src/app/api/profile/completion/route.ts"
+        - "apps/web/src/app/profile/"
+        - "apps/web/src/components/profile/"
+      prompt: |
+        Implementar Story 6.9 — Perfil do Expert (API + UI)
+
+        API:
+        - GET /api/profile → retornar ExpertProfile do usuario logado (ou null)
+        - PUT /api/profile → upsert. Calcular completionPercentage
+          baseado em campos obrigatorios preenchidos (14 obrigatorios = 100%)
+        - GET /api/profile/completion → retornar apenas { percentage: number }
+
+        UI (acessivel via icone de perfil):
+        - 3 estados: incompleto (CTA "Completar perfil"), completo (badge + "Editar"),
+          parcial (barra de progresso + % + "Continuar preenchendo")
+        - 6 secoes em cards/abas: Dados Basicos, Personalidade, Valores, Historia,
+          Comunidade, Referencias
+        - Cada secao salva independentemente (autosave ao sair da secao)
+        - Campos obrigatorios marcados visualmente
+        - Exemplos placeholder em campos abertos
+        - Gamificacao: barra de progresso, badge dourado quando completo
+        - Dark/solar theme, Shadcn/UI, responsivo
+
+        Toast apos primeiro roteiro sem perfil:
+        "Esse roteiro ficaria mais personalizado com seu perfil completo. Quer preencher? (~10 min)"
+
+      outputs:
+        - "apps/web/src/app/api/profile/"
+        - "apps/web/src/app/profile/"
+        - "apps/web/src/components/profile/"
+      timeout: "{config.featuresTimeout}"
+
+    - id: task-4.3.2-personal-context
+      step: personal_context_question
+      phase: 4
+      wave: "4.3"
+      agent: dev
+      action: "Implementar Story 6.10 — Pergunta de Contexto Pessoal no Quiz"
+      duration_estimate: "30-60 min"
+      requires: "task-4.3.1-expert-profile-ui"
+      creates:
+        - "apps/web/src/components/quiz/"
+      prompt: |
+        Implementar Story 6.10 — Pergunta de Contexto Pessoal no Quiz
+
+        No fluxo do quiz, apos selecionar perfil de produto e ANTES de gerar:
+
+        Se ExpertProfile existe:
+          Exibir: "Deseja usar suas informacoes pessoais nessa producao?"
+          (A) Sim — usar meu perfil completo
+          (B) Sim, mas quero adicionar contexto extra
+          (C) Nao — gerar so com informacoes do quiz
+          (D) Quero contextualizar uma ideia/historia especifica
+
+        Se ExpertProfile NAO existe:
+          Exibir: "Deseja contextualizar seu roteiro?"
+          (A) Sim — quero descrever uma ideia ou historia
+          (B) Nao — gerar direto com as informacoes do quiz
+          + Nota: "Dica: complete seu perfil para roteiros mais personalizados →"
+
+        Opcoes B e D abrem campo de texto livre (textarea, sem limite rigido).
+        Resultado salvo em quiz_sessions: useExpertProfile (boolean), personalContext (string?).
+        Passado ao Prompt Engine na montagem.
+
+      outputs:
+        - "apps/web/src/components/quiz/"
+      timeout: "{config.featuresTimeout}"
+
+    # ── Wave 4.4 — Integracao do Prompt Engine (depende de 4.2 e 4.3) ────────────
+
+    - id: task-4.4.1-prompt-integration
+      step: prompt_engine_integration
+      phase: 4
+      wave: "4.4"
+      agent: dev
+      action: "Integrar Prompt Engine no quiz/generate e chat routes"
+      duration_estimate: "60-90 min"
+      requires:
+        - "task-4.2.1-prompt-engine"
+        - "task-4.2.2-market-classifier"
+        - "task-4.3.2-personal-context"
+      prompt: |
+        Atualizar apps/web/app/api/quiz/generate/route.ts (Story 6.5 expandida)
+
+        Fluxo completo atualizado:
+        1. Receber request com quizSessionId
+        2. Buscar: quiz session + respostas + onboarding profile + expert profile (se opted in)
+           + video analysis (se caminho 2A)
+        3. Se classification nao existe no quiz session → chamar classifyMarket() e salvar
+        4. Chamar buildPrompt() com: classification + respostas + paths + expertProfile
+           + personalContext + contentCategory
+        5. Calcular gate: estimatedTokens do Prompt Engine + MAX_OUTPUT_TOKENS
+        6. Verificar saldo
+        7. Chamar Claude Sonnet streaming SSE usando systemPrompt do Prompt Engine
+        8. Ao completar: salvar roteiro + deduzir creditos reais + registrar modulesUsed
+        9. Header X-Credits-Remaining
+
+        Tambem atualizar /api/chat/route.ts para incluir ExpertProfile no contexto
+        quando conversa e iteracao sobre roteiro que usou perfil pessoal.
+
+      outputs:
+        - "apps/web/src/app/api/quiz/generate/route.ts"
+        - "apps/web/src/app/api/chat/route.ts"
+      timeout: "{config.featuresTimeout}"
+
+    # ═════════════════════════════════════════════════════════════════════════════════
+    #  FASE 5 — EPIC 8: FEEDBACK LOOP (depende de Fase 4)
+    #  Waves 5.1 → 5.2 → 5.3 sequenciais.
+    # ═════════════════════════════════════════════════════════════════════════════════
+
+    - phase: 5
+      name: "Epic 8 — Feedback Loop"
+      requires_phases: [4]
+
+    # ── Wave 5.1 — APIs e UI de metricas ──────────────────────────────────────────
+
+    - id: task-5.1.1-performance-metrics
+      step: performance_metrics_ui
+      phase: 5
+      wave: "5.1"
+      agent: dev
+      action: "Implementar Stories 8.2 + 8.3 (Registro + Coleta de Metricas)"
+      duration_estimate: "90-120 min"
+      creates:
+        - "apps/web/src/app/api/scripts/"
+        - "apps/web/src/app/roteiros/[id]/"
+      prompt: |
+        Implementar Stories 8.2 + 8.3 (Registro + Coleta de Metricas)
+
+        APIs:
+        - POST /api/scripts/[id]/performance (criar, platform, status=PRODUCED)
+        - PUT /api/scripts/[id]/performance (atualizar status)
+        - GET /api/scripts/[id]/performance (buscar com metricas)
+        - POST /api/scripts/[id]/metrics (registrar por snapshot)
+
+        UI em /roteiros/[id]:
+        - Secao "Como foi esse criativo?" abaixo do roteiro
+        - Flow: Informar producao → Selecionar plataforma → Publicou? → Metricas
+        - Formulario dinamico: campos de pago vs organico
+        - Snapshots: dia 1, 3, 7, 14, 30 (selector)
+        - Classificacao automatica com badge colorido ao salvar
+
+        Logica de classificacao:
+        - Pago: usar ROAS vs thresholds
+        - Organico: usar avgRetention vs thresholds
+        - Salvar classification no ScriptPerformance
+
+      outputs:
+        - "apps/web/src/app/api/scripts/"
+        - "apps/web/src/app/roteiros/"
+      timeout: "{config.feedbackTimeout}"
+
+    # ── Wave 5.2 — Upload e Analise (depende de 5.1) ─────────────────────────────
+
+    - id: task-5.2.1-video-analysis
+      step: video_upload_analysis
+      phase: 5
+      wave: "5.2"
+      agent: dev
+      action: "Implementar Story 8.4 (Upload e Analise do Video Produzido)"
+      duration_estimate: "60-90 min"
+      requires: "task-5.1.1-performance-metrics"
+      creates:
+        - "apps/web/src/app/api/scripts/[id]/upload-video/route.ts"
+        - "apps/web/src/app/api/scripts/[id]/execution-analysis/route.ts"
+      prompt: |
+        Implementar Story 8.4 (Upload e Analise do Video Produzido)
+
+        API: POST /api/scripts/[id]/upload-video + GET /api/scripts/[id]/execution-analysis
+
+        Pipeline (reutilizar infra Epic 7):
+        1. Upload multipart → salvar em VIDEO_TEMP_DIR
+        2. AssemblyAI → transcricao
+        3. FFmpeg → frames
+        4. Claude Sonnet Vision → analisar frames
+        5. Claude Sonnet → analise comparativa: buscar roteiro original da Conversation,
+           comparar com transcricao/frames
+        6. Gerar: executionScore 1-5, followedElements, changedElements, poorlyExecuted, suggestions
+        7. Salvar ExecutionAnalysis
+        8. Deletar video (try/finally)
+        9. Cobrar creditos
+
+        UI: botao "Enviar video produzido para analise" na secao de performance.
+
+      outputs:
+        - "apps/web/src/app/api/scripts/[id]/upload-video/route.ts"
+        - "apps/web/src/app/api/scripts/[id]/execution-analysis/route.ts"
+      timeout: "{config.feedbackTimeout}"
+
+    # ── Wave 5.3 — Admin (depende de 5.1 e 5.2) ──────────────────────────────────
+
+    - id: task-5.3.1-admin-results
+      step: admin_results_intelligence
+      phase: 5
+      wave: "5.3"
+      agent: dev
+      action: "Implementar Stories 8.5 + 8.6 (Admin Results + Intelligence)"
+      duration_estimate: "60-120 min"
+      requires:
+        - "task-5.1.1-performance-metrics"
+        - "task-5.2.1-video-analysis"
+      creates:
+        - "apps/web/src/app/admin/results/"
+        - "apps/web/src/app/admin/intelligence/"
+        - "apps/web/src/app/api/admin/results/"
+        - "apps/web/src/app/api/admin/intelligence/"
+      prompt: |
+        Implementar Stories 8.5 + 8.6 (Admin Results + Intelligence)
+
+        /admin/results:
+        - Distribuicao: % PESSIMO/RUIM/MEDIANO/BOM/EXCELENTE (total e 30d)
+        - Por nicho: tabela com nicho, # roteiros, classificacao media, melhor angulo
+        - Por modulo: quais modules_used correlacionam com BOM/EXCELENTE
+        - Gap de execucao: nota media de executionScore. Se < 3 = problema de execucao
+        - Evolucao temporal: classificacao media por mes (ultimos 6)
+        - Editar thresholds via formulario
+
+        /admin/intelligence:
+        - Top 5 modulos correlacionados com BOM/EXCELENTE
+        - Top 5 angulos com melhor performance por nicho
+        - Formatos que mais performam por nicho
+        - Anti-padroes: modulos em roteiros PESSIMO/RUIM
+        - Nichos com mais vs menos dados
+
+        APIs: GET /api/admin/results, /results/by-niche, /results/by-module,
+        /api/admin/intelligence, PUT /api/admin/performance-thresholds
+
+        Server Components, sem graficos no MVP, dark/solar theme, role: ADMIN.
+
+      outputs:
+        - "apps/web/src/app/admin/results/"
+        - "apps/web/src/app/admin/intelligence/"
+      timeout: "{config.feedbackTimeout}"
+
+    # ═════════════════════════════════════════════════════════════════════════════════
+    #  FASE 6 — VALIDACAO FINAL
+    # ═════════════════════════════════════════════════════════════════════════════════
+
+    - phase: 6
+      name: "Validacao Final"
+      requires_phases: [1, 2, 3, 4, 5]
+
+    - id: task-6.1-final-validation
+      step: final_validation
+      phase: 6
+      agent: qa
+      action: "Validacao completa pos-implementacao — todas as 6 mudancas"
+      duration_estimate: "60-120 min"
+      requires:
+        - "task-5.3.1-admin-results"
+        - "task-1.3.2-implementation-plans"
+      prompt: |
+        Validacao completa pos-implementacao:
+
+        MIGRACAO CLAUDE:
+        - [ ] Zero referencias a openai/tiktoken/gpt-4 no codebase
+        - [ ] ANTHROPIC_API_KEY em .env.example
+        - [ ] Chat funciona com streaming Claude
+        - [ ] Vision funciona com Claude
+        - [ ] Creditos: gate estima, deducao usa tokens reais
+
+        PROMPT ENGINE:
+        - [ ] lib/prompt-engine.ts carrega .md corretamente
+        - [ ] lib/market-classifier.ts retorna JSON valido via Haiku
+        - [ ] Classificacao salva em quiz_sessions
+        - [ ] Prompt montado inclui modulos corretos por classificacao
+        - [ ] modules_used registrado em credit_transactions
+        - [ ] Fallback funciona se classificacao falhar
+        - [ ] ExpertProfile incluido quando aluno opta por usar
+        - [ ] Categoria de conteudo influencia o roteiro gerado
+
+        PERFIL DO EXPERT:
+        - [ ] CRUD funciona (criar, ler, atualizar)
+        - [ ] Barra de progresso calcula corretamente
+        - [ ] 3 estados visuais (incompleto/parcial/completo)
+        - [ ] Secoes salvam independentemente
+        - [ ] Integracao com quiz: pergunta de contexto aparece
+        - [ ] Opcoes A/B/C/D funcionam corretamente
+        - [ ] Campo de texto livre para B e D
+
+        FEEDBACK LOOP:
+        - [ ] Registro de performance funciona
+        - [ ] Metricas por snapshot salvam
+        - [ ] Classificacao automatica calcula por thresholds
+        - [ ] Upload de video processa e gera analise
+        - [ ] /admin/results exibe dados reais
+        - [ ] /admin/intelligence exibe correlacoes
+        - [ ] Thresholds editaveis via admin
+
+        REGRESSAO:
+        - [ ] Auth: login/logout/registro
+        - [ ] Chat: mensagens, streaming, historico
+        - [ ] Creditos: gate, deducao, saldo
+        - [ ] Pagamentos: Stripe checkout, webhook, idempotencia
+        - [ ] Admin existente: metricas de usuarios/uso/financeiras
+        - [ ] Quiz: 48 perguntas, caminhos condicionais
+        - [ ] Roteiros: listagem, visualizacao, iteracao
+
+        DOCUMENTACAO:
+        - [ ] PRD v10.0 com todas as mudancas
+        - [ ] architecture.md atualizado
+        - [ ] tech-stack.md atualizado
+        - [ ] prompt-strategy.md presente
+        - [ ] base-system-prompt.md presente
+        - [ ] classification-prompt.md presente
+        - [ ] Stories novas com ACs completos
+
+      outputs:
+        - validationReport
+        - validationPassed
+      timeout: "{config.validationTimeout}"
+
+    # ── End ───────────────────────────────────────────────────────────────────────
+
+    - meta: end
+      notes: |
+        SOL v10.0 refactor completo!
+        Todas as 6 mudancas estruturais implementadas e validadas.
+        Branch: feature/sol-v10 pronta para PR → main.
+
+  # ═══════════════════════════════════════════════════════════════════════════════════
+  #                              FLOW DIAGRAM
+  # ═══════════════════════════════════════════════════════════════════════════════════
+
+  flow_diagram: |
+    ```mermaid
+    graph TD
+        START[Start: SOL v10.0] --> PHASE1[Fase 1: Documentacao e PRD]
+        START --> PHASE2[Fase 2: Arquivos de Prompt]
+
+        subgraph "Fase 1 — Documentacao"
+            PHASE1 --> W11[Wave 1.1: pm → PRD v10.0]
+            PHASE1 --> W12A[Wave 1.2: architect → architecture.md]
+            PHASE1 --> W12B[Wave 1.2: architect → tech-stack.md]
+            W11 --> W13A[Wave 1.3: sm → Stories]
+            W13A --> W13B[Wave 1.3: architect → Implementation Plans]
+        end
+
+        subgraph "Fase 2 — Prompts"
+            PHASE2 --> W21[dev → Prompt Files Structure]
+        end
+
+        W13B --> PHASE3[Fase 3: Migracao Claude API]
+        W12A --> PHASE3
+        W12B --> PHASE3
+        W21 --> PHASE3
+
+        subgraph "Fase 3 — Migracao Claude"
+            PHASE3 --> W31[Wave 3.1: dev → Infra Claude]
+            W31 --> W32[Wave 3.2: dev → API Routes]
+            W32 --> W33[Wave 3.3: qa → Validacao]
+        end
+
+        W33 --> PHASE4[Fase 4: Features Core]
+
+        subgraph "Fase 4 — Features"
+            PHASE4 --> W41A[Wave 4.1: dev → Expert Schema]
+            PHASE4 --> W41B[Wave 4.1: dev → Performance Schema]
+            W41A --> W42A[Wave 4.2: dev → Prompt Engine]
+            W41A --> W42B[Wave 4.2: dev → Market Classifier]
+            W41A --> W43A[Wave 4.3: dev → Expert Profile UI]
+            W43A --> W43B[Wave 4.3: dev → Personal Context]
+            W42A --> W44[Wave 4.4: dev → Integracao]
+            W42B --> W44
+            W43B --> W44
+        end
+
+        W44 --> PHASE5[Fase 5: Feedback Loop]
+        W41B --> PHASE5
+
+        subgraph "Fase 5 — Epic 8"
+            PHASE5 --> W51[Wave 5.1: dev → Performance + Metricas]
+            W51 --> W52[Wave 5.2: dev → Video Analysis]
+            W51 --> W53[Wave 5.3: dev → Admin Results]
+            W52 --> W53
+        end
+
+        W53 --> PHASE6[Fase 6: Validacao Final]
+
+        subgraph "Fase 6 — Validacao"
+            PHASE6 --> W61[qa → Validacao Completa]
+        end
+
+        W61 --> DONE[SOL v10.0 Complete]
+
+        style DONE fill:#90EE90
+        style START fill:#FFE4B5
+        style PHASE1 fill:#87CEEB
+        style PHASE2 fill:#87CEEB
+        style PHASE3 fill:#ADD8E6
+        style PHASE4 fill:#ADD8E6
+        style PHASE5 fill:#ADD8E6
+        style PHASE6 fill:#F0E68C
+    ```
+
+  # ═══════════════════════════════════════════════════════════════════════════════════
+  #                              COMPLETION
+  # ═══════════════════════════════════════════════════════════════════════════════════
+
+  completion:
+    success_message: |
+      ============================================================
+        SOL v10.0 — Full Refactor Complete
+      ============================================================
+
+      Fase 1 — Documentacao e PRD
+        PRD v10.0:           {outputs.prd_update}
+        Architecture:        {outputs.architecture_update}
+        Tech Stack:          {outputs.tech_stack_update}
+        Stories:             {outputs.stories_create_update}
+        Implementation Plans: {outputs.implementation_plans}
+
+      Fase 2 — Arquivos de Prompt
+        Prompt Structure:    {outputs.prompt_file_structure}
+
+      Fase 3 — Migracao Claude API
+        Infrastructure:      {outputs.claude_infrastructure}
+        API Routes:          {outputs.api_routes_migration}
+        Validation:          {outputs.migration_validation}
+
+      Fase 4 — Features Core
+        Expert Schema:       {outputs.expert_profile_schema}
+        Performance Schema:  {outputs.performance_schema}
+        Prompt Engine:       {outputs.prompt_engine}
+        Market Classifier:   {outputs.market_classifier}
+        Expert Profile UI:   {outputs.expert_profile_ui}
+        Personal Context:    {outputs.personal_context_question}
+        Integration:         {outputs.prompt_engine_integration}
+
+      Fase 5 — Epic 8: Feedback Loop
+        Performance + Metrics: {outputs.performance_metrics_ui}
+        Video Analysis:       {outputs.video_upload_analysis}
+        Admin Results:        {outputs.admin_results_intelligence}
+
+      Fase 6 — Validacao Final
+        Status:              {outputs.final_validation.validationPassed}
+        Report:              {outputs.final_validation.validationReport}
+
+      ============================================================
+      Branch: feature/sol-v10 → Criar PR para main
+      ============================================================
+
+    outputs:
+      - "docs/prd.md"
+      - "docs/architecture.md"
+      - "docs/framework/tech-stack.md"
+      - "docs/stories/epic-6/"
+      - "docs/stories/epic-8/"
+      - "docs/prompts/"
+      - "apps/web/src/lib/prompt-engine.ts"
+      - "apps/web/src/lib/quiz/market-classifier.ts"
+      - "apps/web/src/app/api/profile/"
+      - "apps/web/src/components/profile/"
+      - "apps/web/src/app/api/scripts/"
+      - "apps/web/src/app/admin/results/"
+      - "apps/web/src/app/admin/intelligence/"
+
+  # ═══════════════════════════════════════════════════════════════════════════════════
+  #                              ERROR HANDLING
+  # ═══════════════════════════════════════════════════════════════════════════════════
+
+  error_handling:
+    missing_reference_docs:
+      message: "Documento de referencia nao encontrado: {missingDoc}"
+      suggestion: "Verificar se docs/prompts/prompt-strategy.md, base-system-prompt.md e classification-prompt.md existem"
+      action: halt
+
+    typecheck_failure:
+      message: "TypeCheck falhou apos mudanca em {file}"
+      suggestion: "Reverter e tentar abordagem alternativa"
+      action: continue
+
+    migration_incomplete:
+      message: "Migracao Claude incompleta: {remainingRefs} referencias OpenAI restantes"
+      suggestion: "Executar *sol-v10-claude novamente para completar"
+      action: halt
+
+    schema_conflict:
+      message: "Conflito de migration Prisma: {conflictDetails}"
+      suggestion: "Resolver conflito manualmente e re-executar prisma migrate dev"
+      action: halt
+
+    agent_timeout:
+      message: "Agente {agent} excedeu timeout na fase {phase_name}"
+      suggestion: "Executar fase individualmente: *sol-v10-{phase_shortname}"
+      action: halt
+
+  # ═══════════════════════════════════════════════════════════════════════════════════
+  #                              DECISION GUIDANCE
+  # ═══════════════════════════════════════════════════════════════════════════════════
+
+  decision_guidance:
+    when_to_use:
+      - Refactor completo do SOL para v10.0
+      - Migracao de provider de IA (OpenAI → Claude)
+      - Implementacao do Prompt Engine com 3 camadas
+      - Implementacao do Perfil do Expert
+      - Implementacao do Epic 8 Feedback Loop
+      - Atualizacao de PRD e documentacao tecnica
+
+    when_not_to_use:
+      - Bug fix simples no SOL
+      - Feature isolada que nao depende das 6 mudancas
+      - Atualizacao apenas de docs (usar brownfield)
+
+    notes: |
+      PRIORIDADE SE PRECISAR CORTAR SCOPE:
+      Fase 3 > Fase 4 (4.2, 4.4) > Fase 4 (4.1, 4.3) > Fase 5 > Fase 1
+
+      O Perfil do Expert NAO bloqueia o Prompt Engine — o engine funciona sem ele
+      (usa so produto + quiz). O perfil e um upgrade progressivo da experiencia.
+
+      Conteudo real dos .md de modulos e padroes sera escrito por Eden Corporate
+      APOS infraestrutura pronta. Placeholders nao bloqueiam dev.
+
+      3 arquivos JA TEM conteudo real: prompt-strategy.md, base-system-prompt.md,
+      classification-prompt.md.
+
+  # ═══════════════════════════════════════════════════════════════════════════════════
+  #                              METADATA
+  # ═══════════════════════════════════════════════════════════════════════════════════
+
+  metadata:
+    project: "SOL SaaS"
+    created: "2026-03-04"
+    author: "@aios-master (Orion)"
+    tags:
+      - sol-v10
+      - full-refactor
+      - claude-migration
+      - prompt-engine
+      - expert-profile
+      - feedback-loop
+      - multi-phase
+      - workflow
+    agents:
+      - pm
+      - architect
+      - sm
+      - dev
+      - qa
+    dependencies:
+      - docs/prd.md
+      - docs/architecture.md
+      - docs/framework/tech-stack.md
+      - docs/prompts/prompt-strategy.md
+      - docs/prompts/base-system-prompt.md
+      - docs/prompts/classification-prompt.md
+    changes_summary:
+      - "1. Migracao OpenAI → Claude API"
+      - "2. Prompt Strategy Architecture (3 camadas)"
+      - "3. 7 Categorias de Conteudo"
+      - "4. Perfil do Expert (35 campos)"
+      - "5. Epic 8 Feedback Loop"
+      - "6. Atualizacao PRD v10.0"

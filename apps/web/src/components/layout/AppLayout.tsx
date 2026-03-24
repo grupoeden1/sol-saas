@@ -11,12 +11,14 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   const session = await auth();
 
   let initialCredits = 0;
+  let isAdmin = false;
   if (session?.user?.email) {
     const user = await prisma.user.findUnique({
       where: { email: session.user.email },
-      select: { credits: true },
+      select: { credits: true, role: true },
     });
     initialCredits = user?.credits ?? 0;
+    isAdmin = user?.role === 'ADMIN';
   }
 
   return (
@@ -59,6 +61,14 @@ export default async function AppLayout({ children }: { children: React.ReactNod
               >
                 Comprar créditos
               </Link>
+              {isAdmin && (
+                <Link
+                  href="/admin"
+                  className="hidden rounded-full border border-solar-500/30 px-3 py-1.5 text-xs font-medium text-solar-400 transition-all hover:bg-solar-500/10 md:inline-flex"
+                >
+                  Admin
+                </Link>
+              )}
               <LogoutButton />
             </div>
           </header>

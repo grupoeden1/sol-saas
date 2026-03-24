@@ -10,22 +10,41 @@ datasource db {
 }
 
 model User {
-  id              String    @id @default(cuid())
-  email           String    @unique
-  passwordHash    String
-  role            Role      @default(USER)
-  credits         Int       @default(0)    // créditos inteiros
+  id               String    @id @default(cuid())
+  email            String    @unique
+  passwordHash     String
+  role             Role      @default(USER)
+  credits          Int       @default(0)    // créditos inteiros
+  stripeCustomerId String?   @unique
 
   sessions           Session[]
   conversations      Conversation[]
   transactions       CreditTransaction[]
   onboardingProfiles OnboardingProfile[]
   quizSessions       QuizSession[]
+  scriptPerformances ScriptPerformance[]
+  expertProfile      ExpertProfile?
+  subscription       UserSubscription?
+  promoDeliveries    PromoDelivery[]
+  npsResponses       NpsResponse[]
+
+  // Ad Intelligence (Epic 12)
+  creativeReferences CreativeReference[]
+  competitorProfiles CompetitorProfile[]
+
+  // Referral Program (Epic 11)
+  referralCode     String?   @unique
+  referredBy       String?
+  referrer         User?     @relation("Referrals", fields: [referredBy], references: [id])
+  referrals        User[]    @relation("Referrals")
+  referralRewardsGiven    ReferralReward[] @relation("ReferrerRewards")
+  referralRewardsReceived ReferralReward[] @relation("ReferredRewards")
 
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
   @@index([email])
+  @@index([createdAt])
 }
 
 model Session {
@@ -43,9 +62,11 @@ model Conversation {
   userId         String
   title          String       @db.VarChar(60)
   quizSessionId  String?      @unique
-  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
-  quizSession    QuizSession? @relation(fields: [quizSessionId], references: [id])
-  messages       Message[]
+  user               User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  quizSession        QuizSession?       @relation(fields: [quizSessionId], references: [id])
+  messages           Message[]
+  scriptPerformance  ScriptPerformance?
+  ttsAudioCaches     TtsAudioCache[]
 
   createdAt      DateTime     @default(now())
 
@@ -62,6 +83,7 @@ model Message {
   createdAt      DateTime     @default(now())
 
   @@index([conversationId])
+  @@index([createdAt, role])
 }
 
 enum MessageRole {
@@ -84,31 +106,43 @@ model CreditTransaction {
   adminEmail         String?         // email do admin que realizou ajuste manual
   inputTokens        Int?            // tokens de input consumidos
   outputTokens       Int?            // tokens de output consumidos
-  modelUsed          String?         // modelo OpenAI (ex: "gpt-4o", "gpt-4o-mini")
+  modelUsed          String?         // modelo IA usado (ex: "gpt-4o", "claude-sonnet-4-5-20250929")
   creditsPerMInput   Int?            // snapshot: créditos por 1M input tokens no momento
   creditsPerMOutput  Int?            // snapshot: créditos por 1M output tokens no momento
   hasAttachments     Boolean         @default(false)
   attachmentTypes    String[]        @default([])
   attachmentTokens   Int?
+  modulesUsed        String[]        @default([]) // módulos do Prompt Engine usados na geração
+  assemblyAiSeconds  Float?          // duração do áudio transcrito (segundos)
+  assemblyAiCredits  Int?            // créditos cobrados pela transcrição AssemblyAI
+  embeddingTokens    Int?            // tokens de embedding usados (KB)
+  embeddingCredits   Int?            // créditos cobrados por embedding
+  elevenLabsChars    Int?            // caracteres enviados ao ElevenLabs TTS
+  elevenLabsCredits  Int?            // créditos cobrados pela geração TTS
   user               User            @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   createdAt          DateTime        @default(now())
 
   @@index([userId])
   @@index([stripePaymentId])
-  @@index([type])
+  @@index([type, createdAt])
+  @@index([modelUsed])
 }
 
 enum TransactionType {
   purchase
   consumption
   adjustment
+  subscription_renewal
+  promo_purchase
+  referral
 }
 
 model PricingConfig {
   id        String   @id @default(cuid())
   key       String   @unique
   value     Int
+  textValue String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
@@ -149,12 +183,19 @@ model QuizSession {
   path1                Path1?             // AD ou ORGANIC (definido em Q1)
   path2                Path2?             // MODELED ou FROM_SCRATCH (definido em Q2)
   status               QuizStatus         @default(IN_PROGRESS)
+  awarenessLevel       Int?               // Schwartz 1-5 (classificação automática)
+  sophisticationLevel  Int?               // Sofisticação de mercado 1-5
+  classification       Json?              // resultado completo da classificação automática
+  useExpertProfile     Boolean            @default(false) // aluno optou por usar perfil pessoal
+  personalContext      String?            @db.Text // contexto pessoal livre (opções B/D)
+  referenceSource      ReferenceSourceType? // como o aluno obteve a referência (Epic 12)
 
   user                 User               @relation(fields: [userId], references: [id], onDelete: Cascade)
   onboardingProfile    OnboardingProfile  @relation(fields: [onboardingProfileId], references: [id])
   answers              QuizAnswer[]
   conversation         Conversation?      // 1:1 — roteiro gerado a partir deste quiz
   videoAnalysis        VideoAnalysis?     // 1:1 — análise do vídeo referência (caminho 2A)
+  creativeReferences   CreativeReference[] // referências criativas selecionadas (Epic 12)
 
   createdAt            DateTime           @default(now())
   completedAt          DateTime?
@@ -210,6 +251,13 @@ enum AnswerType {
   UPLOAD
 }
 
+enum ReferenceSourceType {
+  API_SEARCH
+  LINK_ANALYSIS
+  MANUAL_UPLOAD
+  NONE
+}
+
 // ─── Video Processing ─────────────────────────────────────────────────────
 
 model VideoAnalysis {
@@ -224,6 +272,13 @@ model VideoAnalysis {
   processingTimeMs   Int?
   errorMessage       String?
 
+  // Token tracking — for billing estimation (not charged yet)
+  totalInputTokens     Int?
+  totalOutputTokens    Int?
+  framesAnalyzed       Int?
+  modelUsed            String?
+  audioDurationSeconds Float?      // AssemblyAI billing: charged per second
+
   quizSession        QuizSession @relation(fields: [quizSessionId], references: [id], onDelete: Cascade)
   quizAnswer         QuizAnswer  @relation(fields: [quizAnswerId], references: [id], onDelete: Cascade)
 
@@ -235,4 +290,536 @@ enum VideoStatus {
   PROCESSING
   COMPLETED
   FAILED
+}
+
+// ─── Feedback Loop ──────────────────────────────────────────────────────
+
+enum ContentType {
+  PAID
+  ORGANIC
+}
+
+enum PerformanceStatus {
+  PRODUCED
+  PUBLISHED
+  METRICS
+  ANALYZED
+}
+
+enum Classification {
+  TERRIBLE
+  BAD
+  AVERAGE
+  GOOD
+  EXCELLENT
+}
+
+model ScriptPerformance {
+  id                  String             @id @default(cuid())
+  conversationId      String             @unique
+  userId              String
+  contentType         ContentType
+  status              PerformanceStatus  @default(PRODUCED)
+  niche               String
+  modulesUsed         String[]           @default([])
+  awarenessLevel      Int                // 1-5
+  sophisticationLevel Int                // 1-5
+  classification      Classification?
+  executionScore      Int?               // 1-5
+  executionAnalysis   String?            @db.Text
+
+  conversation        Conversation       @relation(fields: [conversationId], references: [id])
+  user                User               @relation(fields: [userId], references: [id])
+  metrics             PerformanceMetrics[]
+  analysis            ExecutionAnalysis?
+
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @updatedAt
+
+  @@index([niche, classification])
+  @@index([contentType, createdAt])
+  @@index([awarenessLevel, sophisticationLevel])
+  @@index([userId])
+}
+
+model PerformanceMetrics {
+  id                    String            @id @default(cuid())
+  scriptPerformanceId   String
+  snapshotDay           Int               // 1, 3, 7, 14, 30
+  // Paid metrics
+  impressions           Int?
+  ctr                   Float?
+  cpc                   Float?
+  cpm                   Float?
+  cpa                   Float?
+  roas                  Float?
+  hookRate              Float?
+  retention             Float?
+  // Organic metrics
+  views                 Int?
+  likes                 Int?
+  comments              Int?
+  shares                Int?
+  saves                 Int?
+
+  scriptPerformance     ScriptPerformance @relation(fields: [scriptPerformanceId], references: [id], onDelete: Cascade)
+
+  createdAt             DateTime          @default(now())
+
+  @@unique([scriptPerformanceId, snapshotDay])
+}
+
+model ExecutionAnalysis {
+  id                    String            @id @default(cuid())
+  scriptPerformanceId   String            @unique
+  videoUrl              String?
+  originalScript        String            @db.Text
+  comparisonResult      String            @db.Text
+  score                 Int               // 1-5
+  improvementSuggestions String[]         @default([])
+
+  scriptPerformance     ScriptPerformance @relation(fields: [scriptPerformanceId], references: [id], onDelete: Cascade)
+
+  createdAt             DateTime          @default(now())
+}
+
+model PerformanceThreshold {
+  id           String      @id @default(cuid())
+  contentType  ContentType
+  metricKey    String
+  terribleMax  Float
+  badMax       Float
+  averageMax   Float
+  goodMax      Float
+  updatedAt    DateTime    @updatedAt
+  updatedBy    String
+
+  @@unique([contentType, metricKey])
+}
+
+// ─── Expert Profile ───────────────────────────────────────────────────────
+
+model ExpertProfile {
+  id                    String   @id @default(cuid())
+  userId                String   @unique
+  // Seção 1: Dados Básicos
+  fullName              String?
+  age                   Int?
+  gender                String?
+  location              String?
+  maritalStatus         String?
+  hasChildren           String?
+  occupation            String?
+  education             String?
+  // Seção 2: Personalidade
+  communicationStyle    String[] @default([])
+  appearsOnCamera       String?
+  preferredTone         String?
+  usesHumor             String?
+  commonExpressions     String?
+  avoidExpressions      String?
+  // Seção 3: Valores
+  coreValues            String?
+  religion              String?
+  politicalPosition     String?
+  causes                String[] @default([])
+  marketFrustration     String?
+  controversialOpinion  String?
+  avoidTopics           String?
+  // Seção 4: História
+  bio                   String?  @db.Text
+  careerOrigin          String?  @db.Text
+  hardestMoment         String?  @db.Text
+  proudestMoment        String?  @db.Text
+  personalStory         String?  @db.Text
+  dailyRoutine          String?  @db.Text
+  // Seção 5: Comunidade
+  audienceIdentity      String?
+  communityName         String?
+  bestCompliment        String?
+  commonCriticism       String?
+  // Seção 6: Referências
+  inspirations          String?
+  preferredFormats      String[] @default([])
+  bestPerformingVideo   String?
+  worstPerformingVideo  String?
+  // Meta
+  completionPercentage  Int      @default(0)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+  user                  User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model AppConfig {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  value     String
+  updatedAt DateTime @updatedAt
+}
+
+// ─── Subscriptions (Epic 9) ──────────────────────────────────────────────
+
+enum SubscriptionStatus {
+  ACTIVE
+  CANCELED
+  PAST_DUE
+  PAUSED
+}
+
+enum StripeRecordStatus {
+  ACTIVE
+  ARCHIVED
+}
+
+model SubscriptionPlan {
+  id              String   @id @default(cuid())
+  name            String
+  creditsMonthly  Int
+  priceInCents    Int
+  stripeProductId String?  @unique
+  stripePriceId   String?  @unique
+  active          Boolean  @default(false)
+  sortOrder       Int      @default(0)
+
+  subscriptions       UserSubscription[]
+  stripeProductRecords StripeProductRecord[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model UserSubscription {
+  id                   String             @id @default(cuid())
+  userId               String             @unique
+  planId               String
+  stripeSubscriptionId String             @unique
+  stripeCustomerId     String
+  status               SubscriptionStatus
+  currentPeriodStart   DateTime
+  currentPeriodEnd     DateTime
+  cancelAtPeriodEnd    Boolean            @default(false)
+
+  user User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  plan SubscriptionPlan @relation(fields: [planId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@index([stripeSubscriptionId])
+}
+
+model StripeProductRecord {
+  id              String             @id @default(cuid())
+  planId          String
+  stripeProductId String
+  stripePriceId   String             @unique
+  priceInCents    Int
+  status          StripeRecordStatus
+
+  plan SubscriptionPlan @relation(fields: [planId], references: [id])
+
+  createdAt DateTime @default(now())
+
+  @@index([planId])
+}
+
+// ─── Promos & Upsell (Epic 10) ───────────────────────────────────────────
+
+enum OfferType {
+  CREDIT_PACKAGE
+  SUBSCRIPTION_PLAN
+  CUSTOM
+}
+
+enum CampaignStatus {
+  DRAFT
+  ACTIVE
+  PAUSED
+  ENDED
+}
+
+model PromoCampaign {
+  id              String         @id @default(cuid())
+  name            String
+  title           String
+  message         String         @db.Text
+  offerType       OfferType
+  offerId         String?
+  discountPercent Int?
+  filters         Json
+  status          CampaignStatus @default(DRAFT)
+  startsAt        DateTime?
+  endsAt          DateTime?
+
+  deliveries PromoDelivery[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status])
+  @@index([status, startsAt, endsAt])
+}
+
+model PromoDelivery {
+  id          String    @id @default(cuid())
+  campaignId  String
+  userId      String
+  viewedAt    DateTime?
+  clickedAt   DateTime?
+  convertedAt DateTime?
+  dismissedAt DateTime?
+
+  campaign PromoCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  user     User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([campaignId, userId])
+  @@index([userId])
+}
+
+// ─── Referral Program (Epic 11) ──────────────────────────────────────────
+
+enum ReferralStatus {
+  PENDING
+  CREDITED
+  EXPIRED
+}
+
+model ReferralReward {
+  id                   String         @id @default(cuid())
+  referrerId           String
+  referredId           String
+  triggerTransactionId String?
+  referrerCredits      Int
+  referredCredits      Int
+  status               ReferralStatus @default(PENDING)
+
+  referrer User @relation("ReferrerRewards", fields: [referrerId], references: [id])
+  referred User @relation("ReferredRewards", fields: [referredId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([referrerId, referredId])
+  @@index([referredId])
+  @@index([status])
+}
+
+// ─── Knowledge Base / RAG (Qdrant) ──────────────────────────────────────────
+
+enum KbDocumentType {
+  PDF
+  DOCX
+  TXT
+  VIDEO
+}
+
+enum KbProcessingStatus {
+  QUEUED
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+model KbCollection {
+  id          String   @id @default(cuid())
+  name        String
+  slug        String   @unique
+  description String?  @db.Text
+  tags        String[] @default([])
+  qdrantName  String   @unique
+  isActive    Boolean  @default(true)
+
+  documents   KbDocument[]
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([isActive])
+}
+
+model KbDocument {
+  id               String             @id @default(cuid())
+  collectionId     String
+  title            String
+  fileName         String?
+  sourceType       KbDocumentType
+  fileSize         Int?
+  textContent      String?            @db.Text
+  chunkCount       Int                @default(0)
+  totalTokens      Int                @default(0)
+  embeddingTokens  Int                @default(0)
+  processingStatus KbProcessingStatus @default(QUEUED)
+  processingTimeMs Int?
+  errorMessage     String?
+
+  videoTranscription String?          @db.Text
+  videoAnalysis      String?          @db.Text
+
+  collection       KbCollection       @relation(fields: [collectionId], references: [id], onDelete: Cascade)
+  chunks           KbChunk[]
+
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+
+  @@index([collectionId])
+  @@index([processingStatus])
+}
+
+model KbChunk {
+  id            String     @id @default(cuid())
+  documentId    String
+  chunkIndex    Int
+  text          String     @db.Text
+  tokenCount    Int
+  qdrantPointId String?    @unique
+
+  document      KbDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  createdAt     DateTime   @default(now())
+
+  @@unique([documentId, chunkIndex])
+  @@index([documentId])
+}
+
+// ─── TTS Audio Cache (ElevenLabs) ────────────────────────────────────────────
+
+model TtsAudioCache {
+  id             String       @id @default(cuid())
+  conversationId String
+  messageId      String
+  voiceId        String
+  modelId        String
+  characters     Int
+  audioPath      String
+  durationMs     Int?
+  fileSizeBytes  Int?
+  creditsCharged Int
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  createdAt      DateTime     @default(now())
+
+  @@unique([messageId, voiceId])
+  @@index([conversationId])
+  @@index([messageId])
+}
+
+// ─── NPS (Pesquisa de Satisfação) ─────────────────────────────────────────
+
+model NpsCampaign {
+  id        String         @id @default(cuid())
+  name      String
+  question  String         @db.Text
+  minDays   Int            @default(7)
+  status    CampaignStatus @default(DRAFT)
+  startsAt  DateTime?
+  endsAt    DateTime?
+  responses NpsResponse[]
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+
+  @@index([status])
+}
+
+model NpsResponse {
+  id          String       @id @default(cuid())
+  campaignId  String
+  userId      String
+  score       Int?
+  viewedAt    DateTime?
+  submittedAt DateTime?
+  dismissedAt DateTime?
+  campaign    NpsCampaign  @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt   DateTime     @default(now())
+
+  @@unique([campaignId, userId])
+  @@index([userId])
+  @@index([campaignId])
+}
+
+// ===== Epic 12: Ad Intelligence & Content Discovery =====
+
+enum ReferenceSource {
+  META_AD_LIBRARY
+  TIKTOK
+  YOUTUBE
+  INSTAGRAM
+  MANUAL_UPLOAD
+  ENRICHMENT
+}
+
+enum MediaType {
+  VIDEO
+  IMAGE
+}
+
+model CreativeReference {
+  id                   String          @id @default(cuid())
+  userId               String
+  quizSessionId        String?
+  source               ReferenceSource
+  sourceUrl            String?
+  sourceId             String?          // ID externo na plataforma
+  mediaType            MediaType
+  mediaUrl             String?          // URL do preview/mídia
+  adCopy               String?          @db.Text
+  startDate            DateTime?        // data início do ad
+  daysActive           Int?             // calculado: hoje - startDate
+  engagementMetrics    Json?            // { views, likes, shares, comments }
+  platform             String           // facebook, instagram, tiktok, youtube
+  formatClassification String?          // formato classificado pela IA
+  formatCorrected      String?          // formato corrigido pelo aluno
+  structureAnalysis    String?          @db.Text
+  advertiserName       String?
+  searchQuery          String
+
+  user                 User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  quizSession          QuizSession?     @relation(fields: [quizSessionId], references: [id])
+
+  createdAt            DateTime         @default(now())
+
+  @@index([source, searchQuery])
+  @@index([userId, createdAt])
+  @@index([quizSessionId])
+}
+
+model SearchCache {
+  id        String          @id @default(cuid())
+  queryHash String          @unique  // SHA-256(query+source+country+filters)
+  source    ReferenceSource
+  results   Json            // resultados serializados
+  expiresAt DateTime
+  createdAt DateTime        @default(now())
+
+  @@index([expiresAt])
+}
+
+model ApiConfiguration {
+  id               String   @id @default(cuid())
+  provider         String   @unique  // meta, tiktok, youtube, instagram, enrichment
+  enabled          Boolean  @default(true)
+  apiKeyEnv        String   // nome da env var (NUNCA a chave em si)
+  rateLimitPerHour Int
+  config           Json?    // configurações extras por provider
+  updatedAt        DateTime @updatedAt
+  updatedBy        String   // email do admin
+}
+
+model CompetitorProfile {
+  id            String    @id @default(cuid())
+  userId        String
+  platform      String    // tiktok, youtube, instagram
+  profileHandle String    // @handle
+  profileUrl    String
+  lastFetchedAt DateTime?
+  topPosts      Json?     // posts mais relevantes
+
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt     DateTime  @default(now())
+
+  @@index([userId, platform])
 }

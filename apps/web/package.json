@@ -3,15 +3,18 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "dotenv -e ../../.env -- next dev",
+    "dev": "dotenv -e ../../.env -- next dev -H 0.0.0.0",
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.78.0",
     "@auth/prisma-adapter": "^1.0.0",
+    "@elevenlabs/elevenlabs-js": "^2.38.1",
     "@ffprobe-installer/ffprobe": "^2.1.2",
+    "@qdrant/js-client-rest": "^1.17.0",
     "@sol/db": "workspace:*",
     "assemblyai": "^4.25.0",
     "bcryptjs": "^2.4.3",
@@ -26,6 +29,7 @@
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-markdown": "^10.1.0",
+    "recharts": "^3.8.0",
     "sharp": "^0.34.5",
     "stripe": "^20.4.0",
     "zod": "^4.3.6"

@@ -10,6 +10,9 @@ interface PricingConfig {
   creditsPerMInput: number;
   creditsPerMOutput: number;
   maxOutputTokens: number;
+  creditsPerAssemblyAiMin: number;
+  creditsPerMEmbeddingTokens: number;
+  creditsPerKElevenLabsChars: number;
 }
 
 interface CreditPackage {
@@ -74,6 +77,9 @@ export default function PricingSimulator() {
     creditsPerMInput: 500,
     creditsPerMOutput: 2000,
     maxOutputTokens: 8192,
+    creditsPerAssemblyAiMin: 40,
+    creditsPerMEmbeddingTokens: 14,
+    creditsPerKElevenLabsChars: 26,
   });
 
   // Packages state
@@ -83,18 +89,32 @@ export default function PricingSimulator() {
   const [customInput, setCustomInput] = useState(2000);
   const [customOutput, setCustomOutput] = useState(1000);
 
-  // OpenAI cost field (client-side only, not saved)
+  // API cost field (client-side only, not saved)
   const [usdBrlRate, setUsdBrlRate] = useState(6.0);
+  const [activeProvider, setActiveProvider] = useState<'anthropic' | 'openai'>('anthropic');
+
+  // Video simulator (client-side only)
+  const [simVideoDuration, setSimVideoDuration] = useState(120); // seconds
+
+  // TTS simulator (client-side only)
+  const [simTtsChars, setSimTtsChars] = useState(3000);
 
   // ─── Load data ─────────────────────────────────────────────────────────
 
   const loadData = useCallback(async () => {
     try {
-      const res = await fetch('/api/admin/pricing');
-      if (!res.ok) throw new Error('Failed to load pricing data');
-      const data = await res.json();
+      const [pricingRes, aiRes] = await Promise.all([
+        fetch('/api/admin/pricing'),
+        fetch('/api/admin/ai'),
+      ]);
+      if (!pricingRes.ok) throw new Error('Failed to load pricing data');
+      const data = await pricingRes.json();
       setConfig(data.config);
       setPackages(data.packages);
+      if (aiRes.ok) {
+        const aiData = await aiRes.json();
+        setActiveProvider(aiData.provider ?? 'anthropic');
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Erro ao carregar dados');
     } finally {
@@ -442,9 +462,152 @@ export default function PricingSimulator() {
         </div>
       </section>
 
-      {/* ── Section 6: PricingExplainer (custo OpenAI) ────────────────────── */}
+      {/* ── Section 6: Serviços Externos ──────────────────────────────────── */}
       <section className="rounded-2xl border border-solar-800/20 bg-background-secondary/40 p-6 backdrop-blur-md">
-        <h2 className="mb-4 text-lg font-semibold text-foreground">Custo Real OpenAI</h2>
+        <h2 className="mb-4 text-lg font-semibold text-foreground">Serviços Externos</h2>
+        <p className="mb-4 text-sm text-foreground-muted">
+          Precificação de serviços externos cobrados do usuário. Salve junto com a configuração principal.
+        </p>
+
+        <div className="grid gap-4 sm:grid-cols-3">
+          <div>
+            <label className="mb-1.5 block text-sm font-medium text-foreground-muted">
+              AssemblyAI — Créditos / minuto de áudio
+            </label>
+            <input
+              type="number"
+              value={config.creditsPerAssemblyAiMin}
+              onChange={(e) => setConfig((c) => ({ ...c, creditsPerAssemblyAiMin: parseInt(e.target.value) || 0 }))}
+              min={0}
+              className="w-full rounded-lg border border-solar-800/30 bg-background-secondary px-3 py-2 text-sm text-foreground outline-none focus:border-solar-500/50"
+            />
+            <p className="mt-1 text-xs text-foreground-muted/60">
+              Custo real: ~$0.37/min. Default 40 = markup ~500%.{' '}
+              {config.creditsPerAssemblyAiMin === 0 && <span className="text-amber-400">0 = sem cobrança</span>}
+            </p>
+          </div>
+          <div>
+            <label className="mb-1.5 block text-sm font-medium text-foreground-muted">
+              OpenAI Embeddings — Créditos / 1M tokens
+            </label>
+            <input
+              type="number"
+              value={config.creditsPerMEmbeddingTokens}
+              onChange={(e) => setConfig((c) => ({ ...c, creditsPerMEmbeddingTokens: parseInt(e.target.value) || 0 }))}
+              min={0}
+              className="w-full rounded-lg border border-solar-800/30 bg-background-secondary px-3 py-2 text-sm text-foreground outline-none focus:border-solar-500/50"
+            />
+            <p className="mt-1 text-xs text-foreground-muted/60">
+              Custo real: $0.13/1M tokens. Usado na KB (admin-only, sem cobrança ao usuário hoje).
+            </p>
+          </div>
+          <div>
+            <label className="mb-1.5 block text-sm font-medium text-foreground-muted">
+              ElevenLabs TTS — Créditos / 1K caracteres
+            </label>
+            <input
+              type="number"
+              value={config.creditsPerKElevenLabsChars}
+              onChange={(e) => setConfig((c) => ({ ...c, creditsPerKElevenLabsChars: parseInt(e.target.value) || 0 }))}
+              min={0}
+              className="w-full rounded-lg border border-solar-800/30 bg-background-secondary px-3 py-2 text-sm text-foreground outline-none focus:border-solar-500/50"
+            />
+            <p className="mt-1 text-xs text-foreground-muted/60">
+              Custo real: ~$0.24/1K chars. Default 26 = markup ~500%.{' '}
+              {config.creditsPerKElevenLabsChars === 0 && <span className="text-amber-400">0 = sem cobrança</span>}
+            </p>
+          </div>
+        </div>
+
+        {/* Video Cost Simulator */}
+        <div className="mt-6 rounded-xl border border-solar-800/20 bg-background-secondary p-4">
+          <h3 className="mb-3 text-sm font-semibold text-foreground">Simulador — Processamento de Vídeo</h3>
+          <div className="grid gap-4 sm:grid-cols-4">
+            <div>
+              <label className="mb-1 block text-xs text-foreground-muted">Duração do vídeo (seg)</label>
+              <input
+                type="number"
+                value={simVideoDuration}
+                onChange={(e) => setSimVideoDuration(parseInt(e.target.value) || 0)}
+                min={1}
+                max={300}
+                className="w-full rounded-lg border border-solar-800/30 bg-background-secondary px-3 py-2 text-sm text-foreground outline-none focus:border-solar-500/50"
+              />
+            </div>
+            <div className="flex items-end">
+              <div className="rounded-lg border border-solar-500/30 bg-solar-500/10 px-4 py-2 text-center">
+                <p className="text-xs text-foreground-muted">AssemblyAI</p>
+                <p className="text-lg font-bold text-solar-300">
+                  {config.creditsPerAssemblyAiMin > 0 ? Math.max(1, Math.ceil((simVideoDuration / 60) * config.creditsPerAssemblyAiMin)) : 0}
+                </p>
+                <p className="text-xs text-foreground-muted/60">créditos</p>
+              </div>
+            </div>
+            <div className="flex items-end">
+              <div className="rounded-lg border border-solar-800/30 bg-background-secondary px-4 py-2 text-center">
+                <p className="text-xs text-foreground-muted">AI Vision (est.)</p>
+                <p className="text-lg font-bold text-foreground-muted">
+                  {calcCredits(15000, 3000, config)}
+                </p>
+                <p className="text-xs text-foreground-muted/60">créditos</p>
+              </div>
+            </div>
+            <div className="flex items-end">
+              <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-2 text-center">
+                <p className="text-xs text-foreground-muted">Total estimado</p>
+                <p className="text-lg font-bold text-amber-300">
+                  {(config.creditsPerAssemblyAiMin > 0 ? Math.max(1, Math.ceil((simVideoDuration / 60) * config.creditsPerAssemblyAiMin)) : 0) + calcCredits(15000, 3000, config)}
+                </p>
+                <p className="text-xs text-foreground-muted/60">créditos</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* TTS Cost Simulator */}
+        <div className="mt-6 rounded-xl border border-solar-800/20 bg-background-secondary p-4">
+          <h3 className="mb-3 text-sm font-semibold text-foreground">Simulador — TTS ElevenLabs</h3>
+          <div className="grid gap-4 sm:grid-cols-3">
+            <div>
+              <label className="mb-1 block text-xs text-foreground-muted">Caracteres do roteiro</label>
+              <input
+                type="number"
+                value={simTtsChars}
+                onChange={(e) => setSimTtsChars(parseInt(e.target.value) || 0)}
+                min={100}
+                max={10000}
+                className="w-full rounded-lg border border-solar-800/30 bg-background-secondary px-3 py-2 text-sm text-foreground outline-none focus:border-solar-500/50"
+              />
+            </div>
+            <div className="flex items-end">
+              <div className="rounded-lg border border-solar-500/30 bg-solar-500/10 px-4 py-2 text-center">
+                <p className="text-xs text-foreground-muted">ElevenLabs TTS</p>
+                <p className="text-lg font-bold text-solar-300">
+                  {config.creditsPerKElevenLabsChars > 0
+                    ? Math.max(1, Math.ceil((simTtsChars / 1000) * config.creditsPerKElevenLabsChars))
+                    : 0}
+                </p>
+                <p className="text-xs text-foreground-muted/60">créditos</p>
+              </div>
+            </div>
+            <div className="flex items-end">
+              <div className="rounded-lg border border-solar-800/30 bg-background-secondary px-4 py-2 text-center">
+                <p className="text-xs text-foreground-muted">~Duração</p>
+                <p className="text-lg font-bold text-foreground-muted">
+                  {Math.ceil(simTtsChars / 15)}s
+                </p>
+                <p className="text-xs text-foreground-muted/60">(~15 chars/s)</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* ── Section 7: PricingExplainer (custo API) ──────────────────────── */}
+      <section className="rounded-2xl border border-solar-800/20 bg-background-secondary/40 p-6 backdrop-blur-md">
+        <h2 className="mb-4 text-lg font-semibold text-foreground">
+          Custo Real API ({activeProvider === 'openai' ? 'OpenAI' : 'Anthropic'})
+        </h2>
         <p className="mb-4 text-sm text-foreground-muted">
           Cotação USD-BRL informada manualmente (não salva no banco). Calcula custo real da API.
         </p>
@@ -466,7 +629,7 @@ export default function PricingSimulator() {
             <thead className="bg-solar-500/5 text-xs uppercase text-foreground-muted">
               <tr>
                 <th className="px-4 py-3 font-semibold">Perfil</th>
-                <th className="px-4 py-3 font-semibold">Custo USD (gpt-4o-mini)</th>
+                <th className="px-4 py-3 font-semibold">Custo USD ({activeProvider === 'openai' ? 'gpt-4o-mini' : 'claude-haiku'})</th>
                 <th className="px-4 py-3 font-semibold">Custo BRL</th>
                 <th className="px-4 py-3 font-semibold">Créditos cobrados</th>
                 <th className="px-4 py-3 font-semibold">Margem</th>
@@ -474,10 +637,12 @@ export default function PricingSimulator() {
             </thead>
             <tbody className="divide-y divide-solar-800/20">
               {MESSAGE_PROFILES.map((profile) => {
-                // gpt-4o-mini: $0.15/1M input, $0.60/1M output
+                // Dynamic pricing based on active provider
+                const pInput = activeProvider === 'openai' ? 0.15 : 0.80;
+                const pOutput = activeProvider === 'openai' ? 0.60 : 4.00;
                 const costUsd =
-                  (profile.inputTokens / 1_000_000) * 0.15 +
-                  (profile.outputTokens / 1_000_000) * 0.60;
+                  (profile.inputTokens / 1_000_000) * pInput +
+                  (profile.outputTokens / 1_000_000) * pOutput;
                 const costBrl = costUsd * usdBrlRate;
                 const creditsUsed = calcCredits(profile.inputTokens, profile.outputTokens, config);
 

@@ -1,0 +1,154 @@
+story: "9.3"
+title: "Checkout de Assinatura e Webhook de Renovação"
+status: pending
+depends_on: ["9.2"]
+
+phases:
+  - name: Setup
+    subtasks:
+      - id: setup_1
+        description: "Create shared utility function getOrCreateStripeCustomer(userId) in apps/web/src/lib/stripe.ts. Logic: query user by ID (select id, email, stripeCustomerId). If stripeCustomerId exists, return it. Otherwise call stripe.customers.create({ email: user.email, metadata: { userId } }), save the returned customer.id to user.stripeCustomerId via prisma.user.update, and return the customer ID. This function will be reused by both subscription checkout and refactored package checkout"
+        files:
+          - apps/web/src/lib/stripe.ts
+        status: pending
+
+  - name: Implementation
+    subtasks:
+      - id: impl_1
+        description: "CRITICAL REFACTOR of existing checkout route (Story 3.3): Update apps/web/src/app/api/payments/checkout/route.ts to: (a) import and call getOrCreateStripeCustomer(user.id) to obtain stripeCustomerId, (b) add 'customer: stripeCustomerId' to the checkout.sessions.create call, (c) add 'payment_intent_data: { setup_future_usage: \"off_session\" }' to the checkout.sessions.create call to save payment method for future use (Epic 10 pre-requisite). The existing checkout behavior (mode: 'payment', line_items with price_data, success/cancel URLs, metadata) must remain unchanged"
+        files:
+          - apps/web/src/app/api/payments/checkout/route.ts
+        verification: "Checkout route creates Stripe Customer if missing, passes customer ID to session, includes setup_future_usage. All existing package checkout functionality still works"
+        depends_on: [setup_1]
+        status: pending
+
+      - id: impl_2
+        description: "Regression test for refactored checkout route: verify that purchasing a credit package still works end-to-end after the refactor. Test scenarios: (a) user WITHOUT stripeCustomerId buys package -> customer created + saved + checkout session has customer param + setup_future_usage set, (b) user WITH existing stripeCustomerId buys package -> existing customer reused, no new customer created, (c) all original fields (mode, line_items, metadata, urls) remain in the session"
+        files:
+          - apps/web/src/app/api/payments/checkout/__tests__/route.test.ts
+        verification: "All existing checkout tests still pass. New tests confirm customer creation and setup_future_usage"
+        depends_on: [impl_1]
+        status: pending
+
+      - id: impl_3
+        description: "Create POST /api/payments/subscribe route: protected by auth. Accepts { planId } in body. Validates plan exists, is active, and has valid stripePriceId. Checks user does NOT already have UserSubscription with status ACTIVE (returns 409 if so). Calls getOrCreateStripeCustomer(userId). Creates Stripe Checkout Session with mode: 'subscription', customer: stripeCustomerId, line_items: [{ price: plan.stripePriceId, quantity: 1 }], success_url, cancel_url, metadata: { userId, planId }. Returns { sessionUrl }"
+        files:
+          - apps/web/src/app/api/payments/subscribe/route.ts
+        verification: "Subscribe route creates subscription checkout session with correct params. Returns 409 for already-subscribed user, 400 for invalid/inactive plan"
+        depends_on: [setup_1]
+        status: pending
+
+      - id: impl_4
+        description: "Expand existing Stripe webhook handler to process 'checkout.session.completed' for subscription mode. When session.mode === 'subscription': extract userId and planId from metadata, extract stripeSubscriptionId from session.subscription. Retrieve subscription from Stripe to get current_period_start/end. Create UserSubscription record with status ACTIVE, stripeSubscriptionId, stripeCustomerId (from session.customer), currentPeriodStart, currentPeriodEnd, cancelAtPeriodEnd: false. Keep existing 'payment' mode handling unchanged"
+        files:
+          - apps/web/src/app/api/webhooks/stripe/route.ts
+        verification: "Webhook creates UserSubscription for subscription checkout. Existing payment checkout still works"
+        depends_on: [impl_3]
+        status: pending
+
+      - id: impl_5
+        description: "Add webhook handler for 'invoice.payment_succeeded': extract subscription ID from invoice.subscription. Look up UserSubscription by stripeSubscriptionId. Look up plan to get creditsMonthly. Call addCredits(userId, plan.creditsMonthly, { type: 'subscription_renewal', stripePaymentId: invoice.id }). Update UserSubscription currentPeriodStart and currentPeriodEnd from invoice.lines.data period. Idempotency: the unique constraint on stripePaymentId in CreditTransaction prevents duplicate credits on webhook retry"
+        files:
+          - apps/web/src/app/api/webhooks/stripe/route.ts
+        verification: "Credits added on invoice.payment_succeeded. Duplicate webhook retries rejected by unique constraint"
+        depends_on: [impl_4]
+        status: pending
+
+      - id: impl_6
+        description: "Add webhook handler for 'invoice.payment_failed': extract subscription ID from invoice.subscription. Look up UserSubscription by stripeSubscriptionId. Update status to PAST_DUE"
+        files:
+          - apps/web/src/app/api/webhooks/stripe/route.ts
+        verification: "UserSubscription status set to PAST_DUE on payment failure"
+        depends_on: [impl_4]
+        status: pending
+
+      - id: impl_7
+        description: "Add webhook handler for 'customer.subscription.updated': extract subscription object. Look up UserSubscription by stripeSubscriptionId (subscription.id). Update status mapping (active -> ACTIVE, past_due -> PAST_DUE, canceled -> CANCELED, paused -> PAUSED), currentPeriodStart, currentPeriodEnd, cancelAtPeriodEnd from subscription data"
+        files:
+          - apps/web/src/app/api/webhooks/stripe/route.ts
+        verification: "UserSubscription fields synchronized on any subscription update from Stripe"
+        depends_on: [impl_4]
+        status: pending
+
+      - id: impl_8
+        description: "Add webhook handler for 'customer.subscription.deleted': extract subscription object. Look up UserSubscription by stripeSubscriptionId (subscription.id). Update status to CANCELED"
+        files:
+          - apps/web/src/app/api/webhooks/stripe/route.ts
+        verification: "UserSubscription status set to CANCELED when subscription deleted in Stripe"
+        depends_on: [impl_4]
+        status: pending
+
+      - id: impl_9
+        description: "Refactor webhook handler structure: extract each event handler into a named async function (handleCheckoutCompleted, handleInvoicePaymentSucceeded, handleInvoicePaymentFailed, handleSubscriptionUpdated, handleSubscriptionDeleted) for readability and testability. Use a switch/case on event.type with the main POST handler dispatching to these functions"
+        files:
+          - apps/web/src/app/api/webhooks/stripe/route.ts
+        verification: "Webhook handler cleanly dispatches to individual handler functions. All events processed correctly"
+        depends_on: [impl_5, impl_6, impl_7, impl_8]
+        status: pending
+
+  - name: Integration
+    subtasks:
+      - id: int_1
+        description: "Create subscription plans page for students: add a /credits/subscribe or /assinatura page showing active subscription plans fetched from GET /api/admin/subscriptions (filtered to active only) with a subscribe button that calls POST /api/payments/subscribe and redirects to Stripe Checkout"
+        files:
+          - apps/web/src/app/credits/subscribe/page.tsx
+        verification: "Student can see active plans and initiate subscription checkout"
+        depends_on: [impl_3]
+        status: pending
+
+      - id: int_2
+        description: "Verify webhook signature validation still works for all event types. Ensure STRIPE_WEBHOOK_SECRET env var is configured and stripe.webhooks.constructEvent validates all incoming events"
+        files:
+          - apps/web/src/app/api/webhooks/stripe/route.ts
+        verification: "All webhook events validated via constructEvent before processing"
+        depends_on: [impl_9]
+        status: pending
+
+      - id: int_3
+        description: "Configure Stripe webhook endpoint (via Stripe Dashboard or CLI) to send these additional events: invoice.payment_succeeded, invoice.payment_failed, customer.subscription.updated, customer.subscription.deleted (in addition to existing checkout.session.completed)"
+        files: []
+        verification: "Stripe sends all 5 event types to the webhook endpoint"
+        depends_on: [impl_9]
+        status: pending
+
+  - name: Testing
+    subtasks:
+      - id: test_1
+        description: "Unit tests for getOrCreateStripeCustomer: (a) user with existing stripeCustomerId returns it without calling Stripe, (b) user without stripeCustomerId calls stripe.customers.create and saves ID, (c) user not found throws error"
+        files:
+          - apps/web/src/lib/__tests__/stripe.test.ts
+        verification: "All 3 scenarios pass with correct Stripe API calls and DB updates"
+        depends_on: [setup_1]
+        status: pending
+
+      - id: test_2
+        description: "REGRESSION TESTS for refactored package checkout (Story 3.3): (a) existing checkout flow still creates Stripe session with mode 'payment', correct line_items, metadata, (b) customer param now included in session, (c) payment_intent_data.setup_future_usage set to 'off_session', (d) stripeCustomerId saved to user after checkout, (e) user with existing stripeCustomerId reuses it"
+        files:
+          - apps/web/src/app/api/payments/checkout/__tests__/route.test.ts
+        verification: "Package checkout works identically to before PLUS creates customer and sets setup_future_usage"
+        depends_on: [impl_2]
+        status: pending
+
+      - id: test_3
+        description: "Unit tests for POST /api/payments/subscribe: (a) returns 401 for unauthenticated, (b) returns 400 for invalid planId, (c) returns 400 for inactive plan, (d) returns 409 for user with existing active subscription, (e) returns 200 with sessionUrl for valid request"
+        files:
+          - apps/web/src/app/api/payments/subscribe/__tests__/route.test.ts
+        verification: "All validation and success cases covered"
+        depends_on: [impl_3]
+        status: pending
+
+      - id: test_4
+        description: "Unit tests for webhook handlers: (a) checkout.session.completed with mode subscription creates UserSubscription, (b) checkout.session.completed with mode payment still adds credits (regression), (c) invoice.payment_succeeded adds credits with type subscription_renewal, (d) duplicate invoice.payment_succeeded rejected (idempotency), (e) invoice.payment_failed sets PAST_DUE, (f) customer.subscription.updated syncs all fields, (g) customer.subscription.deleted sets CANCELED"
+        files:
+          - apps/web/src/app/api/webhooks/stripe/__tests__/route.test.ts
+        verification: "All 7 webhook scenarios pass with correct DB state changes"
+        depends_on: [impl_9]
+        status: pending
+
+      - id: test_5
+        description: "End-to-end integration test: simulate full subscription lifecycle using Stripe test mode. (1) Create plan via admin, (2) Subscribe via checkout, (3) Verify UserSubscription created, (4) Simulate invoice.payment_succeeded -> credits added, (5) Simulate invoice.payment_failed -> status PAST_DUE, (6) Simulate customer.subscription.deleted -> status CANCELED"
+        files:
+          - apps/web/src/app/api/webhooks/stripe/__tests__/lifecycle.test.ts
+        verification: "Complete subscription lifecycle works end-to-end with correct state transitions"
+        depends_on: [test_4]
+        status: pending

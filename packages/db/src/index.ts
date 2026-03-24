@@ -22,6 +22,13 @@ export * from './conversations'
 export * from './credits'
 export * from './pricing'
 export * from './admin'
+export * from './ai-config'
+export * from './subscription-plans'
+export * from './referral'
+export * from './campaigns'
+export * from './knowledge'
+export * from './prompt-config'
+export * from './nps'
 // token-counter re-export removed from barrel — tiktoken uses WASM and cannot
 // be bundled by webpack for client components. Import directly:
 //   import { countTokens, ... } from '@sol/db/token-counter'

@@ -1,33 +1,36 @@
 // Video Processing Pipeline — SOL SaaS
-// Orchestrates: AssemblyAI transcription + FFmpeg frame extraction + GPT-4o analysis
+// Orchestrates: AssemblyAI transcription + FFmpeg frame extraction + AI Vision analysis
 
-import { prisma } from '@sol/db'
+import { prisma, getPricingConfig, calculateCredits, calculateAssemblyAiCredits, deductCredits } from '@sol/db'
 import { transcribe } from './assemblyai'
 import { extractFrames, cleanup } from './ffmpeg'
 import * as fs from 'fs/promises'
-import OpenAI from 'openai'
+import * as path from 'path'
+import { getAiAdapter, type AiAdapter } from '@/lib/ai'
+import { getAiConfig, getPromptOverride, type AiConfig } from '@sol/db'
 
 const PROCESSING_TIMEOUT_MS = 180_000 // 3 minutes
 
-let _openai: OpenAI | null = null
-function getOpenAI() {
-  if (!_openai) {
-    _openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
-  }
-  return _openai
+interface TokenUsage {
+  inputTokens: number
+  outputTokens: number
 }
 
 /**
  * Processes a video file through the full pipeline:
  * 1. Transcription (AssemblyAI)
  * 2. Frame extraction (FFmpeg)
- * 3. Frame description (GPT-4o Vision)
- * 4. Structure analysis (GPT-4o)
+ * 3. Frame description (AI Vision)
+ * 4. Structure analysis (AI)
  * 5. Full description consolidation
+ *
+ * Token usage from all AI calls is tracked and saved to VideoAnalysis
+ * for future billing calibration.
  */
 export async function processVideo(
   videoPath: string,
-  videoAnalysisId: string
+  videoAnalysisId: string,
+  userId: string,
 ): Promise<void> {
   const startTime = Date.now()
   let framePaths: string[] = []
@@ -62,19 +65,37 @@ export async function processVideo(
         data: { transcription: transcriptionResult.text },
       })
 
-      // Step 3: Describe frames with GPT-4o Vision
-      const frameDescriptions = await describeFrames(frames)
+      // Resolve AI adapter once for all Vision calls
+      const aiConfig = await getAiConfig()
+      const adapter = getAiAdapter(aiConfig.provider)
+
+      // Accumulate token usage across all AI calls
+      let totalInput = 0
+      let totalOutput = 0
+
+      // Step 3: Describe frames with Vision
+      const { text: frameDescriptions, usage: framesUsage, framesAnalyzed } =
+        await describeFrames(frames, adapter, aiConfig)
+
+      totalInput += framesUsage.inputTokens
+      totalOutput += framesUsage.outputTokens
 
       await prisma.videoAnalysis.update({
         where: { id: videoAnalysisId },
         data: { frameDescriptions },
       })
 
-      // Step 4: Structure analysis with GPT-4o
-      const structureAnalysis = await analyzeStructure(
-        transcriptionResult.text,
-        frameDescriptions
-      )
+      // Step 4: Structure analysis
+      const { text: structureAnalysis, usage: structureUsage } =
+        await analyzeStructure(
+          transcriptionResult.text,
+          frameDescriptions,
+          adapter,
+          aiConfig,
+        )
+
+      totalInput += structureUsage.inputTokens
+      totalOutput += structureUsage.outputTokens
 
       await prisma.videoAnalysis.update({
         where: { id: videoAnalysisId },
@@ -96,10 +117,50 @@ export async function processVideo(
           fullDescription,
           processingStatus: 'COMPLETED',
           processingTimeMs,
+          // Token tracking
+          totalInputTokens: totalInput,
+          totalOutputTokens: totalOutput,
+          framesAnalyzed,
+          modelUsed: aiConfig.finalModel,
+          audioDurationSeconds: transcriptionResult.audioDurationSeconds,
         },
       })
 
-      console.log(`[Video Pipeline] Completed in ${processingTimeMs}ms`)
+      // Deduct credits for AI token usage + AssemblyAI transcription
+      const pricingConfig = await getPricingConfig()
+      const aiCredits = calculateCredits(totalInput, totalOutput, pricingConfig)
+      const audioDuration = transcriptionResult.audioDurationSeconds ?? 0
+      const assemblyAiCredits = calculateAssemblyAiCredits(audioDuration, pricingConfig)
+      const creditsUsed = aiCredits + assemblyAiCredits
+
+      try {
+        await deductCredits(userId, creditsUsed, {
+          inputTokens: totalInput,
+          outputTokens: totalOutput,
+          modelUsed: aiConfig.finalModel,
+          creditsPerMInput: pricingConfig.creditsPerMInput,
+          creditsPerMOutput: pricingConfig.creditsPerMOutput,
+          conversationTitle: 'Análise de vídeo referência',
+          assemblyAiSeconds: audioDuration > 0 ? audioDuration : undefined,
+          assemblyAiCredits: assemblyAiCredits > 0 ? assemblyAiCredits : undefined,
+        })
+        console.log(`[Video Pipeline] Deducted ${creditsUsed} credits from user ${userId} (AI: ${aiCredits}, AssemblyAI: ${assemblyAiCredits})`)
+      } catch (err) {
+        // Log but don't fail pipeline — video is already processed
+        console.error(`[Video Pipeline] Credit deduction failed:`, err)
+      }
+
+      // Detailed log for billing calibration
+      console.log(`[Video Pipeline] COMPLETED in ${processingTimeMs}ms`)
+      console.log(`[Video Pipeline] Token usage:`)
+      console.log(`  Frames Vision (${framesAnalyzed} frames): input=${framesUsage.inputTokens} output=${framesUsage.outputTokens}`)
+      console.log(`  Structure analysis: input=${structureUsage.inputTokens} output=${structureUsage.outputTokens}`)
+      console.log(`  AI tokens: input=${totalInput} output=${totalOutput} => ${aiCredits} credits`)
+      console.log(`  Model: ${aiConfig.finalModel} (${aiConfig.provider})`)
+      if (audioDuration > 0) {
+        console.log(`  AssemblyAI audio: ${audioDuration.toFixed(1)}s => ${assemblyAiCredits} credits (${pricingConfig.creditsPerAssemblyAiMin} credits/min)`)
+      }
+      console.log(`  TOTAL: ${creditsUsed} credits`)
     } finally {
       clearTimeout(timeout)
     }
@@ -132,20 +193,23 @@ export async function processVideo(
     await cleanup(videoPath)
     if (framePaths.length > 0) {
       // Frames are in a directory — cleanup parent dir
-      const framesDir = framePaths[0].substring(0, framePaths[0].lastIndexOf('/'))
-      if (framesDir) {
-        await cleanup(framesDir)
-      }
+      await cleanup(path.dirname(framePaths[0]))
     }
   }
 }
 
 /**
- * Describes each frame using GPT-4o Vision.
- * Returns combined descriptions.
+ * Describes each frame using AI Vision.
+ * Returns combined descriptions + accumulated token usage.
  */
-async function describeFrames(framePaths: string[]): Promise<string> {
-  if (framePaths.length === 0) return 'Nenhum frame extraído'
+async function describeFrames(
+  framePaths: string[],
+  adapter: AiAdapter,
+  aiConfig: AiConfig,
+): Promise<{ text: string; usage: TokenUsage; framesAnalyzed: number }> {
+  if (framePaths.length === 0) {
+    return { text: 'Nenhum frame extraído', usage: { inputTokens: 0, outputTokens: 0 }, framesAnalyzed: 0 }
+  }
 
   // Limit to 10 frames max to control costs
   const selectedFrames = framePaths.length <= 10
@@ -153,52 +217,62 @@ async function describeFrames(framePaths: string[]): Promise<string> {
     : framePaths.filter((_, i) => i % Math.ceil(framePaths.length / 10) === 0).slice(0, 10)
 
   const descriptions: string[] = []
+  let totalInput = 0
+  let totalOutput = 0
 
   for (let i = 0; i < selectedFrames.length; i++) {
     const frameBuffer = await fs.readFile(selectedFrames[i])
     const base64 = frameBuffer.toString('base64')
 
-    const response = await getOpenAI().chat.completions.create({
-      model: 'gpt-4o',
+    const result = await adapter.complete({
+      model: aiConfig.finalModel,
       messages: [
         {
           role: 'user',
           content: [
             {
               type: 'text',
-              text: `Descreva este frame de um vídeo em português. Inclua: o que aparece na cena, cenário, ações, texto na tela, expressões faciais, e qualquer elemento visual relevante. Seja conciso (2-3 frases).`,
+              text: (await getPromptOverride('PROMPT_VIDEO_FRAME_DESC')) ?? `Descreva este frame de um vídeo em português. Inclua: o que aparece na cena, cenário, ações, texto na tela, expressões faciais, e qualquer elemento visual relevante. Seja conciso (2-3 frases).`,
             },
             {
-              type: 'image_url',
-              image_url: { url: `data:image/jpeg;base64,${base64}`, detail: 'low' },
+              type: 'image',
+              base64,
+              mimeType: 'image/jpeg',
             },
           ],
         },
       ],
-      max_tokens: 200,
+      maxTokens: 200,
     })
 
-    const description = response.choices[0]?.message?.content ?? 'Sem descrição'
-    descriptions.push(`[Frame ${i + 1}/${selectedFrames.length}]: ${description}`)
+    totalInput += result.inputTokens
+    totalOutput += result.outputTokens
+    descriptions.push(`[Frame ${i + 1}/${selectedFrames.length}]: ${result.text || 'Sem descrição'}`)
   }
 
-  return descriptions.join('\n\n')
+  return {
+    text: descriptions.join('\n\n'),
+    usage: { inputTokens: totalInput, outputTokens: totalOutput },
+    framesAnalyzed: selectedFrames.length,
+  }
 }
 
 /**
  * Analyzes the video structure using transcription + frame descriptions.
+ * Returns analysis text + token usage.
  */
 async function analyzeStructure(
   transcription: string,
-  frameDescriptions: string
-): Promise<string> {
-  const response = await getOpenAI().chat.completions.create({
-    model: 'gpt-4o',
+  frameDescriptions: string,
+  adapter: AiAdapter,
+  aiConfig: AiConfig,
+): Promise<{ text: string; usage: TokenUsage }> {
+  const result = await adapter.complete({
+    model: aiConfig.finalModel,
+    maxTokens: 1500,
+    temperature: 0.3,
+    systemPrompt: (await getPromptOverride('PROMPT_VIDEO_STRUCTURE')) ?? `Você é um especialista em análise de vídeos de marketing e anúncios criativos. Analise o vídeo a partir da transcrição e descrição visual dos frames.`,
     messages: [
-      {
-        role: 'system',
-        content: `Você é um especialista em análise de vídeos de marketing e anúncios criativos. Analise o vídeo a partir da transcrição e descrição visual dos frames.`,
-      },
       {
         role: 'user',
         content: `Analise este vídeo e identifique:
@@ -223,11 +297,12 @@ Retorne uma análise estruturada com:
 Responda em português.`,
       },
     ],
-    temperature: 0.3,
-    max_tokens: 1500,
   })
 
-  return response.choices[0]?.message?.content ?? 'Análise não disponível'
+  return {
+    text: result.text || 'Análise não disponível',
+    usage: { inputTokens: result.inputTokens, outputTokens: result.outputTokens },
+  }
 }
 
 /**

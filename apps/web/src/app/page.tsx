@@ -1,6 +1,8 @@
 'use client';
 
+import { useEffect, Suspense } from 'react';
 import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
 import dynamic from 'next/dynamic';
 import Logo from '@/components/Logo';
 import LogoWithText from '@/components/LogoWithText';
@@ -42,6 +44,30 @@ const features = [
 
 export default function LandingPage() {
   return (
+    <Suspense>
+      <LandingPageContent />
+    </Suspense>
+  );
+}
+
+function LandingPageContent() {
+  const searchParams = useSearchParams();
+  const ref = searchParams.get('ref');
+  const registerHref = ref ? `/register?ref=${encodeURIComponent(ref)}` : '/register';
+  const loginHref = ref ? `/login?ref=${encodeURIComponent(ref)}` : '/login';
+
+  // Set referral cookie immediately on landing so it persists even if user navigates around
+  useEffect(() => {
+    if (ref && /^[A-Z0-9]{8}$/i.test(ref)) {
+      fetch('/api/referral/set-cookie', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: ref.toUpperCase() }),
+      }).catch(() => {});
+    }
+  }, [ref]);
+
+  return (
     <div className="bg-gradient-animated min-h-screen">
       {/* Navigation */}
       <nav className="fixed left-0 right-0 top-4 z-50 mx-auto flex h-14 w-[calc(100%-2rem)] max-w-5xl items-center justify-between rounded-full border border-solar-800/30 bg-[#1a1a1a]/70 px-4 backdrop-blur-xl md:px-6">
@@ -53,7 +79,7 @@ export default function LandingPage() {
           </div>
         </div>
         <div className="flex flex-1 justify-end">
-          <Link href="/login" className="rounded-full bg-solar-500/10 px-4 py-1.5 text-xs font-medium text-solar-300 transition-all hover:bg-solar-500/20">
+          <Link href={loginHref} className="rounded-full bg-solar-500/10 px-4 py-1.5 text-xs font-medium text-solar-300 transition-all hover:bg-solar-500/20">
             Entrar
           </Link>
         </div>
@@ -79,13 +105,13 @@ export default function LandingPage() {
         </p>
 
         <div className="flex flex-col items-center gap-4 sm:flex-row">
-          <Link href="/register" className="group relative inline-flex items-center gap-2 rounded-xl bg-solar-500 px-8 py-3.5 text-base font-semibold text-background transition-all hover:bg-solar-600 hover:shadow-lg hover:shadow-solar-500/25">
+          <Link href={registerHref} className="group relative inline-flex items-center gap-2 rounded-xl bg-solar-500 px-8 py-3.5 text-base font-semibold text-background transition-all hover:bg-solar-600 hover:shadow-lg hover:shadow-solar-500/25">
             Começar agora
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="transition-transform group-hover:translate-x-0.5">
               <line x1="5" y1="12" x2="19" y2="12" /><polyline points="12 5 19 12 12 19" />
             </svg>
           </Link>
-          <Link href="/login" className="inline-flex items-center gap-2 rounded-xl border border-solar-800/50 px-8 py-3.5 text-base font-medium text-foreground-muted transition-all hover:border-solar-500/30 hover:text-foreground">
+          <Link href={loginHref} className="inline-flex items-center gap-2 rounded-xl border border-solar-800/50 px-8 py-3.5 text-base font-medium text-foreground-muted transition-all hover:border-solar-500/30 hover:text-foreground">
             Já tenho conta
           </Link>
         </div>

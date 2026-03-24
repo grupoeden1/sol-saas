@@ -1,0 +1,900 @@
+workflow:
+  id: epics-9-10-11-full-implementation
+  name: "Epics 9, 10 & 11 — Assinaturas, Promoções & Upsell, Referral"
+  version: "1.0"
+  description: >-
+    Workflow autônomo completo para implementar os Epics 9 (Assinaturas Recorrentes),
+    10 (Promoções & Upsell One-Click) e 11 (Programa de Indicação / Referral) do SOL.
+    Orquestra @architect → @sm → @po → @architect → @dev → @qa → @devops → @po
+    em sequência otimizada para impacto no faturamento.
+    Inclui refatoração do Checkout existente (Epic 3) para Stripe Customer + setup_future_usage.
+    Independente dos Epics 6, 7 e 8 do PRD v10.0.
+  type: generic
+  project_types:
+    - feature-development
+    - enhancement
+
+  metadata:
+    elicit: false
+    confirmation_required: false
+
+  execution_modes:
+    - mode: yolo
+      description: >-
+        Execução 100% autônoma — todas as fases executam sem intervenção humana.
+        Architect atualiza docs, SM cria stories, PO valida, Architect cria plans,
+        Dev implementa, QA audita, DevOps pusha, PO fecha.
+      prompts: 0
+      default: true
+    - mode: interactive
+      description: Checkpoints entre cada fase para decisão humana
+      prompts: 10-15
+    - mode: preflight
+      description: Análise completa upfront antes de iniciar implementação
+      prompts: 5-8
+
+  context:
+    project_docs:
+      tech_stack: "docs/framework/tech-stack.md"
+      coding_standards: "docs/framework/coding-standards.md"
+      source_tree: "docs/framework/source-tree.md"
+      architecture: "docs/architecture.md"
+      prd: "docs/prd.md"
+    addendum: "docs/prd-addendum-v11.md"
+    description: >-
+      PRD v10.0 com migração OpenAI → Claude API já aplicada. Epics 1-3 completos.
+      Epic 8 do PRD = Feedback Loop (NÃO assinaturas). Novos Epics: 9 (Assinaturas),
+      10 (Promoções & Upsell), 11 (Referral). Todos independentes dos Epics 6, 7, 8.
+      TransactionType enum existente: purchase, consumption, adjustment.
+      credit_transactions já tem campo modules_used (PRD v10.0).
+      IA: Anthropic Claude API (claude-sonnet-4-5-20250929 / claude-haiku-4-5-20251001).
+
+  inputs:
+    - campo: addendum_path
+      tipo: string
+      origem: Context
+      obrigatório: true
+      descricao: Caminho do adendo PRD com Epics 9, 10 e 11
+      default: "docs/prd-addendum-v11.md"
+
+  phases:
+    - phase_1: Architecture Update
+    - phase_2: Story Creation
+    - phase_3: Story Validation
+    - phase_4: Implementation Planning
+    - phase_5: Epic 9 Implementation
+    - phase_6: Epic 9 QA
+    - phase_7: Epic 10 Partial (Schema + One-Click)
+    - phase_8: Epic 11 Implementation
+    - phase_9: Epic 10 Completion (Campaigns + Popups)
+    - phase_10: Final QA (Epics 10 + 11)
+    - phase_11: Push & Close
+
+  sequence:
+    # ═══════════════════════════════════════════════════════════════════════════
+    # PHASE 1 — ARCHITECTURE UPDATE
+    # ═══════════════════════════════════════════════════════════════════════════
+    - step: architecture_update
+      id: arch_update
+      phase: 1
+      agent: architect
+      action: Atualizar docs/architecture.md com novos Epics 9, 10 e 11
+      notes: |
+        @architect — O PRD do SOL foi atualizado com 3 novos Epics (9, 10, 11) no documento docs/prd-addendum-v11.md.
+        Atualize docs/architecture.md para refletir as mudanças. O PRD principal está em v10.0 com Claude API (não OpenAI).
+
+        CONTEXTO EXISTENTE (não alterar):
+        - IA: Anthropic Claude API (claude-sonnet-4-5-20250929 / claude-haiku-4-5-20251001) — já migrado
+        - TransactionType enum atual: purchase, consumption, adjustment
+        - credit_transactions já tem campo modules_used (string[], nullable) — do PRD v10.0
+        - quiz_sessions já tem awareness_level e sophistication_level — do PRD v10.0 Story 6.8
+        - Epic 8 do PRD = Feedback Loop & Inteligência de Resultados (NÃO é Assinaturas)
+
+        MUDANÇAS A ADICIONAR:
+
+        Novos Data Models (Epic 9 — Assinaturas):
+        - SubscriptionPlan (name, credits_monthly, price_in_cents, stripe_product_id, stripe_price_id, active)
+        - UserSubscription (user_id unique, plan_id, stripe_subscription_id, stripe_customer_id, status enum ACTIVE/CANCELED/PAST_DUE/PAUSED, current_period_start/end, cancel_at_period_end)
+        - StripeProductRecord (plan_id, stripe_product_id, stripe_price_id, price_in_cents, status ACTIVE/ARCHIVED)
+
+        Novos Data Models (Epic 10 — Promoções):
+        - PromoCampaign (name, title, message, offer_type enum CREDIT_PACKAGE/SUBSCRIPTION_PLAN/CUSTOM, filters JSON, status enum DRAFT/ACTIVE/PAUSED/ENDED, starts_at, ends_at)
+        - PromoDelivery (campaign_id, user_id, viewed_at, clicked_at, converted_at, dismissed_at — unique [campaign_id, user_id])
+
+        Novos Data Models (Epic 11 — Referral):
+        - ReferralReward (referrer_id, referred_id, trigger_transaction_id, referrer_credits, referred_credits, status PENDING/CREDITED/EXPIRED)
+
+        Campos novos em tabelas existentes:
+        - users: stripe_customer_id (string, unique, nullable), referral_code (string, unique), referred_by (FK → users, nullable)
+        - admin_settings/pricing_config: SUBSCRIPTIONS_ENABLED, UPSELL_ENABLED, UPSELL_LOW_CREDITS_THRESHOLD, REFERRAL_ENABLED, REFERRAL_REFERRER_CREDITS, REFERRAL_REFERRED_CREDITS, REFERRAL_MAX_PER_USER
+
+        Enum TransactionType — ADICIONAR (não substituir):
+        - subscription_renewal, promo_purchase, referral
+
+        Novos API Routes:
+        - POST /api/payments/subscribe (Stripe Checkout mode=subscription)
+        - POST /api/payments/one-click (PaymentIntent com payment_method salvo, confirm: true, off_session: true)
+        - GET/POST/PUT/PATCH /api/admin/subscriptions (CRUD planos com auto-provisionamento Stripe)
+        - GET/POST/PUT/PATCH /api/admin/promos (CRUD campanhas segmentadas)
+        - GET /api/promos/active (campanha aplicável ao user logado)
+        - POST /api/promos/track (eventos de popup)
+        - GET/PUT /api/admin/referral (config do programa)
+        - POST /api/subscription/cancel, /reactivate, /change-plan
+
+        Integrações Stripe expandidas:
+        - stripe.products.create/update (auto-provisionamento)
+        - stripe.prices.create (recorrente com recurring.interval=month)
+        - stripe.customers.create / listPaymentMethods
+        - PaymentIntent com confirm:true, off_session:true (one-click)
+        - Novos webhooks: invoice.payment_succeeded, invoice.payment_failed, customer.subscription.updated, customer.subscription.deleted
+
+        IMPACTO RETROATIVO (CRÍTICO):
+        - Checkout de pacotes avulsos (Story 3.3) DEVE ser atualizado para criar Stripe Customer, salvar stripe_customer_id, usar setup_future_usage: 'off_session'
+
+        Manter padrões existentes (monolith, RSC first, SSE streaming, zero lock-in, Claude API).
+        Atualizar diagrama Mermaid se necessário.
+      outputs:
+        - architecture_updated
+      next: stories_epic_9
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # PHASE 2 — STORY CREATION
+    # ═══════════════════════════════════════════════════════════════════════════
+    - step: stories_epic_9
+      id: stories_e9
+      phase: 2
+      agent: sm
+      action: Criar user stories para Epic 9 (Assinaturas Recorrentes)
+      requires: arch_update
+      notes: |
+        @sm — Crie as user stories para o Epic 9 (Assinaturas Recorrentes) do SOL.
+        Leia o adendo docs/prd-addendum-v11.md e a arquitetura atualizada docs/architecture.md.
+
+        ATENÇÃO À NUMERAÇÃO: Epic 8 do PRD v10.0 = Feedback Loop (já existe). Assinaturas = Epic 9.
+
+        Epic 9 contém 4 stories:
+        - Story 9.1 — Database Schema: Assinaturas e Produtos Stripe
+        - Story 9.2 — Auto-Provisionamento de Produtos Stripe via Admin
+        - Story 9.3 — Checkout de Assinatura e Webhook de Renovação
+        - Story 9.4 — Gerenciamento de Assinatura pelo Aluno
+
+        Siga o padrão exato das stories existentes em docs/stories/ (formato do 1.1.story.md).
+        Cada story deve ter: Status, Epic, Context, Acceptance Criteria, Dev Notes, Tasks/Subtasks, Definition of Done.
+
+        Salve em: docs/stories/9.1.story.md, 9.2.story.md, 9.3.story.md, 9.4.story.md
+
+        IMPORTANTE:
+        - Story 9.3 DEVE documentar no Dev Notes que o Checkout existente (Story 3.3) precisa ser atualizado
+          para criar Stripe Customer e usar setup_future_usage: 'off_session'. Impacto retroativo.
+        - Enum TransactionType recebe 'subscription_renewal' — ADIÇÃO, não substituição.
+        - Claude API (não OpenAI) é o provider de IA.
+      outputs:
+        - stories_9_1
+        - stories_9_2
+        - stories_9_3
+        - stories_9_4
+      next: stories_e10
+
+    - step: stories_epic_10
+      id: stories_e10
+      phase: 2
+      agent: sm
+      action: Criar user stories para Epic 10 (Promoções & Upsell One-Click)
+      requires: stories_e9
+      notes: |
+        @sm — Crie as user stories para o Epic 10 (Promoções & Upsell One-Click) do SOL.
+        Leia docs/prd-addendum-v11.md e docs/architecture.md.
+
+        Epic 10 contém 4 stories:
+        - Story 10.1 — Database Schema: Campanhas e One-Click Payment
+        - Story 10.2 — One-Click Payment Engine
+        - Story 10.3 — Painel Admin: Criação e Gerenciamento de Campanhas
+        - Story 10.4 — Engine de Entrega de Popups e Upsell Automático
+
+        Mesmo padrão. Salve em: docs/stories/10.1.story.md a 10.4.story.md
+
+        IMPORTANTE:
+        - Story 10.2 depende de stripe_customer_id e payment_method salvo — referencie Story 9.3 como dependência.
+        - Enum TransactionType recebe 'promo_purchase' como ADIÇÃO.
+      outputs:
+        - stories_10_1
+        - stories_10_2
+        - stories_10_3
+        - stories_10_4
+      next: stories_e11
+
+    - step: stories_epic_11
+      id: stories_e11
+      phase: 2
+      agent: sm
+      action: Criar user stories para Epic 11 (Programa de Indicação / Referral)
+      requires: stories_e10
+      notes: |
+        @sm — Crie as user stories para o Epic 11 (Programa de Indicação / Referral) do SOL.
+        Leia docs/prd-addendum-v11.md e docs/architecture.md.
+
+        Epic 11 contém 5 stories:
+        - Story 11.1 — Database Schema: Referral Program
+        - Story 11.2 — Fluxo de Cadastro com Referral
+        - Story 11.3 — Atribuição de Bônus na Primeira Compra
+        - Story 11.4 — Interface do Aluno: Compartilhar e Acompanhar Indicações
+        - Story 11.5 — Painel Admin: Controle do Programa de Referral
+
+        Mesmo padrão. Salve em: docs/stories/11.1.story.md a 11.5.story.md
+
+        IMPORTANTE:
+        - Story 11.2 MODIFICA o fluxo de cadastro existente (Story 1.3) — referenciar como impacto.
+        - Story 11.3 expande enum TransactionType com 'referral' e addCredits() com type: 'referral'.
+        - Bônus atribuído na PRIMEIRA COMPRA do indicado (não no cadastro).
+        - referral_code gerado automaticamente para TODOS os novos usuários.
+        - Rewards pendentes usam valores ATUAIS do admin (não snapshot do momento do cadastro).
+      outputs:
+        - stories_11_1
+        - stories_11_2
+        - stories_11_3
+        - stories_11_4
+        - stories_11_5
+      next: validation
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # PHASE 3 — STORY VALIDATION
+    # ═══════════════════════════════════════════════════════════════════════════
+    - step: story_validation
+      id: validation
+      phase: 3
+      agent: po
+      action: Validar todas as 13 stories criadas
+      requires: stories_e11
+      notes: |
+        @po — Execute *validate-story-draft para todas as stories dos Epics 9, 10 e 11.
+
+        Epic 9: docs/stories/9.1.story.md, 9.2.story.md, 9.3.story.md, 9.4.story.md
+        Epic 10: docs/stories/10.1.story.md, 10.2.story.md, 10.3.story.md, 10.4.story.md
+        Epic 11: docs/stories/11.1.story.md, 11.2.story.md, 11.3.story.md, 11.4.story.md, 11.5.story.md
+
+        Verifique:
+        - Acceptance criteria são testáveis e completos
+        - Não há conflito com stories existentes dos Epics 1-3 (implementados) ou 6-8 (PRD v10.0)
+        - Numeração correta: Epic 9 (Assinaturas), 10 (Promoções), 11 (Referral)
+        - Dependências documentadas (10.2 → 9.3, 11.2 → 1.3)
+        - Nenhum AC contradiz outro
+        - Impacto retroativo no Checkout (Story 3.3) documentado na Story 9.3
+        - Enum TransactionType lista valores ADICIONAIS sem sobrescrever existentes
+        - Campo modules_used em credit_transactions NÃO é alterado
+        - Todas as referências de IA mencionam Claude API (nunca OpenAI)
+
+        Se encontrar problemas, corrija diretamente nos arquivos de story ANTES de avançar.
+      outputs:
+        - validation_report
+        - stories_approved
+      next: impl_plans
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # PHASE 4 — IMPLEMENTATION PLANNING
+    # ═══════════════════════════════════════════════════════════════════════════
+    - step: implementation_plans
+      id: impl_plans
+      phase: 4
+      agent: architect
+      action: Criar implementation.yaml para todas as 13 stories
+      requires: validation
+      notes: |
+        @architect — Crie os implementation.yaml para todas as stories dos Epics 9, 10 e 11.
+        Leia cada story em docs/stories/ e gere o plano seguindo o padrão de docs/stories/implementation.yaml.
+
+        Gere um implementation.yaml para cada story:
+        - docs/stories/9.1.implementation.yaml a 9.4.implementation.yaml
+        - docs/stories/10.1.implementation.yaml a 10.4.implementation.yaml
+        - docs/stories/11.1.implementation.yaml a 11.5.implementation.yaml
+
+        Cada implementation.yaml deve conter: phases (Setup, Implementation, Integration, Testing),
+        subtasks com arquivos afetados, verificações, dependências entre subtasks, status pending.
+
+        CRÍTICO — Na Story 9.3, incluir subtask específica para ATUALIZAR o Checkout existente:
+        - Arquivo: apps/web/app/api/payments/checkout/route.ts
+        - Mudanças: criar Stripe Customer, salvar stripe_customer_id, setup_future_usage: 'off_session'
+        - Subtask de teste de regressão obrigatória após esta mudança
+
+        Ordem de dependências entre stories:
+        - 9.1 → 9.2 → 9.3 → 9.4
+        - 10.1 → 10.2 → 10.3 → 10.4 (10.2 depende de 9.3)
+        - 11.1 → 11.2 → 11.3 → 11.4 → 11.5
+      outputs:
+        - impl_yaml_9_1
+        - impl_yaml_9_2
+        - impl_yaml_9_3
+        - impl_yaml_9_4
+        - impl_yaml_10_1
+        - impl_yaml_10_2
+        - impl_yaml_10_3
+        - impl_yaml_10_4
+        - impl_yaml_11_1
+        - impl_yaml_11_2
+        - impl_yaml_11_3
+        - impl_yaml_11_4
+        - impl_yaml_11_5
+      next: build_9_1
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # PHASE 5 — EPIC 9 IMPLEMENTATION
+    # ═══════════════════════════════════════════════════════════════════════════
+    - step: build_story_9_1
+      id: build_9_1
+      phase: 5
+      agent: dev
+      action: Implementar Story 9.1 — Database Schema Assinaturas
+      requires: impl_plans
+      notes: |
+        @dev — Execute *build 9.1
+
+        Implemente Story 9.1 (Database Schema: Assinaturas e Produtos Stripe)
+        seguindo docs/stories/9.1.story.md e docs/stories/9.1.implementation.yaml.
+
+        Epics 1-3 já completos com Claude API. Schema existente: users, conversations,
+        messages, credit_transactions (com modules_used), pricing_config, credit_packages.
+        Você está ADICIONANDO tabelas e campos, não alterando estrutura existente.
+
+        Enum TransactionType existente: purchase, consumption, adjustment.
+        ADICIONAR: subscription_renewal. NÃO remover valores existentes.
+
+        Garanta: Migration não quebra dados existentes, seeds dos 3 planos (active: false),
+        Prisma generate sem erros, TypeScript strict sem any.
+      outputs:
+        - build_9_1_result
+      next: build_9_2
+
+    - step: build_story_9_2
+      id: build_9_2
+      phase: 5
+      agent: dev
+      action: Implementar Story 9.2 — Auto-Provisionamento Stripe
+      requires: build_9_1
+      notes: |
+        @dev — Execute *build 9.2
+
+        Implemente Story 9.2 (Auto-Provisionamento de Produtos Stripe via Admin)
+        seguindo docs/stories/9.2.story.md e docs/stories/9.2.implementation.yaml.
+
+        Foco: criar Products e Prices no Stripe via API automaticamente quando admin edita planos.
+        Prices são IMUTÁVEIS no Stripe — alteração de preço = novo Price + arquivar anterior.
+
+        Arquivos principais:
+        - apps/web/app/api/admin/subscriptions/route.ts (CRUD)
+        - apps/web/app/(dashboard)/admin/subscriptions/page.tsx (UI)
+        - packages/db (funções utilitárias de subscription)
+        - lib/stripe.ts (funções de auto-provisionamento)
+      outputs:
+        - build_9_2_result
+      next: build_9_3
+
+    - step: build_story_9_3
+      id: build_9_3
+      phase: 5
+      agent: dev
+      action: Implementar Story 9.3 — Checkout Assinatura + Webhooks + REFATORAÇÃO
+      requires: build_9_2
+      notes: |
+        @dev — Execute *build 9.3
+
+        Implemente Story 9.3 (Checkout de Assinatura e Webhook de Renovação)
+        seguindo docs/stories/9.3.story.md e docs/stories/9.3.implementation.yaml.
+
+        ATENÇÃO — REFATORAÇÃO DE CÓDIGO EXISTENTE (CRÍTICO):
+        1. Arquivo apps/web/app/api/payments/checkout/route.ts (Epic 3, Story 3.3) DEVE ser atualizado:
+           - ANTES de criar Checkout Session, verificar se user tem stripe_customer_id
+           - Se não tem, criar Stripe Customer via stripe.customers.create
+           - Salvar stripe_customer_id no user
+           - Adicionar payment_intent_data.setup_future_usage: 'off_session' em TODA sessão
+           - Passar customer: stripeCustomerId na sessão
+        2. Impacta TANTO pacotes avulsos QUANTO assinaturas
+
+        Novos webhooks em apps/web/app/api/webhooks/stripe/route.ts:
+        - invoice.payment_succeeded (renovação — credita via addCredits type: 'subscription_renewal')
+        - invoice.payment_failed (marca PAST_DUE)
+        - customer.subscription.updated (atualiza status)
+        - customer.subscription.deleted (marca CANCELED)
+
+        TESTAR: compra avulsa de pacotes (Epic 3) continua funcionando após refatoração.
+      outputs:
+        - build_9_3_result
+      next: build_9_4
+
+    - step: build_story_9_4
+      id: build_9_4
+      phase: 5
+      agent: dev
+      action: Implementar Story 9.4 — Gerenciamento de Assinatura pelo Aluno
+      requires: build_9_3
+      notes: |
+        @dev — Execute *build 9.4
+
+        Implemente Story 9.4 (Gerenciamento de Assinatura pelo Aluno)
+        seguindo docs/stories/9.4.story.md e docs/stories/9.4.implementation.yaml.
+
+        Arquivos principais:
+        - apps/web/app/(dashboard)/conta/page.tsx ou dashboard/page.tsx
+        - apps/web/app/api/subscription/cancel/route.ts
+        - apps/web/app/api/subscription/reactivate/route.ts
+        - apps/web/app/api/subscription/change-plan/route.ts
+
+        Cancelamento = cancel_at_period_end: true (não imediato). Stripe API para todas as operações.
+      outputs:
+        - build_9_4_result
+      next: qa_epic_9
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # PHASE 6 — EPIC 9 QA
+    # ═══════════════════════════════════════════════════════════════════════════
+    - step: qa_epic_9
+      id: qa_e9
+      phase: 6
+      agent: qa
+      action: QA completo do Epic 9 com foco em regressão do Checkout
+      requires: build_9_4
+      notes: |
+        @qa — Execute *review para o Epic 9 completo (Stories 9.1–9.4).
+
+        Verifique:
+        1. Schema: migrations rodam sem erros, não quebram dados existentes,
+           enum TransactionType tem TODOS os valores (purchase, consumption, adjustment, subscription_renewal)
+        2. Stripe auto-provisionamento: criar plano → Product+Price criados →
+           alterar preço → novo Price, anterior arquivado
+        3. Checkout assinatura: aluno assina → Customer criado → créditos creditados → renovação funciona
+        4. REGRESSÃO CRÍTICA: compra avulsa de pacotes (Epic 3) continua funcionando
+        5. Gerenciamento: cancelar → reativar → upgrade/downgrade
+        6. Webhook idempotência: duplo disparo não duplica créditos
+        7. Campo modules_used em credit_transactions NÃO alterado
+        8. Referências de IA mencionam Claude (nunca OpenAI)
+        9. TypeScript strict, lint clean
+
+        Gere qa_report.md com gate decision (GO/NO-GO).
+
+        Se NO-GO: listar issues para @dev corrigir.
+      outputs:
+        - qa_report_e9
+        - qa_verdict_e9
+      next: qa_e9_fix
+      on_failure: qa_e9_fix
+
+    - step: qa_epic_9_fix
+      id: qa_e9_fix
+      phase: 6
+      agent: dev
+      action: Corrigir issues do QA Epic 9 (se houver)
+      requires: qa_e9
+      notes: |
+        @dev — Se o QA reportou issues (verdict = NO-GO), execute *fix-qa-issues
+        para corrigir todos os blockers e majors do qa_report.md.
+
+        Se QA verdict = GO → pular esta fase automaticamente.
+
+        Após correções, rodar: pnpm typecheck && pnpm lint
+      outputs:
+        - fixes_e9
+      next: build_10_1
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # PHASE 7 — EPIC 10 PARTIAL (Schema + One-Click)
+    # ═══════════════════════════════════════════════════════════════════════════
+    - step: build_story_10_1
+      id: build_10_1
+      phase: 7
+      agent: dev
+      action: Implementar Story 10.1 — Database Schema Campanhas + One-Click
+      requires: qa_e9_fix
+      notes: |
+        @dev — Execute *build 10.1
+
+        Implemente Story 10.1 (Database Schema: Campanhas e One-Click Payment)
+        seguindo docs/stories/10.1.story.md e docs/stories/10.1.implementation.yaml.
+
+        Enum TransactionType — ADICIONAR 'promo_purchase'.
+        Valores existentes: purchase, consumption, adjustment, subscription_renewal.
+      outputs:
+        - build_10_1_result
+      next: build_10_2
+
+    - step: build_story_10_2
+      id: build_10_2
+      phase: 7
+      agent: dev
+      action: Implementar Story 10.2 — One-Click Payment Engine
+      requires: build_10_1
+      notes: |
+        @dev — Execute *build 10.2
+
+        Implemente Story 10.2 (One-Click Payment Engine)
+        seguindo docs/stories/10.2.story.md e docs/stories/10.2.implementation.yaml.
+
+        Dependência: Epic 9 completo (stripe_customer_id e payment_method salvo funcionando).
+
+        POST /api/payments/one-click:
+        - stripe.paymentIntents.create com confirm: true, payment_method, off_session: true
+        - Se falhar → fallback para checkout normal
+        - Frontend: "Comprar com 1 clique" quando tem payment method, "Comprar" quando não
+        - addCredits() com type 'purchase' (avulso) ou 'promo_purchase' (via campanha)
+      outputs:
+        - build_10_2_result
+      next: build_11_1
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # PHASE 8 — EPIC 11 IMPLEMENTATION (Referral completo)
+    # ═══════════════════════════════════════════════════════════════════════════
+    - step: build_story_11_1
+      id: build_11_1
+      phase: 8
+      agent: dev
+      action: Implementar Story 11.1 — Database Schema Referral
+      requires: build_10_2
+      notes: |
+        @dev — Execute *build 11.1
+
+        Implemente Story 11.1 (Database Schema: Referral Program)
+        seguindo docs/stories/11.1.story.md e docs/stories/11.1.implementation.yaml.
+
+        Enum TransactionType — ADICIONAR 'referral'.
+        Valores existentes: purchase, consumption, adjustment, subscription_renewal, promo_purchase.
+      outputs:
+        - build_11_1_result
+      next: build_11_2
+
+    - step: build_story_11_2
+      id: build_11_2
+      phase: 8
+      agent: dev
+      action: Implementar Story 11.2 — Fluxo de Cadastro com Referral
+      requires: build_11_1
+      notes: |
+        @dev — Execute *build 11.2
+
+        Implemente Story 11.2 (Fluxo de Cadastro com Referral)
+        seguindo docs/stories/11.2.story.md e docs/stories/11.2.implementation.yaml.
+
+        MODIFICA o cadastro existente (Story 1.3):
+        - URL sol.app/?ref=CODIGO → /register?ref=CODIGO
+        - Cookie httpOnly 30 dias para persistir código
+        - Validação: código existe, programa ativo, limite não atingido
+        - referral_code gerado para TODOS os novos usuários (8 chars uppercase)
+        - Auto-indicação proibida silenciosamente
+        - Cadastro sem referral continua funcionando normalmente
+      outputs:
+        - build_11_2_result
+      next: build_11_3
+
+    - step: build_story_11_3
+      id: build_11_3
+      phase: 8
+      agent: dev
+      action: Implementar Story 11.3 — Atribuição de Bônus na Primeira Compra
+      requires: build_11_2
+      notes: |
+        @dev — Execute *build 11.3
+
+        Implemente Story 11.3 (Atribuição de Bônus na Primeira Compra)
+        seguindo docs/stories/11.3.story.md e docs/stories/11.3.implementation.yaml.
+
+        - Bônus na PRIMEIRA COMPRA do indicado (não no cadastro)
+        - addCredits() com type: 'referral' para ambos (indicador + indicado)
+        - Bônus apenas 1 vez — segunda compra não re-ativa
+        - Se programa desativado entre cadastro e compra → reward EXPIRED
+        - Rewards pendentes usam valores ATUAIS do admin
+      outputs:
+        - build_11_3_result
+      next: build_11_4
+
+    - step: build_story_11_4
+      id: build_11_4
+      phase: 8
+      agent: dev
+      action: Implementar Story 11.4 — Interface do Aluno (Compartilhar + Acompanhar)
+      requires: build_11_3
+      notes: |
+        @dev — Execute *build 11.4
+
+        Implemente Story 11.4 (Interface do Aluno: Compartilhar e Acompanhar Indicações)
+        seguindo docs/stories/11.4.story.md e docs/stories/11.4.implementation.yaml.
+
+        Seção "Indique e Ganhe" no dashboard/conta:
+        - Código + link compartilhável + botão copiar
+        - Web Share API (mobile) + fallback copiar (desktop)
+        - Contador de indicações + créditos ganhos
+        - Lista de indicações com email mascarado e status
+        - Visível apenas se REFERRAL_ENABLED = true
+      outputs:
+        - build_11_4_result
+      next: build_11_5
+
+    - step: build_story_11_5
+      id: build_11_5
+      phase: 8
+      agent: dev
+      action: Implementar Story 11.5 — Painel Admin Referral
+      requires: build_11_4
+      notes: |
+        @dev — Execute *build 11.5
+
+        Implemente Story 11.5 (Painel Admin: Controle do Programa de Referral)
+        seguindo docs/stories/11.5.story.md e docs/stories/11.5.implementation.yaml.
+
+        /admin/referral com:
+        - Toggle on/off (REFERRAL_ENABLED)
+        - Campos editáveis: créditos indicador/indicado, limite por usuário
+        - Métricas: total indicações, créditos distribuídos, top indicadores, taxa conversão
+        - Lista de indicações com filtro por status
+        - Rotas /api/admin/referral/* verificam role: ADMIN server-side
+      outputs:
+        - build_11_5_result
+      next: build_10_3
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # PHASE 9 — EPIC 10 COMPLETION (Campanhas + Popups)
+    # ═══════════════════════════════════════════════════════════════════════════
+    - step: build_story_10_3
+      id: build_10_3
+      phase: 9
+      agent: dev
+      action: Implementar Story 10.3 — Painel Admin Campanhas
+      requires: build_11_5
+      notes: |
+        @dev — Execute *build 10.3
+
+        Implemente Story 10.3 (Painel Admin: Criação e Gerenciamento de Campanhas)
+        seguindo docs/stories/10.3.story.md e docs/stories/10.3.implementation.yaml.
+
+        /admin/promos com filtros tipo planilha Excel:
+        - Créditos restantes (range min/max)
+        - Última atividade (dias sem uso min)
+        - Total mensagens enviadas (range min/max)
+        - Filtros combináveis com AND
+        - Preview: contagem de usuários impactados
+        - CRUD campanhas com transições de status (DRAFT→ACTIVE→PAUSED→ENDED)
+        - Métricas por campanha: entregas, views, cliques, conversões, receita, taxa
+      outputs:
+        - build_10_3_result
+      next: build_10_4
+
+    - step: build_story_10_4
+      id: build_10_4
+      phase: 9
+      agent: dev
+      action: Implementar Story 10.4 — Engine de Popups e Upsell Automático
+      requires: build_10_3
+      notes: |
+        @dev — Execute *build 10.4
+
+        Implemente Story 10.4 (Engine de Entrega de Popups e Upsell Automático)
+        seguindo docs/stories/10.4.story.md e docs/stories/10.4.implementation.yaml.
+
+        GET /api/promos/active: campanha aplicável ao user (filtros, exclui já vistas, max 1/sessão)
+        POST /api/promos/track: viewed/clicked/converted/dismissed
+        Popup 1x por campanha por user (unique constraint)
+        Popup NUNCA durante streaming de chat ou geração de roteiro
+        Upsell automático: banner inline quando credits <= UPSELL_LOW_CREDITS_THRESHOLD
+      outputs:
+        - build_10_4_result
+      next: qa_final
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # PHASE 10 — FINAL QA (Epics 10 + 11)
+    # ═══════════════════════════════════════════════════════════════════════════
+    - step: qa_final
+      id: qa_final
+      phase: 10
+      agent: qa
+      action: QA final dos Epics 10 e 11 com regressão completa
+      requires: build_10_4
+      notes: |
+        @qa — Execute *review para os Epics 10 e 11 completos.
+
+        Verifique:
+        1. One-click: compra 1 clique funciona, fallback se sem payment method
+        2. Campanhas: admin cria com filtros → users corretos recebem popup → tracking → conversão
+        3. Referral: cadastro com código → 1ª compra → ambos creditados → on/off → auto-indicação bloqueada
+        4. Enum TransactionType completo (6 valores): purchase, consumption, adjustment,
+           subscription_renewal, promo_purchase, referral
+        5. REGRESSÕES — TESTAR TUDO:
+           - Chat com streaming SSE (Claude API)
+           - Sistema de créditos (gate + dedução)
+           - Pacotes avulsos (checkout + webhook)
+           - Assinaturas (Epic 9)
+           - Webhooks Stripe (todos os eventos)
+           - Cadastro sem referral funciona igual
+           - Login/sessão/JWT
+        6. Campo modules_used em credit_transactions NÃO alterado
+        7. Segurança: rotas /api/admin/* verificam role: ADMIN server-side
+        8. TypeScript strict, lint clean
+
+        Gere qa_report.md com gate decision final.
+
+        Se NO-GO: listar issues para @dev corrigir.
+      outputs:
+        - qa_report_final
+        - qa_verdict_final
+      next: qa_final_fix
+      on_failure: qa_final_fix
+
+    - step: qa_final_fix
+      id: qa_final_fix
+      phase: 10
+      agent: dev
+      action: Corrigir issues do QA final (se houver)
+      requires: qa_final
+      notes: |
+        @dev — Se o QA final reportou issues (verdict = NO-GO), execute *fix-qa-issues
+        para corrigir todos os blockers e majors.
+
+        Se QA verdict = GO → pular esta fase automaticamente.
+
+        Após correções: pnpm typecheck && pnpm lint
+      outputs:
+        - fixes_final
+      next: push
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # PHASE 11 — PUSH & CLOSE
+    # ═══════════════════════════════════════════════════════════════════════════
+    - step: devops_push
+      id: push
+      phase: 11
+      agent: devops
+      action: Quality gates + push + PR
+      requires: qa_final_fix
+      notes: |
+        @devops — Execute *pre-push para validar quality gates, depois *push.
+
+        CI pipeline deve passar: lint → typecheck → test → build.
+        Se verde, crie PR para main com título:
+        "feat: Epics 9, 10, 11 — Assinaturas, Promoções & Upsell, Referral"
+
+        Descrição do PR:
+        - 13 stories implementadas (9.1–9.4, 10.1–10.4, 11.1–11.5)
+        - 6 novas tabelas criadas
+        - 3 novos valores no enum TransactionType
+        - Refatoração do Checkout existente (Stripe Customer + setup_future_usage)
+        - Zero conflito com Epics 6, 7, 8 do PRD v10.0
+      outputs:
+        - push_result
+        - pr_url
+      next: close
+
+    - step: po_close
+      id: close
+      phase: 11
+      agent: po
+      action: Fechar todas as 13 stories e atualizar backlog
+      requires: push
+      notes: |
+        @po — Execute *close-story para todas as stories em sequência:
+
+        9.1, 9.2, 9.3, 9.4, 10.1, 10.2, 10.3, 10.4, 11.1, 11.2, 11.3, 11.4, 11.5
+
+        Atualize o backlog e sugira próximos passos.
+        Considere que Epics 6 (Quiz), 7 (Video) e 8 (Feedback Loop) do PRD v10.0
+        ainda não foram implementados e podem ser os próximos.
+
+        Após fechar, execute *update-source-tree para sincronizar documentação.
+      outputs:
+        - stories_closed
+        - backlog_updated
+      next: complete
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # WORKFLOW END
+  # ═══════════════════════════════════════════════════════════════════════════
+  workflow_end:
+    id: complete
+    action: full_implementation_complete
+    notes: |
+      Implementação completa dos Epics 9, 10 e 11!
+
+      Resumo:
+      ✅ Architecture atualizada (fase 1)
+      ✅ 13 stories criadas e validadas (fases 2-3)
+      ✅ 13 implementation.yaml gerados (fase 4)
+      ✅ Epic 9 implementado e QA aprovado — Assinaturas Recorrentes (fases 5-6)
+      ✅ Epic 10 implementado e QA aprovado — Promoções & Upsell One-Click (fases 7, 9-10)
+      ✅ Epic 11 implementado e QA aprovado — Programa de Indicação (fase 8, 10)
+      ✅ PR criado e stories fechadas (fase 11)
+
+      Impacto no faturamento:
+      - MRR via assinaturas mensais
+      - Ticket médio elevado via one-click upsell
+      - Reativação via campanhas segmentadas
+      - Aquisição orgânica via referral
+
+      Próximos passos sugeridos:
+      - Implementar Epics 6-8 do PRD v10.0 (Quiz, Video, Feedback Loop)
+      - Ativar planos de assinatura no admin (toggle SUBSCRIPTIONS_ENABLED)
+      - Criar primeira campanha promocional de lançamento
+      - Ativar programa de referral (toggle REFERRAL_ENABLED)
+
+  flow_diagram: |
+    ```mermaid
+    graph TD
+        A[Start] --> B["@architect: Atualizar Arquitetura"]
+        B --> C["@sm: Stories Epic 9 (4)"]
+        C --> D["@sm: Stories Epic 10 (4)"]
+        D --> E["@sm: Stories Epic 11 (5)"]
+        E --> F["@po: Validar 13 Stories"]
+        F --> G["@architect: 13 Implementation Plans"]
+
+        G --> H["@dev: Build 9.1 (Schema)"]
+        H --> I["@dev: Build 9.2 (Stripe Auto)"]
+        I --> J["@dev: Build 9.3 (Checkout + REFATORAÇÃO)"]
+        J --> K["@dev: Build 9.4 (Gerenciamento)"]
+        K --> L["@qa: QA Epic 9 + Regressão"]
+
+        L --> M{QA OK?}
+        M -->|Não| N["@dev: Fix Issues"]
+        N --> O["@dev: Build 10.1 (Schema)"]
+        M -->|Sim| O
+
+        O --> P["@dev: Build 10.2 (One-Click)"]
+        P --> Q["@dev: Build 11.1-11.5 (Referral)"]
+        Q --> R["@dev: Build 10.3 (Campanhas)"]
+        R --> S["@dev: Build 10.4 (Popups)"]
+
+        S --> T["@qa: QA Final + Regressão Total"]
+        T --> U{QA OK?}
+        U -->|Não| V["@dev: Fix Issues"]
+        V --> W["@devops: Push + PR"]
+        U -->|Sim| W
+
+        W --> X["@po: Fechar 13 Stories"]
+        X --> Y[Done!]
+
+        style Y fill:#90EE90
+        style J fill:#FFD700
+        style L fill:#DDA0DD
+        style T fill:#DDA0DD
+    ```
+
+  decision_guidance:
+    when_to_use:
+      - Quando os Epics 1-3 estão completos e funcionando
+      - Quando quer implementar monetização avançada (assinaturas, upsell, referral)
+      - Quando a prioridade é faturamento sobre features de produto
+
+    when_not_to_use:
+      - Se Epics 1-3 ainda não estão completos
+      - Se a prioridade é lançar o quiz (Epic 6) antes de monetização avançada
+      - Se quer implementar Epic 8 (Feedback Loop) primeiro
+
+  handoff_prompts:
+    phase_1_complete: |
+      Arquitetura atualizada com Epics 9, 10 e 11.
+      Prosseguindo para criação de stories com @sm...
+
+    phase_2_complete: |
+      13 stories criadas (9.1-9.4, 10.1-10.4, 11.1-11.5).
+      Prosseguindo para validação com @po...
+
+    phase_5_complete: |
+      Epic 9 (Assinaturas) implementado! 4 stories concluídas.
+      Checkout existente refatorado com Stripe Customer.
+      Prosseguindo para QA com @qa...
+
+    phase_10_complete: |
+      QA final aprovado! Todos os 3 Epics implementados e testados.
+      Prosseguindo para push com @devops...
+
+    workflow_complete: |
+      Workflow completo! 13 stories implementadas, testadas e fechadas.
+      Epics 9, 10 e 11 prontos para ativação no admin.
+
+metadata:
+  author: Consultor
+  created_date: 2026-03-05
+  version: 1.0.0
+  tags:
+    - subscriptions
+    - upsell
+    - one-click
+    - referral
+    - promo-campaigns
+    - stripe
+    - monetization
+    - sol
+    - epic-9
+    - epic-10
+    - epic-11

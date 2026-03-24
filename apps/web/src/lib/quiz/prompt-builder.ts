@@ -3,6 +3,15 @@
 
 import { getQuestionByKey } from './questions'
 
+export interface ReferenceContext {
+  format: string | null
+  adCopy: string | null
+  engagement: Record<string, number> | null
+  platform: string
+  advertiserName: string | null
+  searchQuery: string
+}
+
 export interface PromptContext {
   onboarding: Record<string, string> // O1-O9
   answers: Record<string, string>    // Q1-Q7, 1A.x/1B.x, 2A.x/2B.x
@@ -12,6 +21,9 @@ export interface PromptContext {
     transcription: string
     fullDescription: string
   }
+  expertProfile?: Record<string, unknown> | null
+  personalContext?: string | null
+  reference?: ReferenceContext | null
 }
 
 interface BuiltPrompt {
@@ -155,6 +167,34 @@ export function buildQuizPrompt(context: PromptContext): BuiltPrompt {
     if (answers['2B.11']) {
       sections.push(formatAnswer('2B.11', 'O que NÃO quer no vídeo', answers))
     }
+  }
+
+  // Reference context (Epic 12 — Ad Intelligence)
+  if (context.reference) {
+    sections.push('')
+    sections.push('## REFERÊNCIA CRIATIVA SELECIONADA')
+    if (context.reference.format) {
+      sections.push(`**Formato classificado:** ${context.reference.format}`)
+    }
+    if (context.reference.adCopy) {
+      sections.push(`**Texto do anúncio/post:** ${context.reference.adCopy}`)
+    }
+    sections.push(`**Plataforma:** ${context.reference.platform}`)
+    if (context.reference.advertiserName) {
+      sections.push(`**Anunciante/Criador:** ${context.reference.advertiserName}`)
+    }
+    if (context.reference.engagement) {
+      const metrics = Object.entries(context.reference.engagement)
+        .filter(([, v]) => v > 0)
+        .map(([k, v]) => `${k}: ${v.toLocaleString('pt-BR')}`)
+        .join(', ')
+      if (metrics) {
+        sections.push(`**Métricas de engajamento:** ${metrics}`)
+      }
+    }
+    sections.push(`**Termo de busca:** ${context.reference.searchQuery}`)
+    sections.push('')
+    sections.push('Use esta referência como inspiração para o roteiro: adapte o formato, gancho e estrutura para o contexto do aluno.')
   }
 
   sections.push('')

@@ -5,6 +5,19 @@ import Link from 'next/link'
 
 const PAGE_SIZE = 20
 
+const CLASSIFICATION_BADGE: Record<string, { label: string; class: string }> = {
+  EXCELLENT: { label: 'Excelente', class: 'bg-green-500/15 text-green-400' },
+  GOOD: { label: 'Bom', class: 'bg-emerald-500/15 text-emerald-400' },
+  AVERAGE: { label: 'Mediano', class: 'bg-yellow-500/15 text-yellow-400' },
+  BAD: { label: 'Ruim', class: 'bg-orange-500/15 text-orange-400' },
+  TERRIBLE: { label: 'Péssimo', class: 'bg-red-500/15 text-red-400' },
+}
+
+const STATUS_BADGE: Record<string, { label: string; class: string }> = {
+  PRODUCED: { label: 'Produzido', class: 'bg-blue-500/15 text-blue-400' },
+  PUBLISHED: { label: 'Publicado', class: 'bg-purple-500/15 text-purple-400' },
+}
+
 const PATH_LABELS: Record<string, string> = {
   AD: 'Anúncio',
   ORGANIC: 'Orgânico',
@@ -59,6 +72,12 @@ export default async function RoteirosPage({ searchParams }: RoteirosPageProps) 
             path1: true,
             path2: true,
             status: true,
+          },
+        },
+        scriptPerformance: {
+          select: {
+            status: true,
+            classification: true,
           },
         },
       },
@@ -161,6 +180,19 @@ export default async function RoteirosPage({ searchParams }: RoteirosPageProps) 
                     )}
                   </div>
                 </div>
+
+                {/* Performance badge */}
+                {conv.scriptPerformance && (() => {
+                  const perf = conv.scriptPerformance
+                  const badge = perf.classification
+                    ? CLASSIFICATION_BADGE[perf.classification]
+                    : STATUS_BADGE[perf.status]
+                  return badge ? (
+                    <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium ${badge.class}`}>
+                      {badge.label}
+                    </span>
+                  ) : null
+                })()}
 
                 <span className="text-xs text-muted-foreground">→</span>
               </Link>

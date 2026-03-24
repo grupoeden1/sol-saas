@@ -1,0 +1,106 @@
+story: "11.1"
+title: "Database Schema - Referral Program"
+status: pending
+depends_on: []
+
+phases:
+  - name: Setup
+    subtasks:
+      - id: setup_1
+        description: "Create ReferralRewardStatus enum (PENDING, CREDITED, EXPIRED) in Prisma schema"
+        files:
+          - packages/db/prisma/schema.prisma
+        status: pending
+
+      - id: setup_2
+        description: "Add 'referral' value to existing TransactionType enum"
+        files:
+          - packages/db/prisma/schema.prisma
+        status: pending
+
+  - name: Implementation
+    subtasks:
+      - id: impl_1
+        description: "Add referralCode (String, @unique) and referredBy (String?, FK -> User) fields to User model. Add self-relations: referrer (User? via referredBy), referrals (User[] referred by this user). Add referralRewardsGiven and referralRewardsReceived relations."
+        files:
+          - packages/db/prisma/schema.prisma
+        verification: "User model has referralCode (unique), referredBy (nullable FK), referrer relation, referrals relation, referralRewardsGiven, referralRewardsReceived"
+        depends_on: [setup_1, setup_2]
+        status: pending
+
+      - id: impl_2
+        description: "Create ReferralReward model with fields: id (String @id @default(cuid())), referrerId (String, FK -> User), referredId (String, FK -> User), triggerTransactionId (String?, FK -> CreditTransaction), referrerCredits (Int), referredCredits (Int), status (ReferralRewardStatus), createdAt, updatedAt. Add relations: referrer (User), referred (User), triggerTransaction (CreditTransaction?). Add @@unique([referrerId, referredId]) constraint. Add @@index([status]) for filtering queries. Use @@map('referral_rewards') for table name."
+        files:
+          - packages/db/prisma/schema.prisma
+        verification: "ReferralReward model exists with all fields, unique constraint on [referrerId, referredId], index on status, and all relations properly defined"
+        depends_on: [impl_1]
+        status: pending
+
+      - id: impl_3
+        description: "Create generateReferralCode() utility function that generates 8-character uppercase alphanumeric codes (A-Z0-9). Implement with retry logic for uniqueness collision — query DB to check if code exists, regenerate if collision. Export from packages/db for reuse in Story 11.2."
+        files:
+          - packages/db/src/referral.ts
+        verification: "Function generates 8-char uppercase alphanumeric strings, retries on collision, and is exported from @sol/db"
+        depends_on: [impl_1]
+        status: pending
+
+      - id: impl_4
+        description: "Update @sol/db package exports to include generateReferralCode and new Prisma types (ReferralReward, ReferralRewardStatus). Ensure AddCreditOptions type in credits.ts supports type: 'referral' with a description field."
+        files:
+          - packages/db/src/credits.ts
+          - packages/db/src/referral.ts
+        verification: "import { generateReferralCode } from '@sol/db' works; AddCreditOptions accepts type 'referral'"
+        depends_on: [impl_3]
+        status: pending
+
+      - id: impl_5
+        description: "Update seed.ts to upsert 4 PricingConfig keys for referral program: REFERRAL_ENABLED (value: 0, representing false), REFERRAL_REFERRER_CREDITS (value: 100), REFERRAL_REFERRED_CREDITS (value: 50), REFERRAL_MAX_PER_USER (value: 20). Use upsert pattern consistent with existing PricingConfig seeds. Note: PricingConfig.value is Int, so REFERRAL_ENABLED uses 0=false, 1=true."
+        files:
+          - packages/db/prisma/seed.ts
+        verification: "Running seed creates all 4 referral PricingConfig entries; existing seeds still work"
+        depends_on: [setup_1]
+        status: pending
+
+  - name: Integration
+    subtasks:
+      - id: int_1
+        description: "Run prisma migrate dev --name add_referral_program to generate and apply the migration. Verify migration SQL creates referral_rewards table, adds referralCode and referredBy columns to User, adds referral to TransactionType enum, and creates all indexes/constraints."
+        files:
+          - packages/db/prisma/migrations/
+        verification: "Migration applies cleanly on empty DB and on DB with existing data (retrocompatibility). referralCode column must be nullable initially or have a default migration strategy for existing users."
+        depends_on: [impl_1, impl_2]
+        status: pending
+
+      - id: int_2
+        description: "Handle existing users who lack referralCode: the migration should add referralCode as nullable first, then run a data migration to generate codes for existing users, then add the unique constraint. Alternatively, use a two-step migration approach. Ensure no existing user is left without a referralCode after migration."
+        files:
+          - packages/db/prisma/migrations/
+        verification: "All existing users have a unique referralCode after migration. New users will get codes assigned at registration (Story 11.2)."
+        depends_on: [int_1, impl_3]
+        status: pending
+
+      - id: int_3
+        description: "Run prisma generate and verify TypeScript types are correctly generated. Confirm ReferralReward, ReferralRewardStatus, and updated TransactionType types are accessible in the codebase."
+        files:
+          - packages/db/prisma/schema.prisma
+        verification: "TypeScript compilation succeeds; ReferralReward type is importable from @prisma/client"
+        depends_on: [int_1]
+        status: pending
+
+  - name: Testing
+    subtasks:
+      - id: test_1
+        description: "Write unit tests for generateReferralCode(): (a) output is exactly 8 characters, (b) output contains only A-Z and 0-9, (c) multiple calls produce different codes, (d) retry logic handles collision scenario (mock DB query to simulate existing code)."
+        files:
+          - packages/db/src/__tests__/referral.test.ts
+        verification: "All tests pass; code format is validated; collision retry works correctly"
+        depends_on: [impl_3]
+        status: pending
+
+      - id: test_2
+        description: "Write integration test verifying: (a) ReferralReward can be created with all required fields, (b) unique constraint on [referrerId, referredId] prevents duplicates, (c) User.referralCode unique constraint works, (d) relations (referrer, referred, triggerTransaction) resolve correctly, (e) seed script runs without errors."
+        files:
+          - packages/db/src/__tests__/referral-schema.test.ts
+        verification: "All schema constraints and relations work as expected; seed runs cleanly"
+        depends_on: [int_1, int_3, impl_5]
+        status: pending

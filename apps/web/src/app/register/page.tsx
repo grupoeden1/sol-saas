@@ -1,17 +1,45 @@
 'use client';
 
-import { useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useState, useEffect, Suspense } from 'react';
+import { signIn } from 'next-auth/react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import Logo from '@/components/Logo';
 
 export default function RegisterPage() {
+  return (
+    <Suspense>
+      <RegisterPageContent />
+    </Suspense>
+  );
+}
+
+function RegisterPageContent() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [refCode, setRefCode] = useState<string | null>(null);
+
+  // Capture referral code from URL and set cookie
+  useEffect(() => {
+    const ref = searchParams.get('ref');
+    if (ref && /^[A-Z0-9]{8}$/i.test(ref)) {
+      const code = ref.toUpperCase();
+      setRefCode(code);
+      // Set referral cookie via API
+      fetch('/api/referral/set-cookie', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code }),
+      }).catch(() => {
+        // Silently ignore cookie-setting errors
+      });
+    }
+  }, [searchParams]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -38,7 +66,7 @@ export default function RegisterPage() {
       const res = await fetch('/api/auth/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({ email, password, ...(refCode ? { ref: refCode } : {}) }),
       });
 
       const data = await res.json();
@@ -48,7 +76,19 @@ export default function RegisterPage() {
         return;
       }
 
-      router.push('/login?registered=true');
+      // Auto-login after successful registration
+      const result = await signIn('credentials', {
+        email,
+        password,
+        redirect: false,
+      });
+
+      if (result?.ok) {
+        router.push('/dashboard');
+      } else {
+        // Fallback: redirect to login if auto-login fails
+        router.push('/login?registered=true');
+      }
     } catch {
       setError('Erro ao conectar com o servidor');
     } finally {

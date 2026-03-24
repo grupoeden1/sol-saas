@@ -118,13 +118,20 @@ function LoginForm() {
           </button>
         </form>
 
-        {/* Register Link */}
-        <p className="mt-6 text-center text-sm text-foreground-muted">
-          Não tem conta?{' '}
-          <Link href="/register" className="font-medium text-solar-400 transition-all hover:text-solar-300">
-            Cadastre-se
-          </Link>
-        </p>
+        {/* Forgot Password + Register Links */}
+        <div className="mt-6 space-y-3 text-center text-sm text-foreground-muted">
+          <p>
+            <Link href="/forgot-password" className="font-medium text-solar-400/70 transition-all hover:text-solar-300">
+              Esqueci minha senha
+            </Link>
+          </p>
+          <p>
+            Não tem conta?{' '}
+            <Link href={searchParams.get('ref') ? `/register?ref=${encodeURIComponent(searchParams.get('ref')!)}` : '/register'} className="font-medium text-solar-400 transition-all hover:text-solar-300">
+              Cadastre-se
+            </Link>
+          </p>
+        </div>
       </div>
     </div>
   );

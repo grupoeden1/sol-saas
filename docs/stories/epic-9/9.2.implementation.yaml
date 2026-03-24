@@ -1,0 +1,176 @@
+story: "9.2"
+title: "Auto-Provisionamento de Produtos Stripe via Admin"
+status: pending
+depends_on: ["9.1"]
+
+phases:
+  - name: Setup
+    subtasks:
+      - id: setup_1
+        description: "Create the subscription plan service file with Stripe provisioning logic. Export functions: provisionStripeProduct (creates Stripe Product + Price, saves IDs to plan and StripeProductRecord), updateStripePrice (creates new Price, archives old Price in Stripe and StripeProductRecord), listPlans, createPlan, updatePlan, togglePlanActive"
+        files:
+          - packages/db/src/subscription-plans.ts
+        status: pending
+
+      - id: setup_2
+        description: "Export the new subscription-plans module from the @sol/db barrel file"
+        files:
+          - packages/db/src/index.ts
+        status: pending
+
+  - name: Implementation
+    subtasks:
+      - id: impl_1
+        description: "Implement provisionStripeProduct function: calls stripe.products.create({ name, metadata: { planId } }), then stripe.prices.create({ product: productId, unit_amount: priceInCents, currency: 'brl', recurring: { interval: 'month' } }). Returns { stripeProductId, stripePriceId }. On Stripe failure, throws with descriptive error (no DB cleanup needed since DB not yet written)"
+        files:
+          - packages/db/src/subscription-plans.ts
+        verification: "Function calls Stripe APIs in correct order and returns product/price IDs"
+        depends_on: [setup_1]
+        status: pending
+
+      - id: impl_2
+        description: "Implement updateStripePrice function: creates new stripe.prices.create with same product but new amount, then archives old Price via stripe.prices.update(oldPriceId, { active: false }). Creates new StripeProductRecord (ACTIVE) and marks previous as ARCHIVED in a transaction. Updates plan.stripePriceId to new price ID"
+        files:
+          - packages/db/src/subscription-plans.ts
+        verification: "Old price archived in both Stripe and DB, new price active in both"
+        depends_on: [setup_1]
+        status: pending
+
+      - id: impl_3
+        description: "Implement createPlan function: validates input (name min 3 chars, credits > 0, priceInCents > 0). Calls provisionStripeProduct first. If Stripe succeeds, creates SubscriptionPlan in DB with stripeProductId/stripePriceId and creates StripeProductRecord (status: ACTIVE) in a transaction. If DB fails, attempts Stripe cleanup (archive product/price)"
+        files:
+          - packages/db/src/subscription-plans.ts
+        verification: "Plan created in DB with valid Stripe IDs, StripeProductRecord created with ACTIVE status"
+        depends_on: [impl_1]
+        status: pending
+
+      - id: impl_4
+        description: "Implement updatePlan function: validates input. If priceInCents changed, calls updateStripePrice. Updates plan name, creditsMonthly, sortOrder in DB. If name changed, also updates stripe.products.update(productId, { name })"
+        files:
+          - packages/db/src/subscription-plans.ts
+        verification: "Plan updated in DB; if price changed, new Stripe Price created and old archived"
+        depends_on: [impl_2]
+        status: pending
+
+      - id: impl_5
+        description: "Implement togglePlanActive function: validates that plan has stripeProductId and stripePriceId before activation. Deactivation does NOT cancel existing subscriptions. Updates plan.active in DB"
+        files:
+          - packages/db/src/subscription-plans.ts
+        verification: "Activation rejected if missing Stripe IDs; deactivation leaves existing subscriptions untouched"
+        depends_on: [setup_1]
+        status: pending
+
+      - id: impl_6
+        description: "Implement listPlans function: returns all plans ordered by sortOrder with _count of subscriptions (where status = ACTIVE) and associated stripeProductRecords ordered by createdAt desc"
+        files:
+          - packages/db/src/subscription-plans.ts
+        verification: "Returns plans with subscriber count and price history"
+        depends_on: [setup_1]
+        status: pending
+
+      - id: impl_7
+        description: "Create GET /api/admin/subscriptions route: protected by admin auth check (session.user.role === 'ADMIN'). Calls listPlans and returns paginated results with plan data, Stripe IDs, and active subscriber count"
+        files:
+          - apps/web/src/app/api/admin/subscriptions/route.ts
+        verification: "GET returns 403 for non-admin, 200 with plan list for admin"
+        depends_on: [impl_6]
+        status: pending
+
+      - id: impl_8
+        description: "Create POST /api/admin/subscriptions route: protected by admin auth. Validates body with zod schema (name: string min 3, creditsMonthly: int > 0, priceInCents: int > 0, sortOrder: int optional). Calls createPlan service. Returns 201 with created plan"
+        files:
+          - apps/web/src/app/api/admin/subscriptions/route.ts
+        verification: "POST creates plan + Stripe Product/Price, returns 201. Returns 400 on validation error, 500 on Stripe failure"
+        depends_on: [impl_3]
+        status: pending
+
+      - id: impl_9
+        description: "Create PUT /api/admin/subscriptions route: protected by admin auth. Accepts plan id in body. Validates fields. Calls updatePlan service which handles Stripe Price immutability. Returns updated plan"
+        files:
+          - apps/web/src/app/api/admin/subscriptions/route.ts
+        verification: "PUT updates plan; price change triggers new Stripe Price + archive old. Returns 404 for invalid plan ID"
+        depends_on: [impl_4]
+        status: pending
+
+      - id: impl_10
+        description: "Create PATCH /api/admin/subscriptions route: protected by admin auth. Accepts { id, active } in body. Calls togglePlanActive service. Returns updated plan"
+        files:
+          - apps/web/src/app/api/admin/subscriptions/route.ts
+        verification: "PATCH toggles active status. Returns 400 if trying to activate plan without Stripe IDs"
+        depends_on: [impl_5]
+        status: pending
+
+      - id: impl_11
+        description: "Create admin subscription plans page at /admin/subscriptions. Server component with admin auth guard (redirect non-admin to /roteiros). Renders SubscriptionPlansManager client component"
+        files:
+          - apps/web/src/app/admin/subscriptions/page.tsx
+        verification: "Page renders for admin users, redirects non-admin"
+        depends_on: [impl_7]
+        status: pending
+
+      - id: impl_12
+        description: "Create SubscriptionPlansManager client component with: (1) table listing plans (name, credits, price formatted as R$, active status badge, subscriber count, Stripe sync indicator), (2) create/edit plan modal form with fields name, creditsMonthly, priceInCents (input in R$ converted to centavos), sortOrder, (3) activate/deactivate toggle button per plan, (4) expandable price history section per plan showing StripeProductRecords (price, status, date)"
+        files:
+          - apps/web/src/components/admin/SubscriptionPlansManager.tsx
+        verification: "UI renders plan list, create/edit form works, toggle works, price history visible"
+        depends_on: [impl_7, impl_8, impl_9, impl_10]
+        status: pending
+
+  - name: Integration
+    subtasks:
+      - id: int_1
+        description: "Add navigation link to /admin/subscriptions in the admin page (apps/web/src/app/admin/page.tsx) following the existing pattern for Pricing and other admin links"
+        files:
+          - apps/web/src/app/admin/page.tsx
+        verification: "Admin dashboard shows link to Subscription Plans management page"
+        depends_on: [impl_11]
+        status: pending
+
+      - id: int_2
+        description: "Verify end-to-end flow: create plan via admin UI -> confirm Stripe Product + Price created in Stripe dashboard (test mode) -> edit plan price -> confirm new Price created and old archived -> toggle active on/off"
+        files: []
+        verification: "Full CRUD cycle works with Stripe sync verified in Stripe Dashboard test mode"
+        depends_on: [impl_12]
+        status: pending
+
+  - name: Testing
+    subtasks:
+      - id: test_1
+        description: "Unit tests for provisionStripeProduct: mock Stripe client, verify correct API calls (products.create, prices.create with recurring.interval='month', currency='brl'), verify returned IDs"
+        files:
+          - packages/db/src/__tests__/subscription-plans.test.ts
+        verification: "All Stripe API calls made with correct parameters"
+        depends_on: [impl_1]
+        status: pending
+
+      - id: test_2
+        description: "Unit tests for updateStripePrice: mock Stripe, verify new price created with same product, old price archived (active: false), StripeProductRecord status transitions (ACTIVE -> ARCHIVED for old, new record ACTIVE)"
+        files:
+          - packages/db/src/__tests__/subscription-plans.test.ts
+        verification: "Price immutability logic correct: new price created, old archived in both Stripe and DB"
+        depends_on: [impl_2]
+        status: pending
+
+      - id: test_3
+        description: "Unit tests for createPlan: verify Stripe provisioning called before DB write, verify rollback attempted on DB failure, verify validation rejects invalid inputs (empty name, credits <= 0, price <= 0)"
+        files:
+          - packages/db/src/__tests__/subscription-plans.test.ts
+        verification: "Atomic operation: Stripe first then DB, rollback on failure, validation working"
+        depends_on: [impl_3]
+        status: pending
+
+      - id: test_4
+        description: "Unit tests for togglePlanActive: verify activation rejected when stripeProductId or stripePriceId is null, verify deactivation succeeds regardless of Stripe IDs"
+        files:
+          - packages/db/src/__tests__/subscription-plans.test.ts
+        verification: "Activation guard works, deactivation always succeeds"
+        depends_on: [impl_5]
+        status: pending
+
+      - id: test_5
+        description: "Integration tests for admin API routes: test GET returns plan list with counts, POST creates plan (mock Stripe), PUT updates plan with price change, PATCH toggles active. Test auth guard returns 403 for non-admin"
+        files:
+          - apps/web/src/app/api/admin/subscriptions/__tests__/route.test.ts
+        verification: "All 4 HTTP methods work correctly with proper auth guards and validation"
+        depends_on: [impl_7, impl_8, impl_9, impl_10]
+        status: pending

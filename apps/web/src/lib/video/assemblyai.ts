@@ -24,6 +24,7 @@ export interface TranscriptionResult {
     start: number
     end: number
   }>
+  audioDurationSeconds: number | null
 }
 
 /**
@@ -35,9 +36,9 @@ export async function transcribe(videoPath: string): Promise<TranscriptionResult
 
   const transcript = await client.transcripts.transcribe({
     audio: videoPath,
+    speech_models: ['universal-3-pro', 'universal-2'],
+    language_detection: true,
     speaker_labels: true,
-    sentiment_analysis: true,
-    language_code: 'pt',
   })
 
   if (transcript.status === 'error') {
@@ -56,8 +57,12 @@ export async function transcribe(videoPath: string): Promise<TranscriptionResult
     ? speakers.map((s: { speaker: string; text: string }) => `[${s.speaker}]: ${s.text}`).join('\n')
     : transcript.text ?? ''
 
+  // audio_duration from AssemblyAI is already in seconds
+  const audioDurationSeconds = transcript.audio_duration ?? null
+
   return {
     text: textWithSpeakers,
     speakers,
+    audioDurationSeconds,
   }
 }

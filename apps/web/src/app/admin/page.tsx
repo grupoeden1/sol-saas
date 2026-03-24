@@ -13,6 +13,8 @@ import LogoutButton from '@/components/LogoutButton';
 import MetricCard from '@/components/admin/MetricCard';
 import UsersTable from '@/components/admin/UsersTable';
 import AddCreditsForm from '@/components/admin/AddCreditsForm';
+import AdminNav from '@/components/admin/AdminNav';
+import AdminChartsSection from '@/components/admin/charts/admin-charts-section';
 
 const PAGE_SIZE = 20;
 
@@ -124,8 +126,8 @@ export default async function AdminDashboardPage({ searchParams }: AdminPageProp
       change: null,
     },
     {
-      label: 'Custo OpenAI (est.)',
-      value: `US$ ${financialMetrics.estimatedOpenAICostUsd.toFixed(2)}`,
+      label: 'Custo API (est.)',
+      value: `US$ ${financialMetrics.estimatedApiCostUsd.toFixed(2)}`,
       change: null,
     },
   ];
@@ -159,12 +161,7 @@ export default async function AdminDashboardPage({ searchParams }: AdminPageProp
                 {userMetrics.totalUsers} usuário{userMetrics.totalUsers !== 1 ? 's' : ''} cadastrado{userMetrics.totalUsers !== 1 ? 's' : ''}
               </p>
             </div>
-            <Link
-              href="/admin/pricing"
-              className="rounded-xl bg-solar-500/10 px-4 py-2.5 text-sm font-medium text-solar-300 transition-all hover:bg-solar-500/20"
-            >
-              Simulador de Pricing
-            </Link>
+            <AdminNav />
           </div>
 
           <section>
@@ -211,6 +208,8 @@ export default async function AdminDashboardPage({ searchParams }: AdminPageProp
               ))}
             </div>
           </section>
+
+          <AdminChartsSection />
 
           <UsersTable
             users={userListResult.users}

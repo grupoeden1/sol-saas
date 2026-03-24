@@ -1,0 +1,161 @@
+story: "10.3"
+title: "Painel Admin — Criacao e Gerenciamento de Campanhas"
+status: pending
+depends_on: ["10.1"]
+
+phases:
+  - name: Setup
+    subtasks:
+      - id: setup_1
+        description: "Create Zod validation schemas for campaign CRUD: createCampaignSchema (name, title, message as required strings; offerType as OfferType enum; offerId as optional string; discountPercent as optional int 0-100; filters as object with optional fields: creditsMin/creditsMax (int), inactiveDaysMin/inactiveDaysMax (int), messagesMin/messagesMax (int); startsAt/endsAt as optional ISO datetime strings with validation that endsAt > startsAt). Create updateCampaignSchema (same fields, all optional). Create statusTransitionSchema (status as CampaignStatus enum)"
+        files:
+          - apps/web/src/lib/validations/campaign.ts
+        status: pending
+
+      - id: setup_2
+        description: "Create campaign segmentation query helper: buildSegmentationQuery(filters: Json) that converts campaign filter JSON into a Prisma where clause for User model. Supports AND combination of: creditsMin/creditsMax (user.credits range), inactiveDaysMin/inactiveDaysMax (user's last conversation createdAt compared to now), messagesMin/messagesMax (count of user's conversations). Returns Prisma.UserWhereInput"
+        files:
+          - apps/web/src/lib/campaign-segmentation.ts
+        verification: "Filters combine with AND logic: { creditsMin: 0, creditsMax: 50, inactiveDaysMin: 7 } produces correct Prisma where clause"
+        depends_on: [setup_1]
+        status: pending
+
+      - id: setup_3
+        description: "Create campaign metrics aggregation helper: getCampaignMetrics(campaignId: string) that queries PromoDelivery for the campaign and aggregates: deliveries (total count), views (count where viewedAt is not null), clicks (count where clickedAt is not null), conversions (count where convertedAt is not null), dismissed (count where dismissedAt is not null). Calculate revenue by summing CreditTransaction amounts where type is promo_purchase and description references the campaign. Calculate rate as conversions/views (0 if no views)"
+        files:
+          - apps/web/src/lib/campaign-metrics.ts
+        verification: "Metrics aggregation returns correct counts and revenue for a campaign with known test data"
+        depends_on: [setup_1]
+        status: pending
+
+  - name: Implementation
+    subtasks:
+      - id: impl_1
+        description: "Create GET /api/admin/promos route: authenticate as admin, query all PromoCampaigns ordered by createdAt desc. For each campaign, include aggregated metrics (deliveries, views, clicks, conversions, revenue, rate) using getCampaignMetrics helper. Support optional query params: status filter, page/limit pagination. Return { campaigns: [...], total, page, limit }"
+        files:
+          - apps/web/src/app/api/admin/promos/route.ts
+        verification: "GET returns paginated list of campaigns with metrics. Only accessible by ADMIN role"
+        depends_on: [setup_2, setup_3]
+        status: pending
+
+      - id: impl_2
+        description: "Create POST /api/admin/promos route: authenticate as admin, validate body with createCampaignSchema. If offerType is CREDIT_PACKAGE, verify offerId exists in CreditPackage table. If SUBSCRIPTION_PLAN, verify offerId exists in SubscriptionPlan table. If CUSTOM, offerId is optional. Validate discountPercent 0-100 if provided. Validate endsAt > startsAt if both provided. Create PromoCampaign with status DRAFT. Return created campaign"
+        files:
+          - apps/web/src/app/api/admin/promos/route.ts
+        verification: "POST creates campaign in DRAFT status with validated fields. Invalid offerId returns 400. Invalid discount range returns 400"
+        depends_on: [setup_1, setup_2]
+        status: pending
+
+      - id: impl_3
+        description: "Create PUT /api/admin/promos/[id] route: authenticate as admin, validate body with updateCampaignSchema. Only allow edits on campaigns in DRAFT status (return 400 if ACTIVE/PAUSED/ENDED). Validate all field constraints same as POST. Update campaign and return updated data"
+        files:
+          - apps/web/src/app/api/admin/promos/[id]/route.ts
+        verification: "PUT updates DRAFT campaign fields. Returns 400 when trying to edit non-DRAFT campaign"
+        depends_on: [setup_1]
+        status: pending
+
+      - id: impl_4
+        description: "Create PATCH /api/admin/promos/[id] route: authenticate as admin, validate body with statusTransitionSchema. Enforce valid transitions: DRAFT->ACTIVE, ACTIVE->PAUSED, PAUSED->ACTIVE, ACTIVE->ENDED, PAUSED->ENDED. Reject invalid transitions (e.g., ENDED->ACTIVE, DRAFT->PAUSED) with 400 and descriptive error. Update campaign status and return updated campaign"
+        files:
+          - apps/web/src/app/api/admin/promos/[id]/route.ts
+        verification: "Valid transitions succeed, invalid transitions return 400 with error message explaining allowed transitions"
+        depends_on: [setup_1]
+        status: pending
+
+      - id: impl_5
+        description: "Create POST /api/admin/promos/preview route: authenticate as admin, accept filters JSON in body, use buildSegmentationQuery to convert filters to Prisma where clause, count users matching the criteria. Return { userCount }. This gives admin a preview of how many users will be impacted before activating a campaign"
+        files:
+          - apps/web/src/app/api/admin/promos/preview/route.ts
+        verification: "Preview with { creditsMax: 50 } returns count of users with credits <= 50. Empty filters returns total user count"
+        depends_on: [setup_2]
+        status: pending
+
+      - id: impl_6
+        description: "Create admin promos list page at /admin/promos: server component that fetches campaigns from GET /api/admin/promos. Display table with columns: name, status (badge with color: DRAFT=gray, ACTIVE=green, PAUSED=yellow, ENDED=red), offerType, dates (startsAt - endsAt), deliveries count, conversions count, revenue (formatted BRL). Include 'Nova Campanha' button linking to creation form. Include status filter dropdown"
+        files:
+          - apps/web/src/app/admin/promos/page.tsx
+        verification: "Page renders campaign table with correct data, status badges, and metrics columns"
+        depends_on: [impl_1]
+        status: pending
+
+      - id: impl_7
+        description: "Create admin campaign creation/edit form component: client component with fields for name, title, message (textarea), offerType (select dropdown), offerId (dynamic select based on offerType — loads packages or plans), discountPercent (number input 0-100), startsAt/endsAt (datetime pickers), and segmentation filters section (creditsMin, creditsMax, inactiveDaysMin, inactiveDaysMax, messagesMin, messagesMax — all optional number inputs). Include user preview count that auto-updates when filters change (debounced call to POST /api/admin/promos/preview)"
+        files:
+          - apps/web/src/components/admin/CampaignForm.tsx
+        verification: "Form renders all fields, offerType change updates offerId options, filter changes trigger preview count update"
+        depends_on: [impl_2, impl_5]
+        status: pending
+
+      - id: impl_8
+        description: "Create admin campaign creation page at /admin/promos/new: renders CampaignForm in create mode. On submit, POST to /api/admin/promos, on success redirect to /admin/promos with success toast"
+        files:
+          - apps/web/src/app/admin/promos/new/page.tsx
+        verification: "Form submission creates campaign and redirects to list page"
+        depends_on: [impl_7]
+        status: pending
+
+      - id: impl_9
+        description: "Create admin campaign detail/edit page at /admin/promos/[id]: fetch campaign by ID, render CampaignForm in edit mode (pre-filled with current values, disabled if not DRAFT). Below form, show campaign metrics dashboard: cards for deliveries, views, clicks, conversions, revenue, conversion rate. Include status transition buttons based on current status (e.g., DRAFT shows 'Ativar', ACTIVE shows 'Pausar' and 'Encerrar')"
+        files:
+          - apps/web/src/app/admin/promos/[id]/page.tsx
+          - apps/web/src/components/admin/CampaignMetrics.tsx
+        verification: "Detail page shows campaign data, metrics dashboard, and appropriate status transition buttons"
+        depends_on: [impl_3, impl_4, impl_7]
+        status: pending
+
+  - name: Integration
+    subtasks:
+      - id: int_1
+        description: "Add 'Promocoes' link to admin sidebar/navigation: add navigation item pointing to /admin/promos in the existing admin layout or navigation component. Use appropriate icon (e.g., megaphone or gift icon)"
+        files:
+          - apps/web/src/app/admin/page.tsx
+          - apps/web/src/components/layout/
+        verification: "Admin sidebar shows 'Promocoes' link that navigates to /admin/promos page"
+        depends_on: [impl_6]
+        status: pending
+
+      - id: int_2
+        description: "Wire up GET /api/admin/promos/[id] endpoint in the existing [id]/route.ts: return single campaign with full details and metrics for the detail/edit page"
+        files:
+          - apps/web/src/app/api/admin/promos/[id]/route.ts
+        verification: "GET /api/admin/promos/:id returns campaign with all fields and aggregated metrics"
+        depends_on: [impl_3]
+        status: pending
+
+  - name: Testing
+    subtasks:
+      - id: test_1
+        description: "Test campaign CRUD: create campaign via POST (verify DRAFT status), update via PUT (verify fields changed), attempt PUT on ACTIVE campaign (verify 400 rejection), list via GET (verify pagination and metrics)"
+        verification: "CRUD operations work correctly with proper validation and status enforcement"
+        depends_on: [int_2]
+        status: pending
+
+      - id: test_2
+        description: "Test status transitions: DRAFT->ACTIVE (success), ACTIVE->PAUSED (success), PAUSED->ACTIVE (success), ACTIVE->ENDED (success), ENDED->ACTIVE (400 error), DRAFT->PAUSED (400 error), DRAFT->ENDED (400 error)"
+        verification: "All valid transitions succeed, all invalid transitions return 400 with descriptive error"
+        depends_on: [int_2]
+        status: pending
+
+      - id: test_3
+        description: "Test segmentation preview: create users with varying credit balances and conversation counts. Call preview with different filter combinations and verify userCount matches expected results. Test AND combination: { creditsMax: 50, inactiveDaysMin: 7 } should only count users matching both criteria"
+        verification: "Preview counts match expected user counts for single and combined filters"
+        depends_on: [int_2]
+        status: pending
+
+      - id: test_4
+        description: "Test campaign metrics aggregation: create campaign, create PromoDeliveries with various events (viewed, clicked, converted, dismissed). Create CreditTransactions with type promo_purchase. Verify GET /api/admin/promos returns correct aggregated counts and revenue"
+        verification: "Metrics correctly count deliveries, views, clicks, conversions, revenue, and calculate conversion rate"
+        depends_on: [int_2]
+        status: pending
+
+      - id: test_5
+        description: "Test validation rules: discountPercent > 100 returns 400, discountPercent < 0 returns 400, endsAt before startsAt returns 400, invalid offerId for CREDIT_PACKAGE returns 400, non-admin user returns 401/403"
+        verification: "All validation scenarios return appropriate error responses"
+        depends_on: [int_2]
+        status: pending
+
+      - id: test_6
+        description: "Test admin-only access: verify all /api/admin/promos routes return 401 for unauthenticated requests and 403 for non-admin users"
+        verification: "Non-admin access blocked on all campaign management endpoints"
+        depends_on: [int_2]
+        status: pending

@@ -6,11 +6,14 @@ import {
   calculateCredits,
   calculateMaxCredits,
   InsufficientBalanceError,
+  getAiConfig,
 } from '@sol/db'
 import { countRawTokens } from '@sol/db/token-counter'
-import { buildQuizPrompt, type PromptContext } from '@/lib/quiz/prompt-builder'
+import { type PromptContext, type ReferenceContext } from '@/lib/quiz/prompt-builder'
+import { assemblePrompt } from '@/lib/prompt-engine'
+import { classifyMarket } from '@/lib/quiz/market-classifier'
 import { rateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit'
-import OpenAI from 'openai'
+import { getAiAdapter } from '@/lib/ai'
 import { z } from 'zod'
 
 export const runtime = 'nodejs'
@@ -18,14 +21,6 @@ export const runtime = 'nodejs'
 const generateSchema = z.object({
   quizSessionId: z.string().min(1),
 })
-
-let _openai: OpenAI | null = null
-function getOpenAI() {
-  if (!_openai) {
-    _openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
-  }
-  return _openai
-}
 
 export async function POST(req: Request) {
   try {
@@ -96,10 +91,91 @@ export async function POST(req: Request) {
 
     // Build prompt (include video analysis if available and completed)
     const va = quizSession.videoAnalysis
+    if (va) {
+      console.log(`[Quiz Generate] VideoAnalysis found: status=${va.processingStatus}, hasFullDesc=${!!va.fullDescription}, descLength=${va.fullDescription?.length ?? 0}`)
+    } else {
+      console.log(`[Quiz Generate] No VideoAnalysis record for session ${quizSessionId}`)
+    }
     const videoAnalysis =
       va && va.processingStatus === 'COMPLETED' && va.fullDescription
         ? { transcription: va.transcription ?? '', fullDescription: va.fullDescription }
         : undefined
+    console.log(`[Quiz Generate] videoAnalysis injected into prompt: ${!!videoAnalysis}`)
+
+    // Classify market — reuse cached classification if available (Story 6.8)
+    let classification
+    if (quizSession.classification && quizSession.awarenessLevel && quizSession.sophisticationLevel) {
+      classification = quizSession.classification as {
+        awarenessLevel: number
+        sophisticationLevel: number
+        awarenessJustification: string
+        sophisticationJustification: string
+      }
+      console.log(`[Quiz Generate] Using cached classification: awareness=${classification.awarenessLevel} sophistication=${classification.sophisticationLevel}`)
+    } else {
+      classification = await classifyMarket(answerMap, onboardingAnswers)
+      console.log(`[Quiz Generate] New classification: awareness=${classification.awarenessLevel} sophistication=${classification.sophisticationLevel}`)
+
+      // Persist classification on quiz session
+      await prisma.quizSession.update({
+        where: { id: quizSession.id },
+        data: {
+          awarenessLevel: classification.awarenessLevel,
+          sophisticationLevel: classification.sophisticationLevel,
+          classification: JSON.parse(JSON.stringify(classification)),
+        },
+      })
+    }
+
+    // Fetch expert profile if the user opted in
+    let expertProfile: Record<string, unknown> | null = null
+    if (quizSession.useExpertProfile) {
+      const profile = await prisma.expertProfile.findUnique({
+        where: { userId: user.id },
+      })
+      if (profile) {
+        // Convert Prisma model to plain object for prompt injection
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        const { id: _id, userId: _uid, createdAt: _ca, updatedAt: _ua, ...profileData } = profile
+        expertProfile = profileData as Record<string, unknown>
+        console.log(`[Quiz Generate] Expert profile loaded (completion=${profile.completionPercentage}%)`)
+      } else {
+        console.log(`[Quiz Generate] useExpertProfile=true but no ExpertProfile found for user`)
+      }
+    }
+
+    // Load creative reference if user selected one (Epic 12)
+    let reference: ReferenceContext | null = null
+    const creativeRef = await prisma.creativeReference.findFirst({
+      where: { quizSessionId: quizSession.id },
+      orderBy: { createdAt: 'desc' },
+    })
+    if (creativeRef) {
+      let parsedFormat: string | null = null
+      if (creativeRef.formatClassification) {
+        try {
+          const fc = typeof creativeRef.formatClassification === 'string'
+            ? JSON.parse(creativeRef.formatClassification)
+            : creativeRef.formatClassification
+          parsedFormat = (fc as Record<string, unknown>).format as string ?? null
+        } catch {
+          // ignore parse error
+        }
+      }
+      reference = {
+        format: parsedFormat,
+        adCopy: creativeRef.adCopy,
+        engagement: creativeRef.engagementMetrics
+          ? (typeof creativeRef.engagementMetrics === 'string'
+              ? JSON.parse(creativeRef.engagementMetrics)
+              : creativeRef.engagementMetrics) as Record<string, number>
+          : null,
+        platform: creativeRef.platform,
+        advertiserName: creativeRef.advertiserName,
+        searchQuery: creativeRef.searchQuery,
+      }
+      console.log(`[Quiz Generate] Creative reference loaded: format=${parsedFormat} platform=${creativeRef.platform}`)
+    }
 
     const promptContext: PromptContext = {
       onboarding: onboardingAnswers,
@@ -107,17 +183,24 @@ export async function POST(req: Request) {
       path1: quizSession.path1,
       path2: quizSession.path2,
       videoAnalysis,
+      expertProfile,
+      personalContext: quizSession.personalContext,
+      reference,
     }
 
-    const { systemPrompt, userPrompt } = buildQuizPrompt(promptContext)
+    // Assemble prompt using 3-layer Prompt Engine
+    const { systemPrompt, userPrompt, modulesUsed } = await assemblePrompt(promptContext, classification)
+    console.log(`[Quiz Generate] Modules used: ${modulesUsed.join(', ')}`)
 
-    // Token counting & credit gate
-    const model = process.env.OPENAI_MODEL_FINAL || 'gpt-4o'
-    const totalInputTokens = countRawTokens(systemPrompt + '\n' + userPrompt, model)
+    // Token estimation & credit gate
+    const aiConfig = await getAiConfig()
+    const adapter = getAiAdapter(aiConfig.provider)
+    const model = aiConfig.finalModel
+    const estimatedInputTokens = countRawTokens(systemPrompt + '\n' + userPrompt, model)
     const config = await getPricingConfig()
-    const maxCredits = calculateMaxCredits(totalInputTokens, config)
+    const maxCredits = calculateMaxCredits(estimatedInputTokens, config)
 
-    console.log(`[Quiz Generate] model=${model} inputTokens=${totalInputTokens} maxCredits=${maxCredits}`)
+    console.log(`[Quiz Generate] model=${model} estimatedInputTokens=${estimatedInputTokens} maxCredits=${maxCredits}`)
 
     if (user.credits < maxCredits) {
       return Response.json(
@@ -140,16 +223,14 @@ export async function POST(req: Request) {
       },
     })
 
-    // Stream from OpenAI
-    const stream = await getOpenAI().chat.completions.create({
+    // Stream from AI provider
+    const streamResult = await adapter.stream({
       model,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt },
-      ],
-      stream: true,
+      systemPrompt,
+      messages: [],
+      userContent: userPrompt,
+      maxTokens: config.maxOutputTokens,
       temperature: 0.7,
-      max_completion_tokens: config.maxOutputTokens,
     })
 
     const encoder = new TextEncoder()
@@ -158,14 +239,11 @@ export async function POST(req: Request) {
     const readable = new ReadableStream({
       async start(controller) {
         try {
-          for await (const chunk of stream) {
-            const token = chunk.choices[0]?.delta?.content || ''
-            if (token) {
-              fullResponse += token
-              controller.enqueue(
-                encoder.encode(`data: ${JSON.stringify({ token })}\n\n`)
-              )
-            }
+          for await (const token of streamResult.textStream) {
+            fullResponse += token
+            controller.enqueue(
+              encoder.encode(`data: ${JSON.stringify({ token })}\n\n`)
+            )
           }
 
           // Save the generated script as assistant message
@@ -186,21 +264,24 @@ export async function POST(req: Request) {
             },
           })
 
-          // Deduct credits
-          const outputTokens = countRawTokens(fullResponse, model)
-          const creditsUsed = calculateCredits(totalInputTokens, outputTokens, config)
+          // Get actual token usage from API response
+          const { inputTokens: actualInputTokens, outputTokens: actualOutputTokens } = await streamResult.usage()
 
-          console.log(`[Quiz Generate] outputTokens=${outputTokens} creditsUsed=${creditsUsed}`)
+          // Calculate and deduct credits
+          const creditsUsed = calculateCredits(actualInputTokens, actualOutputTokens, config)
+
+          console.log(`[Quiz Generate] inputTokens=${actualInputTokens} outputTokens=${actualOutputTokens} creditsUsed=${creditsUsed}`)
 
           let creditsAfterDeduction = user.credits
           try {
             const result = await deductCredits(user.id, creditsUsed, {
-              inputTokens: totalInputTokens,
-              outputTokens,
+              inputTokens: actualInputTokens,
+              outputTokens: actualOutputTokens,
               modelUsed: model,
               creditsPerMInput: config.creditsPerMInput,
               creditsPerMOutput: config.creditsPerMOutput,
               conversationTitle,
+              modulesUsed,
             })
             creditsAfterDeduction = result.credits
           } catch (deductError) {

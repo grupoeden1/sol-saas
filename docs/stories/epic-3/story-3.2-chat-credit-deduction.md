@@ -18,7 +18,7 @@
 
 ## Context
 
-Esta story conecta o sistema de créditos (Story 3.1) à API de chat existente (Story 2.3). A dedução acontece **após** o stream da OpenAI completar com sucesso — se a chamada falhar, nenhum crédito é deducido (o aluno não paga por erro).
+Esta story conecta o sistema de créditos (Story 3.1) à API de chat existente (Story 2.3). A dedução acontece **após** o stream da Claude API completar com sucesso — se a chamada falhar, nenhum crédito é deducido (o aluno não paga por erro).
 
 **Estado atual (baseline):**
 - Verificação `credits === 0 → 402`: ✅ Story 2.4
@@ -48,13 +48,13 @@ Esta story conecta o sistema de créditos (Story 3.1) à API de chat existente (
 
 ---
 
-### AC2: Nenhum crédito deducido se OpenAI falhar
+### AC2: Nenhum crédito deducido se Claude API falhar
 
 - [ ] Se ocorrer erro durante o streaming (rate limit, timeout, etc.), `deductCredits` **não é chamado**
 - [ ] O aluno vê a mensagem de erro amigável sem perder créditos
-- [ ] Log: `[Chat API] OpenAI error - no credits deducted`
+- [ ] Log: `[Chat API] Claude API error - no credits deducted`
 
-**Test:** Simular erro da OpenAI → saldo permanece o mesmo, nenhum registro `consumption` criado.
+**Test:** Simular erro da Claude API → saldo permanece o mesmo, nenhum registro `consumption` criado.
 
 ---
 
@@ -100,7 +100,7 @@ POST /api/chat
   ├─ auth check
   ├─ credits === 0 → 402 (Story 2.4) ← JÁ EXISTE
   ├─ save user message
-  ├─ stream OpenAI
+  ├─ stream Claude API
   │   ├─ success:
   │   │   ├─ save assistant message
   │   │   ├─ deductCredits(user.id, 1) → newBalance     ← NOVO
@@ -145,7 +145,7 @@ handleSendMessage()
 
 - [ ] Enviar mensagem com créditos > 0 → saldo decrementa em 1
 - [ ] `credit_transactions` registra `type: consumption, amount: -1`
-- [ ] Erro da OpenAI → saldo permanece inalterado
+- [ ] Erro da Claude API → saldo permanece inalterado
 - [ ] Badge atualiza para saldo pós-dedução após stream completar
 - [ ] Saldo chegando a 0 → input desabilita, badge mostra 0
 - [ ] Saldo = 0 → 402 na próxima tentativa (Story 2.4 não regride)
@@ -158,5 +158,5 @@ handleSendMessage()
 - [ ] `deductCredits` chamado após stream bem-sucedido na API
 - [ ] `creditsRemaining` incluído no evento SSE `done`
 - [ ] Frontend consome `creditsRemaining` e atualiza badge + noCredits
-- [ ] Erro OpenAI não deducta créditos
+- [ ] Erro Claude API não deducta créditos
 - [ ] TypeScript strict, nenhum erro no typecheck

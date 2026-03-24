@@ -4,9 +4,22 @@ import Pagination from './Pagination';
 interface Transaction {
   id: string;
   amount: number;
-  type: 'purchase' | 'consumption' | 'adjustment';
+  type: 'purchase' | 'consumption' | 'adjustment' | 'subscription_renewal' | 'promo_purchase' | 'referral';
   description: string | null;
   createdAt: Date;
+}
+
+const TYPE_LABELS: Record<Transaction['type'], string> = {
+  purchase: 'Compra',
+  consumption: 'Uso',
+  adjustment: 'Ajuste',
+  subscription_renewal: 'Assinatura',
+  promo_purchase: 'Promoção',
+  referral: 'Indicação',
+};
+
+function isPositiveType(type: Transaction['type']): boolean {
+  return type !== 'consumption';
 }
 
 interface TransactionHistoryProps {
@@ -58,15 +71,15 @@ export default function TransactionHistory({
                   <tr key={tx.id} className="border-b border-solar-800/10 last:border-0">
                     <td className="px-6 py-4">
                       <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium ${
-                        tx.type === 'purchase'
+                        isPositiveType(tx.type)
                           ? 'bg-green-500/10 text-green-400'
                           : 'bg-foreground-muted/10 text-foreground-muted'
                       }`}>
-                        {tx.type === 'purchase' ? 'Compra' : 'Uso'}
+                        {TYPE_LABELS[tx.type] ?? tx.type}
                       </span>
                     </td>
                     <td className="px-6 py-4 text-sm text-foreground">
-                      {tx.description ?? (tx.type === 'purchase' ? 'Compra de créditos' : 'Uso do chat')}
+                      {tx.description ?? (isPositiveType(tx.type) ? 'Créditos adicionados' : 'Uso do chat')}
                     </td>
                     <td className={`px-6 py-4 text-right text-sm font-medium ${
                       tx.amount > 0 ? 'text-green-400' : 'text-foreground-muted'
@@ -88,11 +101,11 @@ export default function TransactionHistory({
               <div key={tx.id} className="border-b border-solar-800/10 px-6 py-4 last:border-0">
                 <div className="flex items-center justify-between">
                   <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium ${
-                    tx.type === 'purchase'
+                    isPositiveType(tx.type)
                       ? 'bg-green-500/10 text-green-400'
                       : 'bg-foreground-muted/10 text-foreground-muted'
                   }`}>
-                    {tx.type === 'purchase' ? 'Compra' : 'Uso'}
+                    {TYPE_LABELS[tx.type] ?? tx.type}
                   </span>
                   <span className={`text-sm font-medium ${
                     tx.amount > 0 ? 'text-green-400' : 'text-foreground-muted'
@@ -101,7 +114,7 @@ export default function TransactionHistory({
                   </span>
                 </div>
                 <p className="mt-1 text-sm text-foreground">
-                  {tx.description ?? (tx.type === 'purchase' ? 'Compra de créditos' : 'Uso do chat')}
+                  {tx.description ?? (isPositiveType(tx.type) ? 'Créditos adicionados' : 'Uso do chat')}
                 </p>
                 <p className="mt-1 text-xs text-foreground-muted">{formatDate(tx.createdAt)}</p>
               </div>

@@ -19,6 +19,9 @@ export async function GET() {
     creditsPerMInput: configRows.find((r) => r.key === 'CREDITS_PER_M_INPUT')?.value ?? 500,
     creditsPerMOutput: configRows.find((r) => r.key === 'CREDITS_PER_M_OUTPUT')?.value ?? 2000,
     maxOutputTokens: configRows.find((r) => r.key === 'MAX_OUTPUT_TOKENS')?.value ?? 8192,
+    creditsPerAssemblyAiMin: configRows.find((r) => r.key === 'CREDITS_PER_ASSEMBLYAI_MIN')?.value ?? 40,
+    creditsPerMEmbeddingTokens: configRows.find((r) => r.key === 'CREDITS_PER_M_EMBEDDING_TOKENS')?.value ?? 14,
+    creditsPerKElevenLabsChars: configRows.find((r) => r.key === 'CREDITS_PER_K_ELEVENLABS_CHARS')?.value ?? 26,
   };
 
   return NextResponse.json({ config, packages });
@@ -29,6 +32,9 @@ const PricingUpdateSchema = z.object({
   creditsPerMInput: z.number().int().positive(),
   creditsPerMOutput: z.number().int().positive(),
   maxOutputTokens: z.number().int().min(256).max(32768),
+  creditsPerAssemblyAiMin: z.number().int().min(0),
+  creditsPerMEmbeddingTokens: z.number().int().min(0),
+  creditsPerKElevenLabsChars: z.number().int().min(0),
 });
 
 export async function PUT(req: NextRequest) {
@@ -48,6 +54,9 @@ export async function PUT(req: NextRequest) {
     { key: 'CREDITS_PER_M_INPUT', value: body.creditsPerMInput },
     { key: 'CREDITS_PER_M_OUTPUT', value: body.creditsPerMOutput },
     { key: 'MAX_OUTPUT_TOKENS', value: body.maxOutputTokens },
+    { key: 'CREDITS_PER_ASSEMBLYAI_MIN', value: body.creditsPerAssemblyAiMin },
+    { key: 'CREDITS_PER_M_EMBEDDING_TOKENS', value: body.creditsPerMEmbeddingTokens },
+    { key: 'CREDITS_PER_K_ELEVENLABS_CHARS', value: body.creditsPerKElevenLabsChars },
   ];
 
   await prisma.$transaction(

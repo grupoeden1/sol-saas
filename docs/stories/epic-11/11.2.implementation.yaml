@@ -1,0 +1,118 @@
+story: "11.2"
+title: "Fluxo de Cadastro com Referral"
+status: pending
+depends_on: ["11.1"]
+
+phases:
+  - name: Setup
+    subtasks:
+      - id: setup_1
+        description: "Create referral cookie utility module with functions: setReferralCookie(code) and getReferralCookie(req) and clearReferralCookie(). Cookie config: name 'sol_ref', httpOnly: true, maxAge: 30 days (2592000 seconds), path: '/', sameSite: 'lax', secure: true in production. Export from a shared lib file."
+        files:
+          - apps/web/src/lib/referral-cookie.ts
+        status: pending
+
+      - id: setup_2
+        description: "Create server-side referral validation service with function validateReferralCode(code, newUserEmail?). Validates: (a) code exists in DB via User.referralCode lookup, (b) REFERRAL_ENABLED is truthy (value > 0) in PricingConfig, (c) referrer has not exceeded REFERRAL_MAX_PER_USER (count ReferralReward where referrerId = referrer.id AND status IN ['PENDING', 'CREDITED']), (d) code does not belong to the registering user (anti-self-referral — compare referrer email with new user email). Returns { valid: boolean, referrerId?: string, reason?: string }."
+        files:
+          - apps/web/src/lib/referral-validation.ts
+        verification: "Validation logic is server-side only; never exposed to client bundle"
+        status: pending
+
+  - name: Implementation
+    subtasks:
+      - id: impl_1
+        description: "Modify the existing Next.js middleware (apps/web/src/middleware.ts) to intercept requests to '/' with a 'ref' query parameter. When /?ref=CODIGO is detected, redirect to /register?ref=CODIGO preserving the code. Do NOT break existing middleware logic for auth/admin route protection."
+        files:
+          - apps/web/src/middleware.ts
+        verification: "GET /?ref=ABC123XY redirects to /register?ref=ABC123XY with 302. GET / without ref param works as before (landing page). All existing protected route redirects still work."
+        depends_on: [setup_1]
+        status: pending
+
+      - id: impl_2
+        description: "Create a server-side route handler or server action at /register that reads the 'ref' query parameter and sets the sol_ref httpOnly cookie. This can be a thin API route (GET /api/referral/set-cookie?ref=CODE) called from the register page, OR implemented as a Next.js server component wrapper around the register page that sets the cookie via headers. The cookie must be set server-side (httpOnly) so the client cannot tamper with it."
+        files:
+          - apps/web/src/app/api/referral/set-cookie/route.ts
+        verification: "Accessing /register?ref=CODE sets sol_ref cookie with the referral code. Cookie is httpOnly, 30-day expiry, sameSite lax, secure in production."
+        depends_on: [setup_1]
+        status: pending
+
+      - id: impl_3
+        description: "Modify the existing register page (apps/web/src/app/register/page.tsx) to: (a) read the 'ref' query param from URL on mount, (b) call the set-cookie endpoint to persist the code server-side, (c) no visible UI changes needed — referral is silent. The page must continue to work identically when no ref param is present."
+        files:
+          - apps/web/src/app/register/page.tsx
+        verification: "Register page with ?ref=CODE silently sets cookie. Register page without ?ref= works exactly as before. No visual changes to the registration form."
+        depends_on: [impl_2]
+        status: pending
+
+      - id: impl_4
+        description: "Modify the existing registration API route (apps/web/src/app/api/auth/register/route.ts) to: (a) read the sol_ref cookie from the request, (b) call validateReferralCode to validate the code, (c) if valid: generate referralCode for new user, set referredBy to referrer's ID, create user, then create ReferralReward with status PENDING (referrerCredits and referredCredits set to 0 — actual values determined at purchase time per Story 11.3), (d) if invalid or no cookie: generate referralCode for new user, create user normally without referredBy, (e) ALWAYS generate a unique referralCode for every new user using generateReferralCode() from @sol/db, (f) clear the sol_ref cookie in the response regardless of outcome, (g) if email already exists (P2002 unique violation), clear cookie and return existing error message — do not associate referral for existing users."
+        files:
+          - apps/web/src/app/api/auth/register/route.ts
+        verification: "New user with valid referral: has referredBy set, ReferralReward PENDING created, referralCode generated. New user without referral: has referralCode generated, no referredBy, no ReferralReward. New user with invalid referral: registered normally, no error shown. Existing user attempt: 409 error as before, cookie cleared. Self-referral: registered normally without referral association."
+        depends_on: [setup_2, impl_2]
+        status: pending
+
+      - id: impl_5
+        description: "Ensure self-referral blocking works correctly: when the registering user's email matches the referral code owner's email, silently ignore the referral. This must be checked AFTER the code is looked up in the DB (compare referrer.email with the new registration email from the request body)."
+        files:
+          - apps/web/src/lib/referral-validation.ts
+        verification: "User registering with their own referral code proceeds with registration but no referral association is created"
+        depends_on: [impl_4]
+        status: pending
+
+  - name: Integration
+    subtasks:
+      - id: int_1
+        description: "Verify cookie lifecycle end-to-end: (a) GET /?ref=CODE -> redirect to /register?ref=CODE, (b) /register?ref=CODE sets sol_ref cookie, (c) POST /api/auth/register reads and processes sol_ref cookie, (d) response clears sol_ref cookie. Ensure OAuth flow compatibility: if user navigates away and comes back within 30 days, cookie persists."
+        files:
+          - apps/web/src/middleware.ts
+          - apps/web/src/app/register/page.tsx
+          - apps/web/src/app/api/auth/register/route.ts
+          - apps/web/src/app/api/referral/set-cookie/route.ts
+        verification: "Full cookie lifecycle works: set on register page visit, read on registration, cleared after registration"
+        depends_on: [impl_1, impl_3, impl_4]
+        status: pending
+
+      - id: int_2
+        description: "Verify that existing registration flow is completely unaffected when no ref parameter is present. Ensure no regressions in: form validation, error handling, auto-login after registration, redirect to dashboard."
+        files:
+          - apps/web/src/app/register/page.tsx
+          - apps/web/src/app/api/auth/register/route.ts
+        verification: "Registration without referral works exactly as before Story 11.2 changes"
+        depends_on: [impl_4]
+        status: pending
+
+  - name: Testing
+    subtasks:
+      - id: test_1
+        description: "Write unit tests for referral validation service: (a) valid code returns valid=true with referrerId, (b) nonexistent code returns valid=false, (c) disabled program (REFERRAL_ENABLED=0) returns valid=false, (d) referrer at max limit returns valid=false, (e) self-referral returns valid=false, (f) referrer below limit returns valid=true."
+        files:
+          - apps/web/src/__tests__/referral-validation.test.ts
+        verification: "All validation scenarios covered and passing"
+        depends_on: [setup_2]
+        status: pending
+
+      - id: test_2
+        description: "Write unit tests for referral cookie utilities: (a) setReferralCookie sets correct cookie attributes, (b) getReferralCookie reads cookie value, (c) clearReferralCookie sets maxAge=0."
+        files:
+          - apps/web/src/__tests__/referral-cookie.test.ts
+        verification: "Cookie utility tests pass with correct attributes"
+        depends_on: [setup_1]
+        status: pending
+
+      - id: test_3
+        description: "Write integration tests for the full registration flow with referral: (a) register with valid referral -> user created with referredBy and ReferralReward PENDING, (b) register with invalid referral -> user created normally without error, (c) register without referral -> user created with referralCode only, (d) register with self-referral -> user created without referral, (e) register with referrer at max limit -> user created without referral, (f) register with disabled program -> user created without referral, (g) duplicate email -> 409 error and cookie cleared."
+        files:
+          - apps/web/src/__tests__/register-referral.integration.test.ts
+        verification: "All 7 scenarios pass; referralCode is always generated for new users"
+        depends_on: [impl_4, impl_5]
+        status: pending
+
+      - id: test_4
+        description: "Write test for middleware redirect: (a) /?ref=CODE redirects to /register?ref=CODE, (b) / without ref serves landing page normally, (c) existing protected routes still redirect to login when unauthenticated."
+        files:
+          - apps/web/src/__tests__/middleware-referral.test.ts
+        verification: "Middleware redirect works for referral URLs without breaking existing routing"
+        depends_on: [impl_1]
+        status: pending

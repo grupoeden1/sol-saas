@@ -1,14 +1,15 @@
 import { auth } from '@/lib/auth'
-import { prisma } from '@sol/db'
+import { prisma, getPricingConfig, calculateCredits } from '@sol/db'
 import { rateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit'
 import * as fs from 'fs/promises'
 import * as path from 'path'
+import * as os from 'os'
 import { getVideoDuration } from '@/lib/video/ffmpeg'
 import { processVideo } from '@/lib/video/processor'
 
 export const runtime = 'nodejs'
 
-const VIDEO_TEMP_DIR = process.env.VIDEO_TEMP_DIR || '/tmp/sol-uploads/'
+const VIDEO_TEMP_DIR = process.env.VIDEO_TEMP_DIR || path.join(os.tmpdir(), 'sol-uploads')
 const VIDEO_MAX_SIZE_MB = parseInt(process.env.VIDEO_MAX_SIZE_MB || '500', 10)
 const VIDEO_MAX_DURATION_SECONDS = parseInt(process.env.VIDEO_MAX_DURATION_SECONDS || '300', 10)
 const ALLOWED_TYPES = ['video/mp4', 'video/quicktime', 'video/x-msvideo', 'video/webm']
@@ -35,10 +36,17 @@ export async function POST(req: Request) {
     return new Response('User not found', { status: 404 })
   }
 
-  // Credit gate: video processing triggers OpenAI API calls
-  if (user.credits <= 0) {
+  // Credit gate: estimate worst-case cost for video pipeline
+  // 10 frames × ~1200 input + structure ~800 input = ~12,800 input tokens
+  // 10 frames × 200 maxOutput + structure 1500 maxOutput = 3,500 output tokens
+  const ESTIMATED_MAX_INPUT = 13_000
+  const ESTIMATED_MAX_OUTPUT = 3_500
+  const pricingConfig = await getPricingConfig()
+  const estimatedCredits = calculateCredits(ESTIMATED_MAX_INPUT, ESTIMATED_MAX_OUTPUT, pricingConfig)
+
+  if (user.credits < estimatedCredits) {
     return Response.json(
-      { error: 'Créditos insuficientes para processar vídeo' },
+      { error: `Créditos insuficientes para processar vídeo. Necessário: ~${estimatedCredits} créditos. Saldo atual: ${user.credits}.` },
       { status: 402 }
     )
   }
@@ -149,7 +157,7 @@ export async function POST(req: Request) {
   })
 
   // Start processing in background (don't await)
-  processVideo(videoPath, videoAnalysis.id).catch((err) => {
+  processVideo(videoPath, videoAnalysis.id, user.id).catch((err) => {
     console.error('[Video Upload] Background processing error:', err)
   })
 

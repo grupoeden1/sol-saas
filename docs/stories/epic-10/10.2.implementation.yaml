@@ -1,0 +1,156 @@
+story: "10.2"
+title: "One-Click Payment Engine"
+status: pending
+depends_on: ["10.1", "9.3"]
+
+phases:
+  - name: Setup
+    subtasks:
+      - id: setup_1
+        description: "Create helper module for Stripe payment method operations: hasPaymentMethod(stripeCustomerId) that calls stripe.customers.listPaymentMethods to check if customer has at least 1 saved card, and getDefaultPaymentMethod(stripeCustomerId) that returns the default payment method ID"
+        files:
+          - apps/web/src/lib/stripe-payment-methods.ts
+        status: pending
+
+      - id: setup_2
+        description: "Create Zod validation schemas for one-click payment: oneClickSchema with packageId (string, required), campaignId (string, optional). Create paymentMethodCheckSchema if needed for the has-payment-method endpoint"
+        files:
+          - apps/web/src/lib/stripe-payment-methods.ts
+        status: pending
+
+  - name: Implementation
+    subtasks:
+      - id: impl_1
+        description: "Create GET /api/payments/has-payment-method route: authenticate user via auth(), look up user.stripeCustomerId from database, if no stripeCustomerId return { hasPaymentMethod: false }. If stripeCustomerId exists, call stripe.customers.listPaymentMethods(stripeCustomerId, { type: 'card' }) and return { hasPaymentMethod: methods.data.length > 0, last4: methods.data[0]?.card?.last4 }"
+        files:
+          - apps/web/src/app/api/payments/has-payment-method/route.ts
+        verification: "GET returns { hasPaymentMethod: true/false } based on Stripe customer's saved payment methods"
+        depends_on: [setup_1]
+        status: pending
+
+      - id: impl_2
+        description: "Create POST /api/payments/one-click route - Step 1: Authentication and validation. Authenticate via auth(), validate body with oneClickSchema, look up user with stripeCustomerId, look up CreditPackage by packageId. If package not found or inactive, return 400"
+        files:
+          - apps/web/src/app/api/payments/one-click/route.ts
+        verification: "Route rejects unauthenticated requests (401), invalid input (400), and missing packages (400)"
+        depends_on: [setup_1, setup_2]
+        status: pending
+
+      - id: impl_3
+        description: "Create POST /api/payments/one-click route - Step 2: Payment method check and fallback. If user has no stripeCustomerId or no saved payment methods (via hasPaymentMethod helper), generate a Stripe Checkout Session URL using existing checkout flow pattern and return { fallback: true, checkoutUrl } so frontend can redirect to normal checkout"
+        files:
+          - apps/web/src/app/api/payments/one-click/route.ts
+        verification: "Users without saved payment method receive { fallback: true, checkoutUrl } with valid Stripe Checkout URL"
+        depends_on: [impl_2]
+        status: pending
+
+      - id: impl_4
+        description: "Create POST /api/payments/one-click route - Step 3: Campaign discount calculation. If campaignId is provided, look up PromoCampaign by id, verify status is ACTIVE and within date range. If campaign has discountPercent, calculate discounted amount: Math.round(pkg.priceBrl * (1 - campaign.discountPercent / 100)). Use original priceBrl if no campaign or no discount"
+        files:
+          - apps/web/src/app/api/payments/one-click/route.ts
+        verification: "Discount applied correctly: 20% off R$29.90 (2990 centavos) = R$23.92 (2392 centavos)"
+        depends_on: [impl_3]
+        status: pending
+
+      - id: impl_5
+        description: "Create POST /api/payments/one-click route - Step 4: PaymentIntent creation. Call stripe.paymentIntents.create with { amount (calculated with possible discount), currency: 'brl', customer: user.stripeCustomerId, payment_method: defaultPaymentMethodId, confirm: true, off_session: true, metadata: { userId, packageId, campaignId? } }, passing { idempotencyKey: `oneclick_${userId}_${packageId}_${Date.now()}` } as request options"
+        files:
+          - apps/web/src/app/api/payments/one-click/route.ts
+        verification: "PaymentIntent created with confirm:true, off_session:true, correct amount, and idempotencyKey"
+        depends_on: [impl_4]
+        status: pending
+
+      - id: impl_6
+        description: "Create POST /api/payments/one-click route - Step 5: Success handling. If paymentIntent.status === 'succeeded', call addCredits with type 'purchase' (normal purchase) or type 'promo_purchase' (when campaignId provided), passing stripePaymentId: paymentIntent.id. Return { success: true, credits: pkg.credits, newBalance: result.credits }"
+        files:
+          - apps/web/src/app/api/payments/one-click/route.ts
+        verification: "Credits added with correct TransactionType: 'purchase' for normal, 'promo_purchase' for campaign purchases. New balance returned"
+        depends_on: [impl_5]
+        status: pending
+
+      - id: impl_7
+        description: "Create POST /api/payments/one-click route - Step 6: Error handling. Catch Stripe errors: card_declined, authentication_required, insufficient_funds — return { success: false, error: user-friendly message, fallback: true, checkoutUrl } for recoverable errors. For requires_action/requires_payment_method status, return fallback to checkout. Log all errors with [OneClick] prefix"
+        files:
+          - apps/web/src/app/api/payments/one-click/route.ts
+        verification: "Stripe card_declined returns { success: false, error, fallback: true, checkoutUrl }. Authentication errors trigger fallback"
+        depends_on: [impl_6]
+        status: pending
+
+      - id: impl_8
+        description: "Add rate limiting to POST /api/payments/one-click: use rateLimit helper with key 'oneclick:' + userId, limit: 5 requests per 60 seconds. Return rateLimitResponse if exceeded"
+        files:
+          - apps/web/src/app/api/payments/one-click/route.ts
+        verification: "6th request within 60 seconds returns 429 with Retry-After header"
+        depends_on: [impl_7]
+        status: pending
+
+      - id: impl_9
+        description: "Create OneClickButton client component: accepts packageId, campaignId? props. On mount, call GET /api/payments/has-payment-method to check status. If hasPaymentMethod=true, render 'Comprar com 1 clique' button (with last4 hint). If false, render 'Comprar' button that redirects to normal checkout. On click: POST /api/payments/one-click, handle success (show toast, refresh balance), handle fallback (redirect to checkoutUrl), handle error (show error toast)"
+        files:
+          - apps/web/src/components/payments/OneClickButton.tsx
+        verification: "Button shows 'Comprar com 1 clique' when payment method saved, 'Comprar' otherwise. Click triggers correct flow"
+        depends_on: [impl_1, impl_7]
+        status: pending
+
+  - name: Integration
+    subtasks:
+      - id: int_1
+        description: "Update Stripe webhook handler to also handle payment_intent.succeeded events from one-click payments as a backup: if metadata contains userId and packageId, verify credits were already added (check CreditTransaction by stripePaymentId), if not add them. This ensures credits are added even if the one-click API response was lost"
+        files:
+          - apps/web/src/app/api/webhooks/stripe/route.ts
+        verification: "Webhook handles payment_intent.succeeded with one-click metadata, idempotent via stripePaymentId unique constraint"
+        depends_on: [impl_6]
+        status: pending
+
+      - id: int_2
+        description: "Integrate OneClickButton into the credits/buy page: import OneClickButton and render it alongside or replacing the existing checkout button for each CreditPackage card. Pass packageId prop"
+        files:
+          - apps/web/src/app/credits/buy/page.tsx
+          - apps/web/src/app/credits/buy/components/
+        verification: "Credits buy page shows one-click or normal button per package based on user's payment method status"
+        depends_on: [impl_9]
+        status: pending
+
+  - name: Testing
+    subtasks:
+      - id: test_1
+        description: "Test has-payment-method endpoint: verify returns { hasPaymentMethod: false } for user without stripeCustomerId, { hasPaymentMethod: false } for customer with no methods, { hasPaymentMethod: true, last4: '4242' } for customer with saved card"
+        verification: "All 3 scenarios return correct response"
+        depends_on: [int_2]
+        status: pending
+
+      - id: test_2
+        description: "Test one-click payment happy path: user with saved payment method purchases a package, PaymentIntent created with confirm:true, credits added with type 'purchase', response includes success:true and newBalance"
+        verification: "End-to-end one-click purchase completes, credits in database incremented, CreditTransaction created with type purchase"
+        depends_on: [int_2]
+        status: pending
+
+      - id: test_3
+        description: "Test one-click with campaign discount: create an ACTIVE PromoCampaign with discountPercent: 30, purchase via one-click with campaignId, verify amount charged is 70% of package price, credits added with type 'promo_purchase'"
+        verification: "PaymentIntent amount is discounted (e.g., 2990 * 0.7 = 2093 centavos), CreditTransaction type is promo_purchase"
+        depends_on: [int_2]
+        status: pending
+
+      - id: test_4
+        description: "Test fallback to checkout: user without stripeCustomerId calls one-click endpoint, verify response contains { fallback: true, checkoutUrl } with valid Stripe Checkout Session URL"
+        verification: "Response has fallback:true and a valid https://checkout.stripe.com URL"
+        depends_on: [int_2]
+        status: pending
+
+      - id: test_5
+        description: "Test Stripe error handling: simulate card_declined error, verify response contains user-friendly error message and fallback URL. Verify rate limiting returns 429 after 5 rapid requests"
+        verification: "Card declined returns error message + fallback. Rate limit triggers at request 6 with 429 status"
+        depends_on: [int_2]
+        status: pending
+
+      - id: test_6
+        description: "Test idempotency: send two identical one-click requests with same idempotencyKey pattern, verify only one PaymentIntent is created by Stripe (second returns same result without double-charge)"
+        verification: "No duplicate charges, Stripe returns same PaymentIntent for same idempotencyKey"
+        depends_on: [int_2]
+        status: pending
+
+      - id: test_7
+        description: "Test webhook backup: simulate payment_intent.succeeded webhook for a one-click payment where credits were already added, verify idempotent handling (no duplicate credit addition, P2002 caught gracefully)"
+        verification: "Webhook returns { received: true, duplicate: true } when credits already added"
+        depends_on: [int_1]
+        status: pending

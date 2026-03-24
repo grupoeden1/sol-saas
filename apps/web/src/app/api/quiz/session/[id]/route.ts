@@ -3,7 +3,8 @@ import { prisma } from '@sol/db'
 import { z } from 'zod'
 
 const patchSchema = z.object({
-  status: z.enum(['COMPLETED', 'ABANDONED']),
+  status: z.enum(['COMPLETED', 'ABANDONED']).optional(),
+  referenceSource: z.enum(['API_SEARCH', 'LINK_ANALYSIS', 'MANUAL_UPLOAD', 'NONE']).optional(),
 })
 
 /**
@@ -119,22 +120,36 @@ export async function PATCH(
 
   if (!parsed.success) {
     return Response.json(
-      { error: 'Status inválido. Use COMPLETED ou ABANDONED' },
+      { error: 'Dados inválidos' },
       { status: 400 }
     )
   }
 
-  const { status } = parsed.data
+  const { status, referenceSource } = parsed.data
+
+  if (!status && !referenceSource) {
+    return Response.json(
+      { error: 'Nenhum campo para atualizar' },
+      { status: 400 }
+    )
+  }
+
+  const updateData: Record<string, unknown> = {}
+  if (status) {
+    updateData.status = status
+    if (status === 'COMPLETED') updateData.completedAt = new Date()
+  }
+  if (referenceSource) {
+    updateData.referenceSource = referenceSource
+  }
 
   const updated = await prisma.quizSession.update({
     where: { id: params.id },
-    data: {
-      status,
-      ...(status === 'COMPLETED' ? { completedAt: new Date() } : {}),
-    },
+    data: updateData,
     select: {
       id: true,
       status: true,
+      referenceSource: true,
       completedAt: true,
     },
   })

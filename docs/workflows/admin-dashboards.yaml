@@ -1,0 +1,757 @@
+# =============================================================================
+# WORKFLOW: Admin Dashboards — Gráficos Temporais no Admin Console
+# =============================================================================
+# Extensão da Story 4.2 com visualizações temporais usando Recharts.
+# NÃO cria epic novo — expande o Epic 4 existente.
+#
+# Métricas visualizadas:
+#   - Cadastros de usuários ao longo do tempo
+#   - Mensagens enviadas por período
+#   - Tokens consumidos (input vs output)
+#   - Faturamento em R$ por período
+#   - Créditos vendidos vs consumidos
+#   - Custo estimado da Claude API em USD
+#   - Distribuição de uso por modelo (Sonnet vs Haiku)
+#
+# Dados vêm das tabelas: users, messages, credit_transactions, credit_packages
+# Queries SEMPRE agregadas no PostgreSQL, NUNCA no frontend.
+# =============================================================================
+
+id: workflow-admin-dashboards
+name: "Admin Dashboards — Gráficos Temporais"
+version: "1.0"
+createdAt: "2026-03-06"
+createdBy: "Eden Corporate"
+trigger: manual
+status: draft
+
+metadata:
+  project: SOL
+  epic: 4
+  story: "4.2"
+  description: >
+    Workflow completo para adicionar gráficos de tendência temporal ao painel
+    admin do SOL. Extensão da Story 4.2 — remove restrição 'sem gráficos',
+    adiciona ACs 41-48, implementa com Recharts, valida integridade de dados.
+  dependencies:
+    - story: "3.1"
+      reason: "Schema de credit_transactions necessário para queries de faturamento e consumo"
+    - story: "2.1"
+      reason: "Schema de messages necessário para queries de volume de mensagens"
+    - story: "4.1"
+      reason: "Role-based access control e proteção de rotas /admin"
+  risks:
+    - id: "R1"
+      description: "Queries de agregação com dados insuficientes geram dashboards enganosos"
+      mitigation: "Seed script com 90 dias de dados realistas + empty states em todos os gráficos"
+    - id: "R2"
+      description: "SUM/COUNT incorretos levam a tomadas de decisão erradas"
+      mitigation: "QA com validação cruzada: gráficos vs SQL direto no banco"
+    - id: "R3"
+      description: "Timezone inconsistente distorce agrupamentos por dia"
+      mitigation: "DATE_TRUNC sempre no PostgreSQL com timezone America/Sao_Paulo"
+
+# =============================================================================
+# PHASES
+# =============================================================================
+
+phases:
+  # ===========================================================================
+  # PHASE 1 — PRD UPDATE
+  # ===========================================================================
+  - id: phase-1-prd
+    name: "Atualização do PRD"
+    description: "Atualizar PRD v10.0 → v11.0 com extensão da Story 4.2"
+    agent: "@pm"
+
+    steps:
+      - id: "1.1"
+        action: "update-prd"
+        description: "Atualizar PRD com novos ACs e FR para dashboards visuais"
+        prompt: |
+          @pm — Atualizar PRD v10.0 → v11.0 com as seguintes alterações na Story 4.2 (Admin Console):
+
+          1. **Remover restrição AC33** ("Sem gráficos ou charts") — substituir por:
+             "Gráficos de linha temporal implementados com Recharts para métricas que
+             se beneficiam de visualização de tendência."
+
+          2. **Adicionar ACs de Visualização Temporal (novos ACs 41-48):**
+
+             - AC41: Gráfico de linha — novos usuários cadastrados por dia/semana/mês
+               (últimos 30/60/90 dias).
+               Dados: `COUNT(users) GROUP BY DATE(created_at)`.
+               Seletor de granularidade (dia/semana/mês).
+
+             - AC42: Gráfico de linha — mensagens enviadas por dia/semana
+               (últimos 30/60/90 dias).
+               Dados: `COUNT(messages) WHERE role='user' GROUP BY DATE(created_at)`.
+               Separação visual: total vs com anexo.
+
+             - AC43: Gráfico de área empilhada — tokens consumidos por período
+               (input vs output).
+               Dados: `SUM(input_tokens), SUM(output_tokens) FROM credit_transactions
+               WHERE type='consumption' GROUP BY DATE(created_at)`.
+
+             - AC44: Gráfico de barras — faturamento por semana/mês em R$.
+               Dados: JOIN `credit_transactions` (type=purchase) com `credit_packages`
+               para `price_in_cents`, GROUP BY período.
+
+             - AC45: Gráfico de linha dupla — créditos vendidos vs consumidos por período.
+               Dados: `SUM(amount) FROM credit_transactions GROUP BY type, DATE(created_at)`.
+
+             - AC46: Gráfico de linha — custo estimado Claude API por período em USD.
+               Dados: tokens × pricing Anthropic
+               (claude-sonnet-4-5-20250929: $3/MTok input, $15/MTok output;
+               claude-haiku-4-5-20251001: $0.80/MTok input, $4/MTok output),
+               agrupado por `model_used`.
+
+             - AC47: Gráfico de barras — distribuição de uso por modelo (Sonnet vs Haiku)
+               por período.
+               Dados: `COUNT(*) FROM credit_transactions WHERE type='consumption'
+               GROUP BY model_used, DATE(created_at)`.
+
+             - AC48: Todos os gráficos possuem: tooltip com valores exatos, seletor de
+               período (7d, 30d, 60d, 90d), loading state, empty state
+               ("Sem dados para o período selecionado").
+
+          3. **Adicionar ao Technical Assumptions:**
+             Recharts como dependência de visualização (já disponível no ecossistema
+             Shadcn/UI). Server Components carregam dados agregados, gráficos renderizam
+             em Client Components (`'use client'`). Queries de agregação com índices em
+             `created_at` nas tabelas `users`, `messages`, `credit_transactions`.
+
+          4. **Adicionar FR34:**
+             O painel admin deve exibir gráficos de tendência temporal para: cadastros,
+             mensagens, tokens, faturamento, créditos e custo da API. Gráficos
+             atualizáveis por período (7d, 30d, 60d, 90d) com granularidade ajustável.
+
+          5. **Não criar epic novo** — manter dentro do Epic 4 como extensão natural
+             da Story 4.2. A razão é que as queries base já estão definidas nos ACs
+             existentes e os gráficos são visualização dos mesmos dados.
+
+          Manter changelog atualizado. Não alterar nenhum outro Epic, Story ou FR existente.
+
+        artifacts:
+          - "docs/prd.md"
+        verification:
+          type: manual
+          instructions: |
+            Verificar que:
+            - PRD está na v11.0
+            - AC33 foi substituído (não removido sem substituto)
+            - ACs 41-48 estão presentes na Story 4.2
+            - FR34 foi adicionado à lista de Functional Requirements
+            - Technical Assumptions menciona Recharts
+            - Changelog tem entrada para v11.0
+            - Nenhum outro Epic/Story/FR foi alterado
+
+  # ===========================================================================
+  # PHASE 2 — ARCHITECTURE UPDATE
+  # ===========================================================================
+  - id: phase-2-architecture
+    name: "Atualização da Arquitetura"
+    description: "Atualizar architecture.md com nova dependência, índices e padrão de componentes"
+    agent: "@architect"
+    dependsOn: ["phase-1-prd"]
+
+    steps:
+      - id: "2.1"
+        action: "update-architecture"
+        description: "Atualizar documento de arquitetura com Recharts, índices e estrutura"
+        prompt: |
+          @architect — PRD atualizado para v11.0 com extensão da Story 4.2:
+          dashboards visuais com gráficos temporais no admin console.
+          Atualizar `docs/architecture.md`:
+
+          1. **Nova dependência:** Recharts (já disponível no ecossistema).
+             Adicionar à tabela de tech stack com rationale:
+             "Biblioteca de gráficos React declarativa, sem lock-in, integrada
+             ao Shadcn/UI."
+
+          2. **Padrão de dados para gráficos:**
+             Queries agregadas via Prisma `groupBy` com `_count` e `_sum`.
+             Server Components executam queries, serializam dados como props
+             para Client Components que renderizam com Recharts.
+             Nunca fazer agregação no frontend — dados já chegam agregados
+             do banco.
+
+          3. **Índices de performance:** Adicionar ao schema índices compostos
+             para queries temporais:
+             - `users`: índice em `created_at`
+             - `messages`: índice composto `(created_at, role)` — filtra só
+               mensagens de user
+             - `credit_transactions`: índice composto `(type, created_at)` —
+               cobre queries de faturamento e consumo
+             - `credit_transactions`: índice em `model_used` — cobre queries
+               de distribuição por modelo
+
+          4. **Estrutura de componentes:**
+             `components/admin/charts/` com componentes:
+             - `users-chart.tsx`
+             - `messages-chart.tsx`
+             - `tokens-chart.tsx`
+             - `revenue-chart.tsx`
+             - `credits-chart.tsx`
+             - `api-cost-chart.tsx`
+             - `model-distribution-chart.tsx`
+             Cada componente é Client Component que recebe dados serializados
+             via props.
+
+          5. **API Routes de agregação:**
+             `GET /api/admin/metrics/[metric]?period=30d&granularity=day`
+             retorna dados agregados para cada métrica.
+             Rota protegida por `role: ADMIN`.
+             Validar período (7, 30, 60, 90) e granularidade (day, week, month)
+             com Zod.
+
+          Validar que nenhuma decisão viola zero lock-in.
+          Recharts é MIT, sem vendor dependency.
+
+        artifacts:
+          - "docs/architecture.md"
+        verification:
+          type: manual
+          instructions: |
+            Verificar que:
+            - Recharts adicionado à tabela de tech stack com versão e rationale
+            - Padrão Server Component → Client Component documentado
+            - Índices listados com justificativa para cada um
+            - Estrutura de componentes em components/admin/charts/ documentada
+            - API route pattern /api/admin/metrics/[metric] especificado
+            - Zero lock-in não violado
+            - source-tree.md atualizado se necessário
+
+  # ===========================================================================
+  # PHASE 3 — STORY UPDATE
+  # ===========================================================================
+  - id: phase-3-story
+    name: "Atualização da Story"
+    description: "Expandir Story 4.2 com tasks e subtasks para gráficos"
+    agent: "@sm"
+    dependsOn: ["phase-2-architecture"]
+
+    steps:
+      - id: "3.1"
+        action: "update-story"
+        description: "Atualizar story 4.2 com novos ACs, tasks e dev notes"
+        prompt: |
+          @sm — PRD v11.0 e Arquitetura atualizados. A Story 4.2 foi expandida
+          com ACs 41-48 (gráficos temporais no admin console).
+          Atualizar `docs/stories/4.2.story.md`:
+
+          1. Incorporar novos ACs (41-48) à story existente — não criar story
+             separada.
+
+          2. Adicionar tasks/subtasks para os gráficos:
+
+             - Task: Adicionar índices de banco nas migrations para performance
+               de queries temporais. Índices:
+               * `users(created_at)`
+               * `messages(created_at, role)`
+               * `credit_transactions(type, created_at)`
+               * `credit_transactions(model_used)`
+
+             - Task: Criar API Route de métricas agregadas
+               (`GET /api/admin/metrics/[metric]`) com validação Zod de período
+               e granularidade. Métricas suportadas: users, messages, tokens,
+               revenue, credits, api-cost, model-distribution.
+               Cada métrica retorna array de `{ date: string, value: number }`
+               (ou `{ date, input, output }` para tokens).
+
+             - Task: Implementar queries Prisma de agregação temporal para cada
+               métrica. Usar `DATE_TRUNC` via raw query quando groupBy não
+               suportar granularidade. Timezone: `America/Sao_Paulo`.
+
+             - Task: Criar componentes Client Component com Recharts para cada
+               gráfico em `components/admin/charts/`. Componentes:
+               users-chart, messages-chart, tokens-chart, revenue-chart,
+               credits-chart, api-cost-chart, model-distribution-chart.
+
+             - Task: Criar componente wrapper `chart-container.tsx` com:
+               seletor de período (7d/30d/60d/90d), seletor de granularidade
+               (dia/semana/mês), loading state (skeleton), empty state.
+
+             - Task: Integrar gráficos na página `/admin` em seção dedicada
+               "Tendências" abaixo das métricas numéricas existentes.
+
+             - Task: Criar seed script de desenvolvimento com dados realistas
+               distribuídos em 90 dias: ~50 users, ~500 messages,
+               ~200 credit_transactions (mix purchase/consumption),
+               modelos variados (Sonnet/Haiku).
+
+          3. Adicionar ao Dev Notes:
+             - Padrão: Server Component executa query → serializa → passa como
+               props para Client Component com Recharts
+             - Recharts é a única lib de charts permitida
+             - Dados SEMPRE agregados no banco (nunca no frontend)
+             - `DATE_TRUNC` executado no PostgreSQL, não no JS
+             - Timezone consistente: America/Sao_Paulo
+             - Paleta de cores: amber/orange para linhas primárias,
+               zinc para grid/eixos (paleta solar do SOL)
+             - Todos os gráficos dentro de `ResponsiveContainer`
+
+          4. Atualizar Definition of Done:
+             - Gráficos renderizam corretamente com dados de seed
+             - Gráficos exibem empty state quando sem dados
+             - Valores nos tooltips dos gráficos batem com valores nas tabelas
+               numéricas (ACs 5-23) para o mesmo período
+             - Queries de 90 dias retornam em < 500ms com seed de 10k registros
+             - Todas as rotas /api/admin/metrics/* retornam 403 sem role ADMIN
+
+          5. Dependências explícitas:
+             - Story 3.1 (schema credit_transactions) — DEVE estar completa
+             - Story 2.1 (schema messages) — DEVE estar completa
+             - Story 4.1 (role-based access) — DEVE estar completa
+
+        artifacts:
+          - "docs/stories/4.2.story.md"
+        verification:
+          type: manual
+          instructions: |
+            Verificar que:
+            - ACs 41-48 estão na story com texto completo
+            - Tasks cobrem: índices, API route, queries, componentes, seed
+            - Dev Notes incluem padrão de dados e restrições
+            - Definition of Done inclui validação de integridade
+            - Dependências de stories 3.1, 2.1, 4.1 documentadas
+
+  # ===========================================================================
+  # PHASE 4 — IMPLEMENTATION
+  # ===========================================================================
+  - id: phase-4-implementation
+    name: "Implementação"
+    description: "Implementar índices, API routes, queries e componentes de gráficos"
+    agent: "@dev"
+    dependsOn: ["phase-3-story"]
+
+    steps:
+      - id: "4.1"
+        action: "implement-indexes"
+        description: "Adicionar índices de performance nas migrations Prisma"
+        prompt: |
+          @dev — Implementar índices de banco para queries temporais dos
+          dashboards admin (Story 4.2, pré-requisito para gráficos).
+
+          Adicionar ao schema.prisma os seguintes índices:
+
+          ```prisma
+          model User {
+            // ... campos existentes
+            @@index([createdAt])
+          }
+
+          model Message {
+            // ... campos existentes
+            @@index([createdAt, role])
+          }
+
+          model CreditTransaction {
+            // ... campos existentes
+            @@index([type, createdAt])
+            @@index([modelUsed])
+          }
+          ```
+
+          Rodar `prisma migrate dev --name add-admin-dashboard-indexes`.
+          Verificar que migration aplica sem erros e não afeta dados existentes.
+
+        files:
+          - "packages/db/prisma/schema.prisma"
+        verification:
+          type: command
+          command: "cd packages/db && npx prisma migrate dev --name add-admin-dashboard-indexes"
+
+      - id: "4.2"
+        action: "implement-api-routes"
+        description: "Criar API route de métricas agregadas com Zod validation"
+        prompt: |
+          @dev — Implementar API route de métricas agregadas para dashboards admin.
+
+          Criar `apps/web/app/api/admin/metrics/[metric]/route.ts`:
+
+          - `GET /api/admin/metrics/[metric]?period=30d&granularity=day`
+          - Métricas suportadas: `users`, `messages`, `tokens`, `revenue`,
+            `credits`, `api-cost`, `model-distribution`
+          - Validação Zod:
+            * `metric`: enum das 7 métricas
+            * `period`: enum `7d | 30d | 60d | 90d` (default: 30d)
+            * `granularity`: enum `day | week | month` (default: day)
+          - Verificar `role: ADMIN` server-side (não confiar só no middleware)
+          - Retornar 403 se não admin, 400 se params inválidos
+
+          Formato de resposta padrão:
+          ```typescript
+          interface MetricDataPoint {
+            date: string        // ISO date: "2026-03-01"
+            value: number       // valor principal
+            secondary?: number  // valor secundário (ex: output tokens)
+            label?: string      // label opcional (ex: nome do modelo)
+          }
+
+          // Response
+          { data: MetricDataPoint[], period: string, granularity: string }
+          ```
+
+          Queries DEVEM usar `DATE_TRUNC` no PostgreSQL via Prisma raw query:
+          ```sql
+          SELECT
+            DATE_TRUNC('day', created_at AT TIME ZONE 'America/Sao_Paulo') as date,
+            COUNT(*) as value
+          FROM users
+          WHERE created_at >= NOW() - INTERVAL '30 days'
+          GROUP BY date
+          ORDER BY date ASC
+          ```
+
+          NUNCA agregar no JavaScript. SEMPRE no PostgreSQL.
+          Timezone SEMPRE `America/Sao_Paulo`.
+
+        files:
+          - "apps/web/app/api/admin/metrics/[metric]/route.ts"
+        verification:
+          type: command
+          command: "npm run typecheck"
+
+      - id: "4.3"
+        action: "implement-chart-components"
+        description: "Criar componentes Recharts para cada gráfico"
+        prompt: |
+          @dev — Implementar componentes de gráficos com Recharts para o
+          admin console (Story 4.2, ACs 41-48).
+
+          Instalar Recharts: `pnpm add recharts` em `apps/web`.
+
+          Criar componente wrapper `components/admin/charts/chart-container.tsx`:
+          - Client Component (`'use client'`)
+          - Props: `title`, `children`, `onPeriodChange`, `onGranularityChange`
+          - Seletor de período: botões 7d / 30d / 60d / 90d
+          - Seletor de granularidade: dia / semana / mês
+          - Loading state: skeleton animado no tamanho do gráfico
+          - Empty state: mensagem "Sem dados para o período selecionado"
+            com ícone sutil
+          - Tamanho responsivo via `ResponsiveContainer` do Recharts
+
+          Criar 7 componentes em `components/admin/charts/`:
+
+          1. `users-chart.tsx` — LineChart
+             Linha: novos cadastros por período
+             Cor: amber-500
+
+          2. `messages-chart.tsx` — LineChart
+             Linha 1: total de mensagens (amber-500)
+             Linha 2: mensagens com anexo (orange-400, dashed)
+
+          3. `tokens-chart.tsx` — AreaChart (empilhado)
+             Área 1: input tokens (amber-500)
+             Área 2: output tokens (orange-600)
+
+          4. `revenue-chart.tsx` — BarChart
+             Barras: faturamento em R$ por período
+             Cor: amber-500
+             Tooltip: formatação em R$ (ex: "R$ 2.990,00")
+
+          5. `credits-chart.tsx` — LineChart (linha dupla)
+             Linha 1: créditos vendidos (emerald-500)
+             Linha 2: créditos consumidos (amber-500)
+
+          6. `api-cost-chart.tsx` — LineChart
+             Linha: custo estimado em USD
+             Cor: amber-500
+             Tooltip: formatação em USD (ex: "$12.34")
+
+          7. `model-distribution-chart.tsx` — BarChart (empilhado)
+             Barra 1: Sonnet (amber-500)
+             Barra 2: Haiku (orange-400)
+
+          Todos os gráficos:
+          - Dentro de ResponsiveContainer (width="100%", height={300})
+          - Grid com stroke zinc-700 (dark theme)
+          - Eixos com tick fill zinc-400
+          - Tooltip com background zinc-800, border zinc-700
+          - Cursor com stroke zinc-600
+          - Animação suave (animationDuration={300})
+
+          IMPORTANTE: Cada componente recebe dados já agregados via props.
+          Nenhum componente faz fetch ou query — apenas renderiza.
+
+        files:
+          - "apps/web/components/admin/charts/chart-container.tsx"
+          - "apps/web/components/admin/charts/users-chart.tsx"
+          - "apps/web/components/admin/charts/messages-chart.tsx"
+          - "apps/web/components/admin/charts/tokens-chart.tsx"
+          - "apps/web/components/admin/charts/revenue-chart.tsx"
+          - "apps/web/components/admin/charts/credits-chart.tsx"
+          - "apps/web/components/admin/charts/api-cost-chart.tsx"
+          - "apps/web/components/admin/charts/model-distribution-chart.tsx"
+        verification:
+          type: command
+          command: "npm run typecheck && npm run build"
+
+      - id: "4.4"
+        action: "implement-admin-integration"
+        description: "Integrar gráficos na página /admin com data fetching"
+        prompt: |
+          @dev — Integrar gráficos na página `/admin` existente.
+
+          Criar seção "Tendências" abaixo das métricas numéricas existentes
+          na página `/admin`.
+
+          Padrão de integração:
+          1. Server Component (`page.tsx` ou componente server) faz fetch
+             para `/api/admin/metrics/[metric]` com período default (30d)
+          2. Serializa dados como props
+          3. Passa para Client Component wrapper que contém os gráficos
+          4. Wrapper gerencia estado de período/granularidade e re-fetcha
+             via `fetch()` quando usuário muda seletor
+
+          Criar `components/admin/charts/admin-charts-section.tsx`:
+          - Client Component (`'use client'`)
+          - Recebe dados iniciais via props (SSR do período default)
+          - Gerencia re-fetch quando período/granularidade muda
+          - Grid responsivo: 2 colunas em desktop, 1 em mobile
+          - Cada gráfico em card com borda zinc-800
+
+          Layout dos gráficos na seção (ordem):
+          1. Faturamento (revenue) — destaque, largura total
+          2. Cadastros (users) | Mensagens (messages) — lado a lado
+          3. Tokens (tokens) | Custo API (api-cost) — lado a lado
+          4. Créditos (credits) | Modelos (model-distribution) — lado a lado
+
+          Integrar na página `/admin` existente sem quebrar nada:
+          - Métricas numéricas existentes (ACs 5-23) permanecem intactas acima
+          - Seção de gráficos aparece abaixo com título "Tendências"
+          - Adição manual de créditos permanece intacta
+
+        files:
+          - "apps/web/components/admin/charts/admin-charts-section.tsx"
+          - "apps/web/app/(dashboard)/admin/page.tsx"
+        verification:
+          type: browser
+          url: "http://localhost:3000/admin"
+          actions:
+            - "Verificar seção Tendências visível abaixo das métricas numéricas"
+            - "Verificar 7 gráficos renderizando (com dados ou empty state)"
+            - "Verificar seletores de período funcionando"
+            - "Verificar responsividade (2 cols desktop, 1 col mobile)"
+            - "Verificar métricas numéricas existentes não afetadas"
+
+      - id: "4.5"
+        action: "implement-seed"
+        description: "Criar seed script com dados realistas para validar gráficos"
+        prompt: |
+          @dev — Criar seed script de desenvolvimento para validar dashboards.
+
+          Criar `packages/db/prisma/seed-dashboard.ts`:
+
+          Gerar dados distribuídos ao longo de 90 dias:
+
+          - **Users (~50):** datas de cadastro distribuídas com concentração
+            maior nas últimas 4 semanas (simula crescimento)
+
+          - **Messages (~500):** distribuídas entre os users, role alternando
+            user/assistant, datas variadas. ~15% com hasAttachments=true
+
+          - **Credit Transactions (~200):**
+            * ~60 purchases: amounts variados (100, 500, 1200 créditos),
+              stripePaymentId único, datas distribuídas
+            * ~130 consumptions: amounts negativos variados (-1 a -20),
+              inputTokens (500-5000), outputTokens (200-4000),
+              modelUsed alternando "claude-sonnet-4-5-20250929" (~40%)
+              e "claude-haiku-4-5-20251001" (~60%),
+              creditsPerMInput=500, creditsPerMOutput=2000
+            * ~10 adjustments: amounts variados, adminEmail="admin@sol.com"
+
+          - **Credit Packages (3):** Starter(100, 2990), Pro(500, 9990),
+            Max(1200, 19990) — se não existirem
+
+          Script deve ser idempotente — rodar múltiplas vezes sem duplicar.
+          Usar `prisma.$transaction` para consistência.
+          Adicionar script ao package.json: `"db:seed-dashboard": "..."`
+
+        files:
+          - "packages/db/prisma/seed-dashboard.ts"
+          - "package.json"
+        verification:
+          type: command
+          command: "npm run db:seed-dashboard"
+
+  # ===========================================================================
+  # PHASE 5 — QUALITY ASSURANCE
+  # ===========================================================================
+  - id: phase-5-qa
+    name: "Quality Assurance"
+    description: "Validação de integridade de dados, edge cases e segurança"
+    agent: "@qa"
+    dependsOn: ["phase-4-implementation"]
+
+    steps:
+      - id: "5.1"
+        action: "review-data-integrity"
+        description: "Validar integridade dos dados exibidos nos gráficos"
+        prompt: |
+          @qa — Review da extensão de gráficos da Story 4.2.
+          Foco CRÍTICO em confiabilidade de dados.
+
+          1. **Validação cruzada (PRIORIDADE MÁXIMA):**
+             Comparar valores exibidos nos gráficos com queries SQL diretas
+             no banco. Garantir que:
+             - SUM de faturamento no gráfico = SUM real na tabela
+               `credit_transactions` JOIN `credit_packages`
+             - COUNT de usuários no gráfico = COUNT real na tabela `users`
+             - SUM de tokens no gráfico = SUM real com filtro
+               `type='consumption'`
+             - Créditos vendidos = SUM(amount) WHERE type='purchase'
+             - Créditos consumidos = SUM(ABS(amount)) WHERE type='consumption'
+
+             PROCEDIMENTO: Para cada gráfico, executar query SQL manual
+             no banco com seed de teste e comparar com valor exibido no
+             tooltip do gráfico. Documentar query + resultado esperado
+             + resultado obtido.
+
+          2. **Edge cases temporais:**
+             - Timezone: registros criados às 23:59 e 00:01 de Brasília —
+               devem cair no dia correto
+             - Meses de tamanhos diferentes: fevereiro (28/29), meses com
+               30 e 31 dias
+             - Período sem nenhum dado: gráfico deve mostrar empty state,
+               não quebrar
+             - Primeiro dia de uso: apenas 1 registro — gráfico deve
+               renderizar ponto único
+             - Granularidade semanal: semanas que cruzam meses devem
+               agrupar corretamente
+
+          3. **Consistência entre views:**
+             Os números dos ACs 5-23 (métricas tabulares existentes) DEVEM
+             bater com os totais visíveis nos gráficos (ACs 41-47) para
+             o mesmo período. Especificamente:
+             - "Total de mensagens" (AC10) = soma dos pontos do gráfico
+               de mensagens (AC42) no período total
+             - "Receita bruta total" (AC16) = soma das barras do gráfico
+               de faturamento (AC44) no período total
+             - "Total tokens input/output" (AC12) = soma das áreas do
+               gráfico de tokens (AC43) no período total
+
+          4. **Segurança:**
+             - GET /api/admin/metrics/users com sessão de user comum
+               → deve retornar 403
+             - GET /api/admin/metrics/revenue sem sessão
+               → deve retornar 401
+             - GET /api/admin/metrics/invalid-metric
+               → deve retornar 400
+             - GET /api/admin/metrics/users?period=365d
+               → deve retornar 400 (período inválido)
+
+          5. **Performance:**
+             - Rodar seed com 10.000+ credit_transactions
+             - Queries de 90 dias devem retornar em < 500ms
+             - Verificar que índices estão sendo usados via EXPLAIN ANALYZE
+             - Página /admin deve carregar em < 3s com todos os gráficos
+
+          6. **Regressão:**
+             - Métricas numéricas existentes (ACs 5-23) continuam funcionando
+             - Formulário de adição manual de créditos funciona
+             - Navegação para /admin/pricing funciona
+             - Auth, chat, streaming SSE, webhook Stripe não afetados
+
+          Gerar relatório de QA com: PASS/FAIL por item,
+          evidências de validação cruzada, issues encontradas.
+
+        artifacts:
+          - "docs/qa/4.2-dashboards-qa-report.md"
+        verification:
+          type: manual
+          instructions: |
+            Verificar que:
+            - Relatório de QA gerado com PASS/FAIL por item
+            - Validação cruzada SQL vs gráfico documentada
+            - Nenhum FAIL crítico (dados incorretos)
+            - Issues menores documentados como backlog items
+
+  # ===========================================================================
+  # PHASE 6 — FIX & FINAL VALIDATION
+  # ===========================================================================
+  - id: phase-6-fixes
+    name: "Correções e Validação Final"
+    description: "Corrigir issues do QA e validar DoD"
+    agent: "@dev"
+    dependsOn: ["phase-5-qa"]
+
+    steps:
+      - id: "6.1"
+        action: "fix-qa-issues"
+        description: "Aplicar correções baseadas no relatório de QA"
+        prompt: |
+          @dev — Aplicar correções do relatório de QA da Story 4.2
+          (docs/qa/4.2-dashboards-qa-report.md).
+
+          PRIORIDADE:
+          1. Qualquer discrepância de dados (validação cruzada falhou)
+          2. Problemas de segurança (rotas sem verificação de role)
+          3. Edge cases de timezone/período
+          4. Issues visuais ou de UX
+
+          Para cada fix:
+          - Referenciar o item do QA report
+          - Explicar a causa raiz
+          - Implementar a correção
+          - Verificar que não introduz regressão
+
+        verification:
+          type: command
+          command: "npm run typecheck && npm run lint && npm run build"
+
+      - id: "6.2"
+        action: "validate-dod"
+        description: "Validação final do Definition of Done"
+        prompt: |
+          @dev — Validação final do Definition of Done da Story 4.2
+          (extensão com gráficos).
+
+          Checklist:
+          - [ ] Gráficos renderizam com dados de seed (7 gráficos)
+          - [ ] Empty state funciona quando sem dados
+          - [ ] Seletores de período (7d/30d/60d/90d) funcionam
+          - [ ] Seletores de granularidade (dia/semana/mês) funcionam
+          - [ ] Tooltips mostram valores corretos formatados
+          - [ ] Valores dos gráficos batem com métricas tabulares
+          - [ ] Queries retornam em < 500ms (90 dias, seed 10k)
+          - [ ] Rotas /api/admin/metrics/* protegidas (403 sem ADMIN)
+          - [ ] Métricas numéricas existentes não afetadas
+          - [ ] Adição manual de créditos funciona
+          - [ ] Responsivo: 2 cols desktop, 1 col mobile
+          - [ ] Visual dark/solar consistente
+          - [ ] npm run typecheck passa
+          - [ ] npm run lint passa
+          - [ ] npm run build passa
+
+        verification:
+          type: manual
+          instructions: "Todos os itens do checklist marcados como concluídos"
+
+# =============================================================================
+# SUMMARY
+# =============================================================================
+summary:
+  totalPhases: 6
+  agents:
+    - agent: "@pm"
+      phases: ["phase-1-prd"]
+      role: "Atualiza PRD v10→v11 com ACs 41-48 e FR34"
+    - agent: "@architect"
+      phases: ["phase-2-architecture"]
+      role: "Define índices, padrão de dados, estrutura de componentes"
+    - agent: "@sm"
+      phases: ["phase-3-story"]
+      role: "Expande Story 4.2 com tasks, dev notes e DoD"
+    - agent: "@dev"
+      phases: ["phase-4-implementation", "phase-6-fixes"]
+      role: "Implementa índices, API routes, componentes Recharts, seed, fixes"
+    - agent: "@qa"
+      phases: ["phase-5-qa"]
+      role: "Valida integridade de dados, edge cases, segurança, performance"
+  criticalPath: "PRD → Architecture → Story → Implementation → QA → Fixes"
+  estimatedEffort: "3-4 days"
+  keyRisk: >
+    Integridade dos dados nos gráficos. Um SUM incorreto ou filtro faltando
+    gera dashboard que conta história falsa. QA com validação cruzada contra
+    SQL direto é o gate obrigatório antes de considerar completo.

@@ -46,6 +46,15 @@ async function main() {
     { key: 'CREDITS_PER_M_INPUT', value: 500 },
     { key: 'CREDITS_PER_M_OUTPUT', value: 2000 },
     { key: 'MAX_OUTPUT_TOKENS', value: 8192 },
+    { key: 'UPSELL_ENABLED', value: 0 },
+    { key: 'UPSELL_LOW_CREDITS_THRESHOLD', value: 50 },
+    // Subscriptions (Epic 9)
+    { key: 'SUBSCRIPTIONS_ENABLED', value: 0 },
+    // Referral Program (Epic 11)
+    { key: 'REFERRAL_ENABLED', value: 0 },
+    { key: 'REFERRAL_REFERRER_CREDITS', value: 100 },
+    { key: 'REFERRAL_REFERRED_CREDITS', value: 50 },
+    { key: 'REFERRAL_MAX_PER_USER', value: 20 },
   ];
 
   for (const cfg of pricingDefaults) {
@@ -71,6 +80,23 @@ async function main() {
     }
   }
   console.log('✓ CreditPackages seeded');
+
+  // ─── Seed: SubscriptionPlans ──────────────────────────────────────────
+  const subscriptionPlans = [
+    { name: 'Básico', creditsMonthly: 200, priceInCents: 4990, sortOrder: 1 },
+    { name: 'Profissional', creditsMonthly: 600, priceInCents: 11990, sortOrder: 2 },
+    { name: 'Ilimitado', creditsMonthly: 1500, priceInCents: 24990, sortOrder: 3 },
+  ];
+
+  for (const plan of subscriptionPlans) {
+    const existing = await prisma.subscriptionPlan.findFirst({ where: { name: plan.name } });
+    if (!existing) {
+      await prisma.subscriptionPlan.create({
+        data: { name: plan.name, creditsMonthly: plan.creditsMonthly, priceInCents: plan.priceInCents, active: false, sortOrder: plan.sortOrder },
+      });
+    }
+  }
+  console.log('✓ SubscriptionPlans seeded');
 
   // ─── Seed: OnboardingProfile de teste ──────────────────────────────────
   const user = await prisma.user.findUnique({ where: { email: devEmail } });

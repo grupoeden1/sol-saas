@@ -42,7 +42,7 @@ export interface FinancialMetrics {
   revenueLastMonthCents: number
   totalCreditsConsumed: number
   totalAdjustmentCredits: number
-  estimatedOpenAICostUsd: number
+  estimatedApiCostUsd: number
 }
 
 // ─── Helpers de data ─────────────────────────────────────────────────────────
@@ -184,12 +184,18 @@ export async function getUsersList(
 
 // ─── Métricas financeiras ─────────────────────────────────────────────────────
 
-// OpenAI API pricing (USD per 1M tokens) — updated 2026-03
-const OPENAI_PRICING: Record<string, { input: number; output: number }> = {
+// API pricing (USD per 1M tokens) — updated 2026-03
+export const API_PRICING: Record<string, { input: number; output: number }> = {
+  // Anthropic
+  'claude-haiku-4-5-20251001': { input: 0.80, output: 4.00 },
+  'claude-sonnet-4-5-20250929': { input: 3.00, output: 15.00 },
+  // OpenAI
   'gpt-4o-mini': { input: 0.15, output: 0.60 },
   'gpt-4o': { input: 2.50, output: 10.00 },
+  'gpt-4o-mini-2024-07-18': { input: 0.15, output: 0.60 },
+  'gpt-4o-2024-11-20': { input: 2.50, output: 10.00 },
 }
-const DEFAULT_MODEL_PRICING = OPENAI_PRICING['gpt-4o-mini']!
+export const DEFAULT_MODEL_PRICING = API_PRICING['claude-haiku-4-5-20251001']!
 
 export async function getFinancialMetrics(): Promise<FinancialMetrics> {
   const { firstDayThisMonth, firstDayLastMonth } = getMonthBoundaries()
@@ -216,7 +222,7 @@ export async function getFinancialMetrics(): Promise<FinancialMetrics> {
         AND ct."createdAt" >= ${firstDayLastMonth} AND ct."createdAt" < ${firstDayThisMonth}`,
   ])
 
-  // OpenAI cost estimation: group consumption tokens by model
+  // API cost estimation: group consumption tokens by model
   type CostRow = { modelUsed: string | null; total_input: bigint; total_output: bigint }
   const costRows = await prisma.$queryRaw<CostRow[]>`
     SELECT "modelUsed",
@@ -226,12 +232,12 @@ export async function getFinancialMetrics(): Promise<FinancialMetrics> {
     WHERE type = 'consumption'
     GROUP BY "modelUsed"`
 
-  let estimatedOpenAICostUsd = 0
+  let estimatedApiCostUsd = 0
   for (const row of costRows) {
-    const pricing = OPENAI_PRICING[row.modelUsed ?? ''] ?? DEFAULT_MODEL_PRICING
+    const pricing = API_PRICING[row.modelUsed ?? ''] ?? DEFAULT_MODEL_PRICING
     const inputCost = (Number(row.total_input) / 1_000_000) * pricing.input
     const outputCost = (Number(row.total_output) / 1_000_000) * pricing.output
-    estimatedOpenAICostUsd += inputCost + outputCost
+    estimatedApiCostUsd += inputCost + outputCost
   }
 
   const [consumptionAll, adjustmentsAll] = await Promise.all([
@@ -251,6 +257,6 @@ export async function getFinancialMetrics(): Promise<FinancialMetrics> {
     revenueLastMonthCents: Number(revenueLastMonthRows[0]?.total_cents ?? 0),
     totalCreditsConsumed: Math.abs(consumptionAll._sum.amount ?? 0),
     totalAdjustmentCredits: adjustmentsAll._sum.amount ?? 0,
-    estimatedOpenAICostUsd: Math.round(estimatedOpenAICostUsd * 100) / 100,
+    estimatedApiCostUsd: Math.round(estimatedApiCostUsd * 100) / 100,
   }
 }

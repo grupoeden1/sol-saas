@@ -3,17 +3,10 @@ const nextConfig = {
   reactStrictMode: true,
   transpilePackages: ['@sol/db'],
 
-  // Exclude native/WASM packages from webpack bundling — they only run server-side
-  // tiktoken: WASM (token counting), pdf-parse: pdfjs-dist, mammoth: DOCX, sharp: native C++
+  // Exclude native packages from webpack bundling — they only run server-side
+  // pdf-parse: pdfjs-dist, mammoth: DOCX, sharp: native C++
   experimental: {
-    serverComponentsExternalPackages: ['tiktoken', 'pdf-parse', 'mammoth', 'sharp', 'ffmpeg-static', '@ffprobe-installer/ffprobe'],
-  },
-
-  webpack: (config, { isServer }) => {
-    if (isServer) {
-      config.externals.push('tiktoken');
-    }
-    return config;
+    serverComponentsExternalPackages: ['pdf-parse', 'mammoth', 'sharp', 'ffmpeg-static', '@ffprobe-installer/ffprobe', '@qdrant/js-client-rest', 'undici'],
   },
 
   // Security headers

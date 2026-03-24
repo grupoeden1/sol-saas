@@ -42,7 +42,10 @@ export async function GET(
       },
     });
 
-    return Response.json(messages);
+    return Response.json({
+      messages,
+      quizSessionId: conversation.quizSessionId,
+    });
   } catch (error) {
     console.error('[Messages API] Error:', error instanceof Error ? error.message : 'Unknown');
     return new Response('Internal server error', { status: 500 });

@@ -8,6 +8,8 @@ import Logo from '@/components/Logo'
 import { formatDistanceToNow } from 'date-fns'
 import { ptBR } from 'date-fns/locale'
 import ReactMarkdown from 'react-markdown'
+import { PerformancePanel } from '@/components/performance/PerformancePanel'
+import { TtsButton } from '@/components/tts/TtsButton'
 
 function CopyButton({ content }: { content: string }) {
   const [copied, setCopied] = useState(false)
@@ -28,7 +30,7 @@ function CopyButton({ content }: { content: string }) {
     <button
       onClick={handleCopy}
       aria-label="Copiar mensagem"
-      className="absolute right-2 top-2 rounded-md p-1 text-foreground-muted/50 transition-all hover:bg-solar-500/10 hover:text-foreground-muted md:opacity-0 md:group-hover:opacity-100"
+      className="rounded-md p-1 text-foreground-muted/50 transition-all hover:bg-solar-500/10 hover:text-foreground-muted"
     >
       {copied ? (
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-solar-300">
@@ -61,6 +63,8 @@ export default function RoteiroPage() {
   const [sending, setSending] = useState(false)
   const [noCredits, setNoCredits] = useState(credits <= 0)
   const [inputValue, setInputValue] = useState('')
+  const [isQuiz, setIsQuiz] = useState(false)
+  const [activeTab, setActiveTab] = useState<'roteiro' | 'performance'>('roteiro')
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
@@ -78,11 +82,12 @@ export default function RoteiroPage() {
         }
         const data = await res.json()
         setMessages(
-          data.map((msg: { id: string; role: string; content: string; createdAt: string }) => ({
+          data.messages.map((msg: { id: string; role: string; content: string; createdAt: string }) => ({
             ...msg,
             createdAt: new Date(msg.createdAt),
           }))
         )
+        setIsQuiz(!!data.quizSessionId)
       })
       .catch(() => router.push('/roteiros'))
       .finally(() => setLoading(false))
@@ -253,9 +258,43 @@ export default function RoteiroPage() {
             ← Roteiros
           </button>
         </div>
+
+        {isQuiz && (
+          <div className="flex gap-1 rounded-lg bg-background-secondary p-0.5">
+            <button
+              onClick={() => setActiveTab('roteiro')}
+              className={`rounded-md px-3 py-1 text-xs font-medium transition-colors ${
+                activeTab === 'roteiro'
+                  ? 'bg-solar-500/20 text-solar-400'
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              Roteiro
+            </button>
+            <button
+              onClick={() => setActiveTab('performance')}
+              className={`rounded-md px-3 py-1 text-xs font-medium transition-colors ${
+                activeTab === 'performance'
+                  ? 'bg-solar-500/20 text-solar-400'
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              Performance
+            </button>
+          </div>
+        )}
       </div>
 
-      {/* Messages area */}
+      {/* Performance tab */}
+      {activeTab === 'performance' && isQuiz && (
+        <div className="flex-1 overflow-y-auto py-4">
+          <PerformancePanel conversationId={conversationId} isQuiz={isQuiz} />
+        </div>
+      )}
+
+      {/* Messages area (Roteiro tab) */}
+      {activeTab === 'roteiro' && (<>
+
       <div className="flex-1 overflow-y-auto pb-32 pt-4">
         {messages.map((message) => {
           const isUser = message.role === 'user'
@@ -292,7 +331,10 @@ export default function RoteiroPage() {
                     <ReactMarkdown>{message.content}</ReactMarkdown>
                   </div>
                   {!isUser && message.content && (
-                    <CopyButton content={message.content} />
+                    <div className="absolute right-2 top-2 flex items-center gap-0.5 md:opacity-0 md:group-hover:opacity-100">
+                      <TtsButton messageId={message.id} messageContent={message.content} />
+                      <CopyButton content={message.content} />
+                    </div>
                   )}
                 </div>
 
@@ -393,6 +435,7 @@ export default function RoteiroPage() {
           </div>
         </div>
       </div>
+      </>)}
     </div>
   )
 }

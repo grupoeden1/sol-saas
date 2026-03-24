@@ -1,0 +1,114 @@
+story: "11.4"
+title: "Interface do Aluno - Compartilhar e Acompanhar Indicacoes"
+status: pending
+depends_on: ["11.3"]
+
+phases:
+  - name: Setup
+    subtasks:
+      - id: setup_1
+        description: "Create server-side email masking utility function maskEmail(email: string): string. Logic: take first character + '***' + '@' + domain. Example: 'john@gmail.com' -> 'j***@gmail.com'. Edge cases: single-char local part 'j@x.com' -> 'j***@x.com'. This function must ONLY run on the server — never import in client components. Place in packages/db/src/referral.ts or apps/web/src/lib/referral-utils.ts (server-only file)."
+        files:
+          - apps/web/src/lib/referral-utils.ts
+        status: pending
+
+      - id: setup_2
+        description: "Create the API route file structure for GET /api/referral/stats. This endpoint requires authentication (read session) and returns the logged-in user's referral data."
+        files:
+          - apps/web/src/app/api/referral/stats/route.ts
+        status: pending
+
+  - name: Implementation
+    subtasks:
+      - id: impl_1
+        description: "Implement GET /api/referral/stats API route. Authentication: read session via auth(), return 401 if not authenticated. Query: (a) fetch REFERRAL_ENABLED from PricingConfig, (b) fetch user's referralCode, (c) count total referrals (ReferralReward where referrerId = userId), (d) sum credits earned via referral (sum of referrerCredits where referrerId = userId AND status = CREDITED), (e) list referrals with: referred user email (MASKED via maskEmail on server), status, createdAt, referrerCredits, referredCredits. Response shape: { enabled: boolean, referralCode: string, totalReferrals: number, creditsEarned: number, referrals: Array<{ maskedEmail: string, status: string, createdAt: string, referrerCredits: number, referredCredits: number }> }. CRITICAL: never return unmasked emails."
+        files:
+          - apps/web/src/app/api/referral/stats/route.ts
+        verification: "GET /api/referral/stats returns correct data with masked emails. Unauthenticated requests get 401. Email masking happens server-side."
+        depends_on: [setup_1, setup_2]
+        status: pending
+
+      - id: impl_2
+        description: "Create the ReferralSection client component for the student dashboard. Structure: (a) conditional rendering based on 'enabled' flag from API, (b) referral code display with copy-to-clipboard button, (c) full shareable link display (https://{window.location.host}/?ref={code}) with copy button, (d) share button using Web Share API (navigator.share) on mobile with fallback to clipboard on desktop, (e) stats counters: total referrals count and total credits earned, (f) referral list showing each referral's masked email, status badge (PENDING/CREDITED/EXPIRED), and creation date. Use the existing design system (solar colors, glass-card styling, rounded-2xl borders consistent with dashboard)."
+        files:
+          - apps/web/src/components/dashboard/ReferralSection.tsx
+        verification: "Component renders correctly with referral data; hidden when program disabled; share/copy buttons functional"
+        depends_on: [impl_1]
+        status: pending
+
+      - id: impl_3
+        description: "Implement copy-to-clipboard functionality with visual feedback. Use navigator.clipboard.writeText() with a temporary success state (e.g., button text changes to 'Copiado!' for 2 seconds then reverts). Handle clipboard API unavailability gracefully."
+        files:
+          - apps/web/src/components/dashboard/ReferralSection.tsx
+        verification: "Clicking copy button copies text to clipboard and shows 'Copiado!' feedback for 2 seconds"
+        depends_on: [impl_2]
+        status: pending
+
+      - id: impl_4
+        description: "Implement Web Share API integration with feature detection. Check navigator.share availability before rendering the share button. On mobile (Web Share API available): trigger navigator.share({ title: 'SOL - Indique e Ganhe', text: 'Use meu codigo...', url: shareableLink }). On desktop (Web Share unavailable): show only the 'Copiar Link' button. Handle share cancellation and errors gracefully (user cancelling share dialog should not show error)."
+        files:
+          - apps/web/src/components/dashboard/ReferralSection.tsx
+        verification: "Mobile shows Share button using native share sheet. Desktop shows Copy Link button. Share cancellation is silent."
+        depends_on: [impl_2]
+        status: pending
+
+      - id: impl_5
+        description: "Implement status badges for referral list items. PENDING: amber/yellow style, CREDITED: green style, EXPIRED: gray/muted style. Use consistent badge styling with the existing design system. Format dates using locale-aware formatting (pt-BR)."
+        files:
+          - apps/web/src/components/dashboard/ReferralSection.tsx
+        verification: "Status badges display with correct colors per status. Dates formatted in pt-BR locale."
+        depends_on: [impl_2]
+        status: pending
+
+  - name: Integration
+    subtasks:
+      - id: int_1
+        description: "Integrate ReferralSection into the existing dashboard page (apps/web/src/app/dashboard/page.tsx). Add the component below the CreditSummary section and above the grid with TransactionHistory and ConversationList. The section should fetch its own data client-side via the /api/referral/stats endpoint using useEffect or SWR/React Query. Alternatively, if using a server component approach, fetch data server-side in the dashboard page and pass as props."
+        files:
+          - apps/web/src/app/dashboard/page.tsx
+        verification: "ReferralSection appears on the dashboard when REFERRAL_ENABLED=1. Section is hidden when REFERRAL_ENABLED=0. Dashboard layout is not broken."
+        depends_on: [impl_2]
+        status: pending
+
+      - id: int_2
+        description: "Verify the section is completely hidden when REFERRAL_ENABLED=0 in PricingConfig. The API should return enabled=false and the component should render nothing (null). Ensure no flash of content before the enabled check completes (handle loading state)."
+        files:
+          - apps/web/src/components/dashboard/ReferralSection.tsx
+          - apps/web/src/app/api/referral/stats/route.ts
+        verification: "With REFERRAL_ENABLED=0: section is not visible, no empty container rendered. With REFERRAL_ENABLED=1: section appears with full content."
+        depends_on: [int_1]
+        status: pending
+
+      - id: int_3
+        description: "Verify data consistency: referral stats shown on dashboard match the actual database state. Test with a user who has multiple referrals in different statuses (PENDING, CREDITED, EXPIRED) and verify counts and credit totals are accurate."
+        files:
+          - apps/web/src/app/api/referral/stats/route.ts
+        verification: "totalReferrals count matches actual DB records. creditsEarned sum matches sum of referrerCredits where status=CREDITED."
+        depends_on: [int_1]
+        status: pending
+
+  - name: Testing
+    subtasks:
+      - id: test_1
+        description: "Write unit tests for maskEmail utility: (a) 'john@gmail.com' -> 'j***@gmail.com', (b) 'a@test.com' -> 'a***@test.com' (single char), (c) 'user@sub.domain.com' -> 'u***@sub.domain.com' (subdomain), (d) empty or malformed email handling (graceful fallback)."
+        files:
+          - apps/web/src/__tests__/referral-utils.test.ts
+        verification: "All email masking scenarios produce correct output"
+        depends_on: [setup_1]
+        status: pending
+
+      - id: test_2
+        description: "Write unit tests for GET /api/referral/stats: (a) authenticated user with referrals -> returns correct stats with masked emails, (b) authenticated user with no referrals -> returns empty list and zero counters, (c) unauthenticated request -> 401, (d) program disabled -> returns enabled=false, (e) verify no unmasked emails in response body."
+        files:
+          - apps/web/src/__tests__/referral-stats.test.ts
+        verification: "API returns correct data for all scenarios; emails are always masked in response"
+        depends_on: [impl_1]
+        status: pending
+
+      - id: test_3
+        description: "Write component tests for ReferralSection: (a) renders referral code and link when enabled, (b) renders nothing when disabled (enabled=false), (c) copy button triggers clipboard API, (d) share button appears only when navigator.share is available, (e) referral list renders correct number of items with masked emails and status badges, (f) loading state shows skeleton/spinner, (g) empty state (no referrals yet) shows encouraging message."
+        files:
+          - apps/web/src/__tests__/ReferralSection.test.tsx
+        verification: "All component states render correctly; clipboard and share API interactions verified"
+        depends_on: [impl_2, impl_3, impl_4, impl_5]
+        status: pending

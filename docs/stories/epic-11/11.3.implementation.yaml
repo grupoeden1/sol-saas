@@ -1,0 +1,110 @@
+story: "11.3"
+title: "Atribuicao de Bonus na Primeira Compra"
+status: pending
+depends_on: ["11.2"]
+
+phases:
+  - name: Setup
+    subtasks:
+      - id: setup_1
+        description: "Extend AddCreditOptions in packages/db/src/credits.ts to support type 'referral' with a description field. The discriminated union should add: { type: 'referral'; description: string }. This allows addCredits() to create CreditTransaction records with type='referral'. Ensure the addCredits function handles the 'referral' type in its transaction logic (create CreditTransaction with type='referral' and the provided description, no stripePaymentId or adminEmail needed)."
+        files:
+          - packages/db/src/credits.ts
+        verification: "addCredits(userId, credits, { type: 'referral', description: '...' }) creates a CreditTransaction with type='referral' and increments user credits"
+        status: pending
+
+  - name: Implementation
+    subtasks:
+      - id: impl_1
+        description: "Create the processReferralReward(userId, transactionId) service function in packages/db/src/referral.ts. Logic: (1) Find ReferralReward where referredId=userId AND status=PENDING. (2) If not found, return early (no-op for non-referred users). (3) Read REFERRAL_ENABLED from PricingConfig. (4) If disabled (value=0): update reward status to EXPIRED, return. (5) If enabled: read REFERRAL_REFERRER_CREDITS and REFERRAL_REFERRED_CREDITS from PricingConfig (CURRENT values, not snapshot). (6) Execute prisma.$transaction with: addCredits for referrer (type='referral', description='Bonus de indicacao - voce indicou [referred email]'), addCredits for referred (type='referral', description='Bonus de indicacao - indicado por [referrer email]'), update ReferralReward status to CREDITED, set triggerTransactionId, set referrerCredits and referredCredits with actual values used. (7) All 3 operations must be atomic."
+        files:
+          - packages/db/src/referral.ts
+        verification: "processReferralReward correctly credits both users atomically when conditions are met, expires reward when program disabled, and is idempotent (no-op if reward already CREDITED/EXPIRED)"
+        depends_on: [setup_1]
+        status: pending
+
+      - id: impl_2
+        description: "Refactor processReferralReward to use a single prisma.$transaction block for true atomicity. Inside the transaction: (a) query the ReferralReward with referrer and referred user info, (b) check PricingConfig values, (c) increment referrer credits + create referrer CreditTransaction, (d) increment referred credits + create referred CreditTransaction, (e) update ReferralReward to CREDITED with triggerTransactionId and credit amounts. If any step fails, the entire transaction rolls back."
+        files:
+          - packages/db/src/referral.ts
+        verification: "If crediting the referrer succeeds but crediting the referred fails, neither credit is applied. Transaction is fully atomic."
+        depends_on: [impl_1]
+        status: pending
+
+      - id: impl_3
+        description: "Integrate processReferralReward into the Stripe webhook handler (apps/web/src/app/api/webhooks/stripe/route.ts). After the existing addCredits(userId, pkg.credits, { type: 'purchase', stripePaymentId }) call succeeds, call processReferralReward(userId, transactionId). The transactionId can be obtained from the CreditTransaction created by the purchase addCredits call (query by stripePaymentId). IMPORTANT: processReferralReward must NOT block or fail the main purchase flow — wrap in try/catch and log errors. A referral processing failure should never prevent a customer from receiving their purchased credits."
+        files:
+          - apps/web/src/app/api/webhooks/stripe/route.ts
+        verification: "After successful Stripe checkout, referral bonus is processed if applicable. Purchase credits are always delivered even if referral processing fails. Duplicate webhooks are still handled by existing idempotency."
+        depends_on: [impl_1]
+        status: pending
+
+      - id: impl_4
+        description: "Ensure idempotency in processReferralReward: the function must check reward.status before processing. If status is already CREDITED or EXPIRED, return immediately without any DB writes. This prevents double-crediting on webhook retries or duplicate calls."
+        files:
+          - packages/db/src/referral.ts
+        verification: "Calling processReferralReward twice for the same user results in credits being applied only once"
+        depends_on: [impl_1]
+        status: pending
+
+  - name: Integration
+    subtasks:
+      - id: int_1
+        description: "Verify end-to-end flow: (1) User A registers and gets referralCode, (2) User B registers with User A's referral code -> ReferralReward PENDING created, (3) User B makes first purchase via Stripe -> webhook fires -> purchase credits added -> processReferralReward called -> both User A and User B receive referral bonus credits -> ReferralReward status becomes CREDITED. Check CreditTransaction records for both users show type='referral' with correct amounts."
+        files:
+          - apps/web/src/app/api/webhooks/stripe/route.ts
+          - packages/db/src/referral.ts
+          - packages/db/src/credits.ts
+        verification: "Both users have referral CreditTransactions; ReferralReward.status is CREDITED; ReferralReward.referrerCredits and referredCredits match PricingConfig values at time of purchase"
+        depends_on: [impl_2, impl_3]
+        status: pending
+
+      - id: int_2
+        description: "Verify that CURRENT admin config values are used (not snapshot from registration). Test scenario: (1) Admin sets REFERRAL_REFERRER_CREDITS=100, (2) User B registers with referral, (3) Admin changes REFERRAL_REFERRER_CREDITS=150, (4) User B makes first purchase -> referrer should receive 150 credits (the current value), not 100."
+        files:
+          - packages/db/src/referral.ts
+        verification: "Referral bonus amounts reflect PricingConfig values at the moment of purchase, not registration"
+        depends_on: [impl_1]
+        status: pending
+
+      - id: int_3
+        description: "Verify disabled program scenario: (1) User B registered with referral (PENDING reward), (2) Admin disables program (REFERRAL_ENABLED=0), (3) User B makes first purchase -> reward marked EXPIRED, no bonus credits. Also verify re-enabling does not resurrect EXPIRED rewards."
+        files:
+          - packages/db/src/referral.ts
+        verification: "EXPIRED rewards stay expired even if program is re-enabled later"
+        depends_on: [impl_1]
+        status: pending
+
+  - name: Testing
+    subtasks:
+      - id: test_1
+        description: "Write unit tests for processReferralReward: (a) user with PENDING reward and enabled program -> both users credited, reward CREDITED, (b) user with PENDING reward and disabled program -> reward EXPIRED, no credits, (c) user without PENDING reward (not referred) -> no-op, (d) user with already CREDITED reward -> no-op (idempotent), (e) user with already EXPIRED reward -> no-op, (f) verify credit amounts match CURRENT PricingConfig values, (g) verify transaction descriptions include referral context."
+        files:
+          - packages/db/src/__tests__/referral-reward.test.ts
+        verification: "All 7 test scenarios pass"
+        depends_on: [impl_1, impl_2, impl_4]
+        status: pending
+
+      - id: test_2
+        description: "Write unit test for atomicity: mock a failure in the second addCredits call (crediting the referred user) and verify that the first addCredits (crediting the referrer) is also rolled back. ReferralReward status should remain PENDING."
+        files:
+          - packages/db/src/__tests__/referral-reward.test.ts
+        verification: "On partial failure, no credits are applied and reward stays PENDING"
+        depends_on: [impl_2]
+        status: pending
+
+      - id: test_3
+        description: "Write integration test for Stripe webhook with referral: (a) mock Stripe checkout.session.completed event for a referred user -> verify purchase credits AND referral bonus credits applied, (b) same event for non-referred user -> verify only purchase credits applied, (c) simulate referral processing failure -> verify purchase credits still applied."
+        files:
+          - apps/web/src/__tests__/webhook-referral.integration.test.ts
+        verification: "Webhook correctly triggers referral processing; purchase flow never broken by referral errors"
+        depends_on: [impl_3]
+        status: pending
+
+      - id: test_4
+        description: "Write test for addCredits with type='referral': verify CreditTransaction is created with type='referral', correct description, no stripePaymentId, and user credits are incremented."
+        files:
+          - packages/db/src/__tests__/credits-referral.test.ts
+        verification: "addCredits type='referral' creates correct transaction record"
+        depends_on: [setup_1]
+        status: pending

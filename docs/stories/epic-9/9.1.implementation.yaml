@@ -1,0 +1,127 @@
+story: "9.1"
+title: "Database Schema — Assinaturas e Produtos Stripe"
+status: pending
+depends_on: []
+
+phases:
+  - name: Setup
+    subtasks:
+      - id: setup_1
+        description: "Add new enums to Prisma schema: SubscriptionStatus (ACTIVE, CANCELED, PAST_DUE, PAUSED) and StripeRecordStatus (ACTIVE, ARCHIVED)"
+        files:
+          - packages/db/prisma/schema.prisma
+        status: pending
+
+      - id: setup_2
+        description: "Add 'subscription_renewal' value to existing TransactionType enum"
+        files:
+          - packages/db/prisma/schema.prisma
+        status: pending
+
+  - name: Implementation
+    subtasks:
+      - id: impl_1
+        description: "Add 'stripeCustomerId' field (String?, @unique) to User model"
+        files:
+          - packages/db/prisma/schema.prisma
+        verification: "User model has stripeCustomerId String? @unique field"
+        depends_on: [setup_1, setup_2]
+        status: pending
+
+      - id: impl_2
+        description: "Create SubscriptionPlan model with fields: id (cuid), name (String), creditsMonthly (Int), priceInCents (Int), stripeProductId (String?, @unique), stripePriceId (String?, @unique), active (Boolean, default: false), sortOrder (Int, default: 0), createdAt, updatedAt. Add 'subscription' relation to User model (1:1 via UserSubscription)"
+        files:
+          - packages/db/prisma/schema.prisma
+        verification: "SubscriptionPlan model exists with all fields and correct types"
+        depends_on: [setup_1, setup_2]
+        status: pending
+
+      - id: impl_3
+        description: "Create UserSubscription model with fields: id (cuid), userId (String, FK -> User, @unique for 1 active sub per user), planId (String, FK -> SubscriptionPlan), stripeSubscriptionId (String, @unique), stripeCustomerId (String), status (SubscriptionStatus), currentPeriodStart (DateTime), currentPeriodEnd (DateTime), cancelAtPeriodEnd (Boolean, default: false), createdAt, updatedAt. Define relations: user (N:1 -> User), plan (N:1 -> SubscriptionPlan)"
+        files:
+          - packages/db/prisma/schema.prisma
+        verification: "UserSubscription model exists with unique constraint on userId and stripeSubscriptionId"
+        depends_on: [impl_1, impl_2]
+        status: pending
+
+      - id: impl_4
+        description: "Create StripeProductRecord model with fields: id (cuid), planId (String, FK -> SubscriptionPlan), stripeProductId (String), stripePriceId (String, @unique), priceInCents (Int), status (StripeRecordStatus), createdAt. Define relation: plan (N:1 -> SubscriptionPlan)"
+        files:
+          - packages/db/prisma/schema.prisma
+        verification: "StripeProductRecord model exists with unique constraint on stripePriceId"
+        depends_on: [impl_2]
+        status: pending
+
+      - id: impl_5
+        description: "Add reverse relations to User model (subscription: UserSubscription?) and SubscriptionPlan model (subscriptions: UserSubscription[], stripeProductRecords: StripeProductRecord[]). Ensure all @@index declarations are correct"
+        files:
+          - packages/db/prisma/schema.prisma
+        verification: "All relations bidirectional, indexes on userId, stripeSubscriptionId, stripeProductId, stripePriceId"
+        depends_on: [impl_3, impl_4]
+        status: pending
+
+      - id: impl_6
+        description: "Update AddCreditOptions type in credits.ts to support 'subscription_renewal' type with stripePaymentId (invoiceId) field. Add handling in addCredits function for the new type"
+        files:
+          - packages/db/src/credits.ts
+        verification: "addCredits accepts type 'subscription_renewal' and creates CreditTransaction with that type"
+        depends_on: [setup_2]
+        status: pending
+
+  - name: Integration
+    subtasks:
+      - id: int_1
+        description: "Run 'prisma migrate dev --name add_subscriptions' to generate and apply the migration"
+        files:
+          - packages/db/prisma/migrations/
+        verification: "Migration SQL file created and applied without errors"
+        depends_on: [impl_5, impl_6]
+        status: pending
+
+      - id: int_2
+        description: "Run 'prisma generate' to regenerate Prisma Client with new models and enums"
+        files:
+          - packages/db/node_modules/.prisma/client/
+        verification: "prisma generate completes without errors, new types available in @prisma/client"
+        depends_on: [int_1]
+        status: pending
+
+      - id: int_3
+        description: "Add seed data for 3 initial subscription plans (active: false): Basico (200 credits, 4990 centavos, sortOrder: 1), Profissional (600 credits, 11990 centavos, sortOrder: 2), Ilimitado (1500 credits, 24990 centavos, sortOrder: 3). Use upsert by name to be idempotent"
+        files:
+          - packages/db/prisma/seed.ts
+        verification: "prisma db seed creates 3 plans with correct values and active: false"
+        depends_on: [int_2]
+        status: pending
+
+  - name: Testing
+    subtasks:
+      - id: test_1
+        description: "Validate migration runs cleanly on a fresh database by running 'prisma migrate reset --force' followed by 'prisma migrate deploy'"
+        verification: "All migrations apply without errors on empty database"
+        depends_on: [int_3]
+        status: pending
+
+      - id: test_2
+        description: "Validate seed script creates all 3 plans with correct field values. Run 'prisma db seed' and query subscription_plans table to confirm name, creditsMonthly, priceInCents, active=false, sortOrder for each plan"
+        verification: "3 plans exist with exact values: Basico(200,4990,1), Profissional(600,11990,2), Ilimitado(1500,24990,3), all active=false"
+        depends_on: [int_3]
+        status: pending
+
+      - id: test_3
+        description: "Validate schema integrity: confirm unique constraints on User.stripeCustomerId, UserSubscription.userId, UserSubscription.stripeSubscriptionId, SubscriptionPlan.stripeProductId, SubscriptionPlan.stripePriceId, StripeProductRecord.stripePriceId. Test by attempting duplicate inserts"
+        verification: "Unique constraint violations thrown for all unique fields"
+        depends_on: [int_2]
+        status: pending
+
+      - id: test_4
+        description: "Validate relations: create a User, SubscriptionPlan, UserSubscription, and StripeProductRecord. Query via relations (user.subscription, plan.subscriptions, plan.stripeProductRecords) and confirm data integrity"
+        verification: "All relations resolve correctly, cascading constraints work as expected"
+        depends_on: [int_2]
+        status: pending
+
+      - id: test_5
+        description: "Validate TransactionType enum includes 'subscription_renewal'. Create a CreditTransaction with type subscription_renewal and confirm it persists correctly"
+        verification: "CreditTransaction with type subscription_renewal saved and queried successfully"
+        depends_on: [int_2]
+        status: pending

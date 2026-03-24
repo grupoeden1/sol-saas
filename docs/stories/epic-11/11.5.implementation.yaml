@@ -1,0 +1,145 @@
+story: "11.5"
+title: "Painel Admin - Controle do Programa de Referral"
+status: pending
+depends_on: ["11.4"]
+
+phases:
+  - name: Setup
+    subtasks:
+      - id: setup_1
+        description: "Create API route file structure for admin referral endpoints: (a) apps/web/src/app/api/admin/referral/route.ts for GET (config + metrics) and PUT (update config), (b) apps/web/src/app/api/admin/referral/list/route.ts for GET (paginated referral list with filters). Both routes must verify session.user.role === 'ADMIN' and return 403 for non-admins."
+        files:
+          - apps/web/src/app/api/admin/referral/route.ts
+          - apps/web/src/app/api/admin/referral/list/route.ts
+        status: pending
+
+      - id: setup_2
+        description: "Create the admin referral page file at apps/web/src/app/admin/referral/page.tsx. This page follows the existing admin page pattern (server component with auth check, redirect non-admins). The page is already protected by middleware (isAdminRoute check) but should also verify role server-side for defense in depth."
+        files:
+          - apps/web/src/app/admin/referral/page.tsx
+        status: pending
+
+  - name: Implementation
+    subtasks:
+      - id: impl_1
+        description: "Implement GET /api/admin/referral. Auth: verify session.user.role === 'ADMIN', return 403 if not. Response: { config: { referralEnabled: boolean, referrerCredits: number, referredCredits: number, maxPerUser: number }, metrics: { totalReferrals: number, creditedReferrals: number, pendingReferrals: number, expiredReferrals: number, totalCreditsDistributed: number, conversionRate: number } }. Metrics queries: (a) count ReferralReward grouped by status, (b) sum (referrerCredits + referredCredits) where status=CREDITED for total credits distributed, (c) conversionRate = (CREDITED count / total count) * 100. Config: read all 4 REFERRAL_* keys from PricingConfig."
+        files:
+          - apps/web/src/app/api/admin/referral/route.ts
+        verification: "GET returns current config and accurate metrics. Non-admin gets 403."
+        depends_on: [setup_1]
+        status: pending
+
+      - id: impl_2
+        description: "Implement PUT /api/admin/referral. Auth: verify ADMIN role. Request body schema (zod): { referralEnabled: boolean, referrerCredits: number (int, min 1), referredCredits: number (int, min 1), maxPerUser: number (int, min 1) }. Validate with zod, return 400 on validation failure with error messages. Update PricingConfig: upsert each key. Map referralEnabled boolean to REFERRAL_ENABLED int (true->1, false->0). Log the update with admin email. Use invalidatePricingCache() if available."
+        files:
+          - apps/web/src/app/api/admin/referral/route.ts
+        verification: "PUT updates all 4 PricingConfig keys. Validation rejects non-positive integers. Non-admin gets 403. Changes reflect immediately."
+        depends_on: [setup_1]
+        status: pending
+
+      - id: impl_3
+        description: "Implement GET /api/admin/referral/list. Auth: verify ADMIN role. Query params: page (default 1), pageSize (default 20), status (optional filter: ALL, PENDING, CREDITED, EXPIRED). Response: { referrals: Array<{ id, referrerEmail, referredEmailMasked, status, referrerCredits, referredCredits, createdAt }>, total: number, page: number, pageSize: number, totalPages: number }. Include referrer's full email (admin can see it) but mask referred email for privacy consistency. Join with User table for email data. Apply status filter if provided (ignore if ALL). Order by createdAt desc."
+        files:
+          - apps/web/src/app/api/admin/referral/list/route.ts
+        verification: "Paginated list returns correct data with filtering. Default page=1, pageSize=20. Total count matches filter."
+        depends_on: [setup_1]
+        status: pending
+
+      - id: impl_4
+        description: "Implement top 5 referrers query in GET /api/admin/referral. Add 'topReferrers' to the metrics response: Array<{ email: string, name?: string, creditedCount: number, totalCreditsEarned: number }>. Query: group ReferralReward by referrerId where status=CREDITED, count and sum referrerCredits, order by count desc, take 5. Join with User for email/name."
+        files:
+          - apps/web/src/app/api/admin/referral/route.ts
+        verification: "Top 5 referrers returned with correct counts and credit sums. Empty array if no referrals exist."
+        depends_on: [impl_1]
+        status: pending
+
+      - id: impl_5
+        description: "Build the admin referral page UI at /admin/referral. Layout consistent with existing admin pages (same header, same styling patterns as apps/web/src/app/admin/page.tsx). Sections: (a) Program toggle (on/off switch for REFERRAL_ENABLED) with immediate visual feedback, (b) Configuration form with fields: Creditos Indicador, Creditos Indicado, Limite por Usuario — numeric inputs with validation (min 1), Save button, (c) Metrics dashboard with cards: Total Indicacoes, Indicacoes Creditadas, Taxa de Conversao, Creditos Distribuidos, (d) Top 5 referrers table, (e) Paginated referral list with status filter dropdown. Use client components for interactive parts (toggle, form, filter), server components for initial data fetching if using RSC pattern."
+        files:
+          - apps/web/src/app/admin/referral/page.tsx
+        verification: "Admin referral page renders with all sections. Toggle updates REFERRAL_ENABLED. Config form saves values. Metrics display correctly. List is paginated and filterable."
+        depends_on: [impl_1, impl_2, impl_3, impl_4]
+        status: pending
+
+      - id: impl_6
+        description: "Create client components for the admin referral page interactive elements: (a) ReferralToggle component — switch/toggle that calls PUT /api/admin/referral with updated enabled state, shows loading state during save, (b) ReferralConfigForm component — form with 3 numeric inputs (referrerCredits, referredCredits, maxPerUser) and save button, client-side validation (positive integers) + server-side validation, success/error feedback, (c) ReferralMetricsCards component — displays metric cards using the existing MetricCard component from admin dashboard, (d) TopReferrersTable component — table showing top 5 referrers, (e) ReferralListTable component — paginated table with status filter dropdown, loads data from GET /api/admin/referral/list."
+        files:
+          - apps/web/src/components/admin/ReferralToggle.tsx
+          - apps/web/src/components/admin/ReferralConfigForm.tsx
+          - apps/web/src/components/admin/ReferralMetricsCards.tsx
+          - apps/web/src/components/admin/TopReferrersTable.tsx
+          - apps/web/src/components/admin/ReferralListTable.tsx
+        verification: "All interactive components work correctly with API calls. Toggle provides instant feedback. Form validates inputs. Table paginates and filters."
+        depends_on: [impl_5]
+        status: pending
+
+      - id: impl_7
+        description: "Add navigation link to the referral admin page from the main admin dashboard. Add a new Link to /admin/referral in the admin page header nav alongside existing links (Provedor de IA, Simulador de Pricing, Resultados, Inteligencia). Label: 'Indicacoes' or 'Referral'. Use same styling as existing admin nav links."
+        files:
+          - apps/web/src/app/admin/page.tsx
+        verification: "Admin dashboard shows 'Indicacoes' link that navigates to /admin/referral. Existing nav links unchanged."
+        depends_on: [impl_5]
+        status: pending
+
+  - name: Integration
+    subtasks:
+      - id: int_1
+        description: "Verify toggle on/off flow end-to-end: (a) admin toggles program OFF -> REFERRAL_ENABLED set to 0, (b) student dashboard no longer shows ReferralSection (Story 11.4 integration), (c) new registrations with referral codes are silently ignored (Story 11.2 integration), (d) admin toggles program ON -> everything works again. Note: existing PENDING rewards that were not yet activated remain PENDING and will be processed normally when program is re-enabled."
+        files:
+          - apps/web/src/app/api/admin/referral/route.ts
+          - apps/web/src/app/api/referral/stats/route.ts
+        verification: "Toggle affects all downstream behavior: registration referral validation, purchase bonus processing, and student UI visibility"
+        depends_on: [impl_2, impl_5]
+        status: pending
+
+      - id: int_2
+        description: "Verify config changes reflect immediately: (a) admin changes REFERRAL_REFERRER_CREDITS from 100 to 200, (b) next purchase by a referred user should give referrer 200 credits (not 100), (c) already CREDITED rewards are NOT retroactively modified — they keep their original amounts."
+        files:
+          - apps/web/src/app/api/admin/referral/route.ts
+        verification: "New rewards use updated config values. Existing CREDITED rewards retain their amounts."
+        depends_on: [impl_2]
+        status: pending
+
+      - id: int_3
+        description: "Verify admin page access control: (a) non-admin user accessing /admin/referral is redirected by middleware, (b) non-admin calling API routes directly gets 403, (c) admin user can access page and all API routes."
+        files:
+          - apps/web/src/middleware.ts
+          - apps/web/src/app/api/admin/referral/route.ts
+          - apps/web/src/app/api/admin/referral/list/route.ts
+        verification: "All admin referral routes and pages are properly protected"
+        depends_on: [impl_1, impl_2, impl_3]
+        status: pending
+
+  - name: Testing
+    subtasks:
+      - id: test_1
+        description: "Write unit tests for GET /api/admin/referral: (a) admin gets config + metrics, (b) non-admin gets 403, (c) unauthenticated gets 401, (d) metrics are accurate (count, sum, conversion rate), (e) top 5 referrers are correctly ordered."
+        files:
+          - apps/web/src/__tests__/admin-referral-api.test.ts
+        verification: "All scenarios return expected responses with correct data"
+        depends_on: [impl_1, impl_4]
+        status: pending
+
+      - id: test_2
+        description: "Write unit tests for PUT /api/admin/referral: (a) valid update saves all 4 config keys, (b) non-positive integer rejected with 400, (c) missing fields rejected with 400, (d) non-admin gets 403, (e) boolean enabled correctly maps to int 0/1 in PricingConfig."
+        files:
+          - apps/web/src/__tests__/admin-referral-api.test.ts
+        verification: "Config updates validated and persisted correctly; invalid inputs rejected"
+        depends_on: [impl_2]
+        status: pending
+
+      - id: test_3
+        description: "Write unit tests for GET /api/admin/referral/list: (a) returns paginated results, (b) filter by PENDING returns only PENDING, (c) filter by CREDITED returns only CREDITED, (d) filter by ALL or no filter returns all statuses, (e) pagination math correct (page 2 with pageSize 10 skips first 10), (f) non-admin gets 403."
+        files:
+          - apps/web/src/__tests__/admin-referral-list-api.test.ts
+        verification: "Pagination and filtering work correctly for all status values"
+        depends_on: [impl_3]
+        status: pending
+
+      - id: test_4
+        description: "Write component tests for admin referral page: (a) toggle switch reflects current state and updates on click, (b) config form validates inputs client-side, (c) metrics cards display correctly, (d) referral list table renders with pagination controls, (e) status filter dropdown changes list content."
+        files:
+          - apps/web/src/__tests__/AdminReferralPage.test.tsx
+        verification: "Admin referral page components render and interact correctly"
+        depends_on: [impl_5, impl_6]
+        status: pending

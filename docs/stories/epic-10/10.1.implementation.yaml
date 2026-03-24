@@ -1,0 +1,125 @@
+story: "10.1"
+title: "Database Schema — Campanhas e One-Click Payment"
+status: pending
+depends_on: ["1.1", "9.1"]
+
+phases:
+  - name: Setup
+    subtasks:
+      - id: setup_1
+        description: "Add new enums to Prisma schema: OfferType (CREDIT_PACKAGE, SUBSCRIPTION_PLAN, CUSTOM) and CampaignStatus (DRAFT, ACTIVE, PAUSED, ENDED)"
+        files:
+          - packages/db/prisma/schema.prisma
+        status: pending
+
+      - id: setup_2
+        description: "Add 'promo_purchase' value to existing TransactionType enum (alongside existing purchase, consumption, adjustment values)"
+        files:
+          - packages/db/prisma/schema.prisma
+        status: pending
+
+  - name: Implementation
+    subtasks:
+      - id: impl_1
+        description: "Create PromoCampaign model with fields: id (String, @id @default(cuid)), name (String), title (String), message (String), offerType (OfferType enum), offerId (String?, nullable — references CreditPackage.id or SubscriptionPlan.id), discountPercent (Int?, nullable, 0-100), filters (Json — segmentation criteria object), status (CampaignStatus, @default(DRAFT)), startsAt (DateTime?, nullable), endsAt (DateTime?, nullable), createdAt (DateTime, @default(now())), updatedAt (DateTime, @updatedAt). Map to @@map('promo_campaigns')"
+        files:
+          - packages/db/prisma/schema.prisma
+        verification: "PromoCampaign model exists with all fields, correct types, and @@map('promo_campaigns')"
+        depends_on: [setup_1]
+        status: pending
+
+      - id: impl_2
+        description: "Create PromoDelivery model with fields: id (String, @id @default(cuid)), campaignId (String, FK -> PromoCampaign), userId (String, FK -> User), viewedAt (DateTime?, nullable), clickedAt (DateTime?, nullable), convertedAt (DateTime?, nullable), dismissedAt (DateTime?, nullable), createdAt (DateTime, @default(now())). Add unique constraint @@unique([campaignId, userId]). Map to @@map('promo_deliveries')"
+        files:
+          - packages/db/prisma/schema.prisma
+        verification: "PromoDelivery model exists with unique constraint on (campaignId, userId)"
+        depends_on: [setup_1]
+        status: pending
+
+      - id: impl_3
+        description: "Add relations between models: PromoCampaign.deliveries (PromoDelivery[], 1:N), PromoDelivery.campaign (PromoCampaign, FK campaignId), PromoDelivery.user (User, FK userId). Add reverse relation on User model: promoDeliveries (PromoDelivery[])"
+        files:
+          - packages/db/prisma/schema.prisma
+        verification: "All relations bidirectional — PromoCampaign.deliveries, PromoDelivery.campaign, PromoDelivery.user, User.promoDeliveries resolve correctly"
+        depends_on: [impl_1, impl_2]
+        status: pending
+
+      - id: impl_4
+        description: "Add composite indexes for performant segmentation queries: @@index([status, startsAt, endsAt]) on PromoCampaign, @@index([campaignId, userId]) on PromoDelivery (covered by unique constraint but verify), @@index([userId]) on PromoDelivery for user-specific queries"
+        files:
+          - packages/db/prisma/schema.prisma
+        verification: "Indexes exist: promo_campaigns(status, startsAt, endsAt), promo_deliveries(campaignId, userId), promo_deliveries(userId)"
+        depends_on: [impl_1, impl_2]
+        status: pending
+
+      - id: impl_5
+        description: "Update AddCreditOptions type in credits.ts to support 'promo_purchase' type with stripePaymentId (String) and campaignId (String, optional) fields. Add handling in addCredits function to create CreditTransaction with type 'promo_purchase' and description referencing the campaign"
+        files:
+          - packages/db/src/credits.ts
+        verification: "addCredits accepts type 'promo_purchase' with stripePaymentId and optional campaignId, creates CreditTransaction with type promo_purchase"
+        depends_on: [setup_2]
+        status: pending
+
+  - name: Integration
+    subtasks:
+      - id: int_1
+        description: "Run 'prisma migrate dev --name add_promo_campaigns' to generate and apply the migration with new enums, models, indexes, and TransactionType extension"
+        files:
+          - packages/db/prisma/migrations/
+        verification: "Migration SQL file created and applied without errors, tables promo_campaigns and promo_deliveries exist in database"
+        depends_on: [impl_3, impl_4, impl_5]
+        status: pending
+
+      - id: int_2
+        description: "Run 'prisma generate' to regenerate Prisma Client with new models (PromoCampaign, PromoDelivery), enums (OfferType, CampaignStatus), and updated TransactionType"
+        files:
+          - packages/db/node_modules/.prisma/client/
+        verification: "prisma generate completes without errors, PromoCampaign, PromoDelivery types available in @prisma/client"
+        depends_on: [int_1]
+        status: pending
+
+      - id: int_3
+        description: "Add PricingConfig seed entries using upsert: SUBSCRIPTIONS_ENABLED (value: 0, represents Boolean false), UPSELL_ENABLED (value: 0, represents Boolean false), UPSELL_LOW_CREDITS_THRESHOLD (value: 50). Add these to the existing pricingDefaults array in seed.ts"
+        files:
+          - packages/db/prisma/seed.ts
+        verification: "prisma db seed creates all 3 new PricingConfig entries with correct keys and default values"
+        depends_on: [int_2]
+        status: pending
+
+  - name: Testing
+    subtasks:
+      - id: test_1
+        description: "Validate migration runs cleanly on a fresh database by running 'prisma migrate reset --force' followed by 'prisma migrate deploy'. Verify tables promo_campaigns and promo_deliveries exist with correct columns"
+        verification: "All migrations apply without errors on empty database, both new tables exist with expected columns"
+        depends_on: [int_3]
+        status: pending
+
+      - id: test_2
+        description: "Validate enums: confirm OfferType has values CREDIT_PACKAGE, SUBSCRIPTION_PLAN, CUSTOM. Confirm CampaignStatus has values DRAFT, ACTIVE, PAUSED, ENDED. Confirm TransactionType includes promo_purchase alongside existing values"
+        verification: "All enum values queryable and usable in Prisma operations"
+        depends_on: [int_2]
+        status: pending
+
+      - id: test_3
+        description: "Validate unique constraint on PromoDelivery(campaignId, userId): create a PromoCampaign, create a PromoDelivery for a user, attempt to create a second PromoDelivery with same campaignId+userId and confirm P2002 unique constraint violation"
+        verification: "PrismaClientKnownRequestError with code P2002 thrown on duplicate (campaignId, userId) insert"
+        depends_on: [int_2]
+        status: pending
+
+      - id: test_4
+        description: "Validate relations: create PromoCampaign with deliveries, query campaign.deliveries and delivery.campaign and delivery.user. Confirm User.promoDeliveries returns correct deliveries"
+        verification: "All relations resolve correctly, cascade delete on User removes related PromoDeliveries"
+        depends_on: [int_2]
+        status: pending
+
+      - id: test_5
+        description: "Validate PricingConfig seeds: run 'prisma db seed' and query PricingConfig table for keys SUBSCRIPTIONS_ENABLED (value: 0), UPSELL_ENABLED (value: 0), UPSELL_LOW_CREDITS_THRESHOLD (value: 50)"
+        verification: "All 3 PricingConfig entries exist with correct keys and default values"
+        depends_on: [int_3]
+        status: pending
+
+      - id: test_6
+        description: "Validate addCredits with type 'promo_purchase': call addCredits with promo_purchase type and verify CreditTransaction created with correct type and description"
+        verification: "CreditTransaction with type promo_purchase saved and queried successfully, user credits incremented"
+        depends_on: [int_2]
+        status: pending

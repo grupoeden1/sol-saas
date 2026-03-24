@@ -1,9 +1,10 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { QuizEngine } from '@/components/quiz/QuizEngine'
 import { GeneratingScript } from '@/components/quiz/GeneratingScript'
+import { ReferencePicker } from '@/components/quiz/ReferencePicker'
 import type { AnswerMap } from '@/lib/quiz/conditions'
 
 interface QuizSessionData {
@@ -16,6 +17,7 @@ interface QuizSessionData {
   onboardingProfile: {
     id: string
     name: string
+    answers?: Record<string, string>
   }
 }
 
@@ -27,7 +29,7 @@ export default function QuizSessionPage() {
   const [sessionData, setSessionData] = useState<QuizSessionData | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [phase, setPhase] = useState<'quiz' | 'generating'>('quiz')
+  const [phase, setPhase] = useState<'quiz' | 'reference' | 'generating'>('quiz')
 
   useEffect(() => {
     fetch(`/api/quiz/session/${sessionId}`)
@@ -48,6 +50,23 @@ export default function QuizSessionPage() {
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false))
   }, [sessionId, router])
+
+  // Handle reference selection — update quiz session referenceSource
+  const handleReferenceSelect = useCallback(
+    async (referenceSource: 'API_SEARCH' | 'LINK_ANALYSIS' | 'NONE') => {
+      try {
+        await fetch(`/api/quiz/session/${sessionId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ referenceSource }),
+        })
+      } catch {
+        // Non-blocking — proceed to generation even if PATCH fails
+      }
+      setPhase('generating')
+    },
+    [sessionId]
+  )
 
   if (loading) {
     return (
@@ -71,12 +90,29 @@ export default function QuizSessionPage() {
     )
   }
 
-  // Phase 2: Generating script via SSE
+  // Phase 3: Generating script via SSE
   if (phase === 'generating') {
     return (
       <GeneratingScript
         quizSessionId={sessionData.id}
         profileName={sessionData.onboardingProfile.name}
+      />
+    )
+  }
+
+  // Phase 2: Reference picker (between quiz and generation)
+  if (phase === 'reference') {
+    const niche =
+      sessionData.onboardingProfile.answers?.['O1'] ??
+      sessionData.answerMap?.['O1'] ??
+      ''
+
+    return (
+      <ReferencePicker
+        sessionId={sessionData.id}
+        path1={sessionData.path1 ?? 'AD'}
+        niche={niche}
+        onSelect={handleReferenceSelect}
       />
     )
   }
@@ -108,7 +144,7 @@ export default function QuizSessionPage() {
         initialAnswers={sessionData.answerMap}
         initialPath1={sessionData.path1}
         initialPath2={sessionData.path2}
-        onComplete={() => setPhase('generating')}
+        onComplete={() => setPhase('reference')}
       />
     </div>
   )

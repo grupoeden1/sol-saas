@@ -1,5 +1,6 @@
 import { formatBalance } from '@/lib/format-balance';
 import Pagination from '@/components/dashboard/Pagination';
+import ResetPasswordButton from './ResetPasswordButton';
 
 interface UserRow {
   id: string;
@@ -47,6 +48,7 @@ export default function UsersTable({ users, currentPage, totalPages }: UsersTabl
                     <th scope="col" className="px-6 py-4 font-semibold">Saldo</th>
                     <th scope="col" className="px-6 py-4 font-semibold">Mensagens</th>
                     <th scope="col" className="px-6 py-4 font-semibold">Cadastro</th>
+                    <th scope="col" className="px-6 py-4 font-semibold">Ações</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-solar-800/20">
@@ -65,6 +67,9 @@ export default function UsersTable({ users, currentPage, totalPages }: UsersTabl
                       <td className="px-6 py-4 text-foreground">{formatBalance(user.credits)}</td>
                       <td className="px-6 py-4 text-foreground-muted">{user.totalMessages}</td>
                       <td className="px-6 py-4 text-foreground-muted">{formatDate(user.createdAt)}</td>
+                      <td className="px-6 py-4">
+                        <ResetPasswordButton userId={user.id} userEmail={user.email} />
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -88,7 +93,10 @@ export default function UsersTable({ users, currentPage, totalPages }: UsersTabl
                   <span>{formatBalance(user.credits)}</span>
                   <span>{user.totalMessages} mensagens</span>
                 </div>
-                <p className="mt-1 text-xs text-foreground-muted/60">{formatDate(user.createdAt)}</p>
+                <div className="mt-2 flex items-center justify-between">
+                  <p className="text-xs text-foreground-muted/60">{formatDate(user.createdAt)}</p>
+                  <ResetPasswordButton userId={user.id} userEmail={user.email} />
+                </div>
               </div>
             ))}
           </div>

@@ -26,7 +26,7 @@ O sistema de chat (Story 2.3) e precificação (Story 3.6) já estão implementa
 - Gate pré-chamada com `estimateMaxCost`: ✅ Story 3.6 — **extender para incluir tokens de anexos**
 - `calculateRealCost` + `deductCredits`: ✅ Story 3.6 — **extender metadata com campos de anexo**
 - `CreditTransaction` com campos de auditoria: ✅ Story 3.6 — **adicionar hasAttachments, attachmentTypes, attachmentTokens**
-- `countTokens` via tiktoken: ✅ Story 3.6 — **reusar para texto extraído de documentos**
+- `countTokens` via Anthropic API usage response: ✅ Story 3.6 — **reusar para texto extraído de documentos**
 - `calculateImageCost` (Vision API pricing): ❌ **não existe**
 - Processamento de PDF/DOCX/TXT/MD: ❌ **não existe**
 - Upload de arquivos no frontend: ❌ **não existe**
@@ -76,7 +76,7 @@ O sistema de chat (Story 2.3) e precificação (Story 3.6) já estão implementa
 
 ### Subtask 3: `calculateImageCost` em packages/db
 
-**Escopo:** Função de cálculo de custo de imagem conforme pricing da OpenAI Vision API.
+**Escopo:** Função de cálculo de custo de imagem conforme pricing da Claude Vision (multimodal nativo).
 
 **Arquivo:** `packages/db/src/token-counter.ts` (adicionar ao existente)
 
@@ -202,7 +202,7 @@ POST /api/chat (multipart/form-data)
   ├─ auth check
   ├─ parse FormData: message, conversationId, files (File[])
   ├─ processFiles(files) → ProcessedFile[]
-  │   ├─ se falhar → 400 com mensagem clara, sem OpenAI, sem dedução
+  │   ├─ se falhar → 400 com mensagem clara, sem Claude API, sem dedução
   │   └─ separar em imageFiles[] e documentFiles[]
   ├─ calcular tokens extras:
   │   ├─ documentTokens = sum(countTokens(text) for each document)
@@ -211,18 +211,18 @@ POST /api/chat (multipart/form-data)
   ├─ mount messages (system prompt + resumo + nova) — como já funciona
   ├─ totalInputTokens = countTokens(messages) + attachmentTokens
   ├─ determinar modelo:
-  │   ├─ se imageFiles.length > 0 → model = 'gpt-4o' (Vision requer modelo completo)
+  │   ├─ se imageFiles.length > 0 → model = 'claude-sonnet-4-5-20250929' (Vision requer modelo completo)
   │   └─ se não → lógica existente
   ├─ getExchangeRate("USD-BRL") → exchangeRate
   ├─ estimateMaxCost(totalInputTokens, model, exchangeRate) → maxCostCents
   ├─ fetch user.balanceCents
   ├─ GATE: balanceCents < maxCostCents → 402
   ├─ save user message
-  ├─ montar payload OpenAI:
+  ├─ montar payload Claude API:
   │   ├─ imagens: content array com { type: 'image_url', image_url: { url: 'data:{mime};base64,{b64}', detail: 'auto' } }
   │   ├─ documentos: prefixo na mensagem: "[Documento: {filename}]\n{text}\n\n"
   │   └─ múltiplos documentos: cada um no seu bloco de prefixo
-  ├─ stream OpenAI with max_tokens: 8192
+  ├─ stream Claude API with max_tokens: 8192
   │   ├─ success:
   │   │   ├─ save assistant message
   │   │   ├─ calculateRealCost(totalInputTokens, outputTokens, model, exchangeRate)
@@ -239,11 +239,11 @@ POST /api/chat (multipart/form-data)
   └─ header: X-Balance-Cents
 ```
 
-- [ ] Se processamento de qualquer arquivo falhar → 400, nenhum crédito deduzido, nenhuma chamada à OpenAI
-- [ ] Se OpenAI falhar após receber os arquivos → nenhum crédito deduzido (comportamento existente mantido)
-- [ ] Buffers dos arquivos descartados após montar o payload OpenAI — nenhuma persistência
+- [ ] Se processamento de qualquer arquivo falhar → 400, nenhum crédito deduzido, nenhuma chamada à Claude API
+- [ ] Se Claude API falhar após receber os arquivos → nenhum crédito deduzido (comportamento existente mantido)
+- [ ] Buffers dos arquivos descartados após montar o payload Claude API — nenhuma persistência
 
-**Test:** Gate aceita com anexo → stream → deduz custo real incluindo tokens de anexo. Gate rejeita com anexo grande (saldo insuficiente) → 402. Arquivo inválido → 400 antes de qualquer OpenAI. JSON sem arquivo → fluxo antigo intocado.
+**Test:** Gate aceita com anexo → stream → deduz custo real incluindo tokens de anexo. Gate rejeita com anexo grande (saldo insuficiente) → 402. Arquivo inválido → 400 antes de qualquer Claude API. JSON sem arquivo → fluxo antigo intocado.
 
 ---
 
@@ -317,7 +317,7 @@ interface Message {
 **Escopo:** Garantir cobertura dos fluxos com e sem anexo.
 
 - [ ] POST /api/chat com PDF (texto legível) → texto extraído usado como contexto → resposta coerente da IA
-- [ ] POST /api/chat com imagem JPEG → Vision API processa → modelo forçado para gpt-4o
+- [ ] POST /api/chat com imagem JPEG → Vision API processa → modelo forçado para claude-sonnet-4-5-20250929
 - [ ] POST /api/chat com DOCX → texto extraído → resposta coerente
 - [ ] POST /api/chat com JSON (sem arquivo) → fluxo existente sem alteração (retrocompatibilidade)
 - [ ] POST /api/chat com 4 arquivos → 400 "Máximo de 3 arquivos por mensagem."
@@ -329,7 +329,7 @@ interface Message {
 - [ ] `CreditTransaction` registra `hasAttachments: true`, `attachmentTypes`, `attachmentTokens` após mensagem com anexo
 - [ ] `CreditTransaction` registra `hasAttachments: false` (default) para mensagem sem anexo
 - [ ] Badge de créditos atualiza corretamente após mensagem com anexo (via `X-Balance-Cents` + evento `done`)
-- [ ] Modelo forçado para `gpt-4o` quando imagem anexada; modelo default quando apenas documentos
+- [ ] Modelo forçado para `claude-sonnet-4-5-20250929` quando imagem anexada; modelo default quando apenas documentos
 - [ ] `pnpm typecheck` passa sem erros
 - [ ] `pnpm build` passa sem erros
 
@@ -342,7 +342,7 @@ interface Message {
 - [ ] Mais de 3 arquivos → rejeitado com mensagem clara
 
 ### AC2: Tipos suportados
-- [ ] Imagens: JPEG, PNG, GIF, WEBP (processadas via OpenAI Vision API)
+- [ ] Imagens: JPEG, PNG, GIF, WEBP (processadas via Claude Vision (multimodal nativo))
 - [ ] Documentos de texto: PDF, TXT, MD (conteúdo extraído como texto plano)
 - [ ] Documentos ricos: DOCX (conteúdo extraído como texto plano)
 - [ ] Tipos não suportados → rejeitados com mensagem clara identificando o tipo
@@ -355,13 +355,13 @@ interface Message {
 - [ ] PDFs escaneados (sem texto extraível) detectados e rejeitados
 - [ ] Mensagem clara ao aluno: sugestão de enviar como imagem ou digitar o conteúdo
 
-### AC5: Modelo forçado para GPT-4o com imagens
-- [ ] Quando imagem é anexada, sistema força uso de GPT-4o (Vision API) independente do modelo padrão
-- [ ] Gate de custo máximo calcula com preço do modelo efetivamente usado (GPT-4o, não GPT-4o-mini)
+### AC5: Modelo forçado para Claude Sonnet com imagens
+- [ ] Quando imagem é anexada, sistema força uso de Claude Sonnet (Vision API) independente do modelo padrão
+- [ ] Gate de custo máximo calcula com preço do modelo efetivamente usado (Claude Sonnet, não Claude Sonnet-mini)
 
 ### AC6: Tokens de anexos incluídos no custo
 - [ ] Tokens do conteúdo do arquivo somados ao input no cálculo do gate e da dedução real
-- [ ] Documentos: tokens via tiktoken sobre o texto extraído
+- [ ] Documentos: tokens via Anthropic API usage response sobre o texto extraído
 - [ ] Imagens: tokens fixos calculados por resolução (Vision API pricing) via `calculateImageCost`
 
 ### AC7: Saldo NUNCA negativo
@@ -371,7 +371,7 @@ interface Message {
 ### AC8: Arquivos não persistidos
 - [ ] Arquivos processados inteiramente em memória no backend
 - [ ] Nunca persistidos em disco, storage externo ou banco de dados
-- [ ] Buffers descartados após montar payload OpenAI
+- [ ] Buffers descartados após montar payload Claude API
 
 ### AC9: Retrocompatibilidade total
 - [ ] Mensagens `application/json` sem anexo funcionam sem alteração (zero mudanças no fluxo existente)
@@ -417,7 +417,7 @@ interface Message {
 
 ## Dependencies
 
-- **Blocked by:** Story 2.3 (streaming OpenAI funcional) ✅ Done
+- **Blocked by:** Story 2.3 (streaming Claude API funcional) ✅ Done
 - **Blocked by:** Story 3.6 (gate pré-chamada, dedução custo real, CreditTransaction com auditoria) ✅ Done
 - **Blocks:** Nenhuma — feature aditiva ao chat existente
 - **New dependencies:** `pdf-parse`, `mammoth`, `sharp` (npm packages para apps/web)
@@ -444,7 +444,7 @@ interface Message {
 | pdf-parse retorna string vazia para PDFs escaneados | Detectar texto vazio e retornar 400 com orientação ao aluno |
 | mammoth/sharp requerem Node.js runtime | `export const runtime = 'nodejs'` obrigatório na API Route |
 | Pico de memória com 3 arquivos × 10MB | 30MB max por request. Com 200 concorrentes (NFR8), ~6GB pior caso teórico — improvável. Monitorar. |
-| Custo de Vision API maior que texto | Gate calcula com GPT-4o pricing quando imagem presente. Aluno vê custo antes (via 402 se insuficiente). |
+| Custo de Vision API maior que texto | Gate calcula com Claude Sonnet pricing quando imagem presente. Aluno vê custo antes (via 402 se insuficiente). |
 
 ---
 
@@ -475,9 +475,9 @@ interface Message {
 - [ ] `processFiles` rejeita quando > 3 arquivos
 - [ ] API chat com JSON → fluxo antigo intocado (retrocompatibilidade)
 - [ ] API chat com multipart + PDF → texto extraído como contexto
-- [ ] API chat com multipart + imagem → Vision API, modelo forçado para gpt-4o
+- [ ] API chat com multipart + imagem → Vision API, modelo forçado para claude-sonnet-4-5-20250929
 - [ ] API chat com multipart + DOCX → texto extraído como contexto
-- [ ] API chat com arquivo inválido → 400, sem chamada OpenAI, sem dedução
+- [ ] API chat com arquivo inválido → 400, sem chamada Claude API, sem dedução
 - [ ] Gate aceita com anexos → stream → deduz custo real incluindo tokens de anexo
 - [ ] Gate rejeita com anexo grande + saldo baixo → 402
 - [ ] `CreditTransaction` registra `hasAttachments`, `attachmentTypes`, `attachmentTokens`
@@ -497,7 +497,7 @@ interface Message {
 - [ ] `calculateImageCost` implementada e testada
 - [ ] `file-processor.ts` funcional com todos os tipos suportados
 - [ ] `POST /api/chat` aceita `multipart/form-data` e `application/json` (retrocompatível)
-- [ ] Modelo forçado para GPT-4o quando imagem presente
+- [ ] Modelo forçado para Claude Sonnet quando imagem presente
 - [ ] Gate inclui tokens de anexos no cálculo de custo máximo
 - [ ] Dedução real inclui tokens de anexos
 - [ ] `CreditTransaction` registra metadados de anexo
@@ -517,4 +517,4 @@ interface Message {
 - **Architecture v4.0:** [docs/architecture.md](../../architecture.md) — Chat API (multipart), calculateImageCost, CreditTransaction with attachment fields, Core Workflow (18 steps)
 - **Story 2.3 (baseline):** [story-2.3-openai-integration.md](./story-2.3-openai-integration.md) — Streaming SSE existente
 - **Story 3.6 (baseline):** [story-3.6-pricing-refactoring.md](../epic-3/story-3.6-pricing-refactoring.md) — Gate + Real Cost, deductCredits, estimateMaxCost
-- **OpenAI Vision API Pricing:** Tiles 512×512, low=85 tokens, high=(tiles×170)+85
+- **Claude Vision (multimodal nativo) Pricing:** Tiles 512×512, low=85 tokens, high=(tiles×170)+85

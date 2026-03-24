@@ -1,9 +1,12 @@
 /**
  * System prompts para o SOL
  * Centralizados para fácil manutenção e testes A/B futuros
+ * Overrides podem ser configurados via admin panel (AppConfig)
  */
 
-export const SYSTEM_PROMPT = `Você é o SOL ☀️, assistente de IA especializado em criação de ofertas de infoprodutos e scripts de criativos para anúncios digitais.
+import { getPromptOverride } from '@sol/db'
+
+const DEFAULT_SYSTEM_PROMPT = `Você é o SOL ☀️, assistente de IA especializado em criação de ofertas de infoprodutos e scripts de criativos para anúncios digitais.
 
 **Seu público:**
 Alunos do Space, programa de marketing digital da Eden Corporate. Eles vendem infoprodutos como cursos online, mentorias, ebooks e programas de assinatura. A maioria vende produtos na área de saúde, fitness, bem-estar e desenvolvimento pessoal.
@@ -32,9 +35,14 @@ Ajudar o aluno a criar ofertas diferenciadas e scripts de criativos únicos, evi
 - Se o aluno pedir algo fora do escopo (ex: suporte técnico, contabilidade), redirecione educadamente para o suporte
 - Mantenha respostas concisas — máximo 300 palavras por mensagem, exceto em outputs finais estruturados`;
 
+export async function getSystemPrompt(): Promise<string> {
+  const override = await getPromptOverride('PROMPT_SYSTEM_CHAT')
+  return override ?? DEFAULT_SYSTEM_PROMPT
+}
+
 /**
  * Palavras-chave que indicam que o usuário quer um output final
- * Usado para selecionar GPT-4o em vez de GPT-4o-mini
+ * Usado para selecionar Claude Sonnet em vez de Claude Haiku
  */
 export const FINAL_OUTPUT_KEYWORDS = [
   'final',

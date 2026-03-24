@@ -12,6 +12,13 @@ export interface DeductMetadata {
   hasAttachments?: boolean
   attachmentTypes?: string[]
   attachmentTokens?: number
+  modulesUsed?: string[]
+  assemblyAiSeconds?: number
+  assemblyAiCredits?: number
+  embeddingTokens?: number
+  embeddingCredits?: number
+  elevenLabsChars?: number
+  elevenLabsCredits?: number
 }
 
 // ─── Custom Error ──────────────────────────────────────────────────────────
@@ -36,6 +43,20 @@ export type AddCreditOptions =
       type: 'adjustment'
       adminEmail: string
       description: string
+    }
+  | {
+      type: 'subscription_renewal'
+      stripePaymentId: string
+      description?: string
+    }
+  | {
+      type: 'promo_purchase'
+      stripePaymentId: string
+      description?: string
+    }
+  | {
+      type: 'referral'
+      description?: string
     }
 
 /**
@@ -73,6 +94,35 @@ export async function addCredits(
           type: 'purchase',
           description: 'Compra de créditos via Stripe',
           stripePaymentId: options.stripePaymentId,
+        },
+      })
+    } else if (options.type === 'subscription_renewal') {
+      await tx.creditTransaction.create({
+        data: {
+          userId,
+          amount: credits,
+          type: 'subscription_renewal',
+          description: options.description || 'Renovação de assinatura mensal',
+          stripePaymentId: options.stripePaymentId,
+        },
+      })
+    } else if (options.type === 'promo_purchase') {
+      await tx.creditTransaction.create({
+        data: {
+          userId,
+          amount: credits,
+          type: 'promo_purchase',
+          description: options.description || 'Compra promocional de créditos',
+          stripePaymentId: options.stripePaymentId,
+        },
+      })
+    } else if (options.type === 'referral') {
+      await tx.creditTransaction.create({
+        data: {
+          userId,
+          amount: credits,
+          type: 'referral',
+          description: options.description || 'Bônus de indicação',
         },
       })
     } else {
@@ -153,6 +203,13 @@ export async function deductCredits(
         hasAttachments: metadata.hasAttachments ?? false,
         attachmentTypes: metadata.attachmentTypes ?? [],
         attachmentTokens: metadata.attachmentTokens,
+        modulesUsed: metadata.modulesUsed ?? [],
+        assemblyAiSeconds: metadata.assemblyAiSeconds,
+        assemblyAiCredits: metadata.assemblyAiCredits,
+        embeddingTokens: metadata.embeddingTokens,
+        embeddingCredits: metadata.embeddingCredits,
+        elevenLabsChars: metadata.elevenLabsChars,
+        elevenLabsCredits: metadata.elevenLabsCredits,
       },
     })
 

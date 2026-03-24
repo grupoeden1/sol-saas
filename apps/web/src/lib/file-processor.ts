@@ -148,7 +148,7 @@ export async function processFile(file: File): Promise<ProcessedFile> {
     )
   }
 
-  const tokens = countRawTokens(text, 'gpt-4o')
+  const tokens = countRawTokens(text)
 
   return { type: 'document', text, filename: file.name, tokens }
 }

@@ -77,6 +77,16 @@ Stories 1–3 concluídas. Story 4.1 (autenticação admin/middleware) concluíd
 28. `pnpm build` passa sem erros
 29. Nenhuma regressão: chat, streaming SSE, webhook Stripe, autenticação, painel do aluno
 
+**Visualização Temporal (Gráficos) — Extensão v11.0**
+41. Gráfico de linha — novos usuários cadastrados por dia/semana/mês (últimos 7/30/60/90 dias). Dados: `COUNT(users) GROUP BY DATE_TRUNC(granularity, created_at)`. Seletor de granularidade
+42. Gráfico de linha — mensagens enviadas por período. Separação: total vs com anexo
+43. Gráfico de área empilhada — tokens consumidos (input vs output) por período
+44. Gráfico de barras — faturamento em R$ por período. JOIN credit_transactions + credit_packages
+45. Gráfico de linha dupla — créditos vendidos vs consumidos por período
+46. Gráfico de linha — custo estimado Claude API em USD por período (tokens × pricing Anthropic por modelo)
+47. Gráfico de barras — distribuição de uso por modelo (Sonnet vs Haiku) por período
+48. Todos os gráficos possuem: tooltip com valores exatos, seletor de período (7d/30d/60d/90d), loading state, empty state
+
 ---
 
 ## Scope
@@ -93,7 +103,7 @@ Stories 1–3 concluídas. Story 4.1 (autenticação admin/middleware) concluíd
 - Paginação da tabela de usuários
 
 **OUT:**
-- Gráficos ou charts (MVP = números e tabelas)
+- ~~Gráficos ou charts~~ → Agora IN (v11.0): gráficos Recharts para 7 métricas temporais
 - Exportação CSV/PDF
 - CRUD de usuários (editar, deletar, bloquear)
 - Filtros de período customizado (apenas: hoje, 7d, 30d, total — fixos)
@@ -683,6 +693,63 @@ export function AddCreditsForm() {
 - Página `/admin` com role USER → redirect `/chat`
 - Página `/admin` com role ADMIN → carrega normalmente
 
+### Subtask 9: Índices de Performance para Queries Temporais (v11.0)
+
+**Adicionar ao schema.prisma:**
+- `User: @@index([createdAt])` — cadastros por período
+- `Message: @@index([createdAt, role])` — mensagens por período filtradas por role
+- `CreditTransaction: @@index([type, createdAt])` — cobertura temporal (substitui `@@index([type])`)
+- `CreditTransaction: @@index([modelUsed])` — distribuição por modelo
+
+Migration: `prisma migrate dev --name add-admin-dashboard-indexes`
+
+### Subtask 10: API Route de Métricas Agregadas (v11.0)
+
+**Criar:** `apps/web/src/app/api/admin/metrics/[metric]/route.ts`
+
+- GET com validação Zod: metric (7 valores), period (7d/30d/60d/90d), granularity (day/week/month)
+- Auth check: `role === ADMIN` server-side
+- Queries via `prisma.$queryRaw` com `DATE_TRUNC(gran, created_at AT TIME ZONE 'America/Sao_Paulo')`
+- Reutilizar `API_PRICING` de `packages/db/src/admin.ts` para cálculo de custo API
+- Response: `{ data: MetricDataPoint[], period, granularity }`
+
+### Subtask 11: Componentes Recharts (v11.0)
+
+**Instalar:** `pnpm add recharts` em `apps/web`
+
+**Criar em `components/admin/charts/`:**
+- `chart-container.tsx` — wrapper Client Component com seletores período/granularidade, loading/empty states
+- `users-chart.tsx` — LineChart (amber-500)
+- `messages-chart.tsx` — LineChart dupla (total + anexo)
+- `tokens-chart.tsx` — AreaChart empilhado (input + output)
+- `revenue-chart.tsx` — BarChart (tooltip R$)
+- `credits-chart.tsx` — LineChart dupla (vendidos emerald vs consumidos amber)
+- `api-cost-chart.tsx` — LineChart (tooltip USD)
+- `model-distribution-chart.tsx` — BarChart empilhado por modelo
+
+### Subtask 12: Integração na Página Admin (v11.0)
+
+- Criar `admin-charts-section.tsx` — Client Component com grid de 7 gráficos
+- Integrar em `admin/page.tsx` como seção "Tendências" entre Financeiro e UsersTable
+
+### Subtask 13: Seed Script para Dashboards (v11.0)
+
+**Criar:** `packages/db/prisma/seed-dashboard.ts`
+- ~50 users, ~500 messages, ~200 credit_transactions distribuídos em 90 dias
+- Idempotente, script adicionado ao package.json
+
+---
+
+## Dev Notes (v11.0 — Gráficos)
+
+- **Padrão de dados:** Client Component (`ChartContainer`) faz fetch para `/api/admin/metrics/[metric]` → recebe dados agregados → passa para componente de gráfico via render prop
+- **Recharts** é a única lib de charts permitida
+- **Agregação SEMPRE no PostgreSQL** via `DATE_TRUNC` — nunca no frontend
+- **Timezone consistente:** `America/Sao_Paulo` em todas as queries `DATE_TRUNC`
+- **Paleta de cores:** amber/orange para linhas primárias, zinc para grid/eixos (paleta solar do SOL), emerald apenas para créditos vendidos
+- **Todos os gráficos:** dentro de `ResponsiveContainer`, com tooltip, animação 300ms
+- **API_PRICING:** reutilizar constantes existentes de `packages/db/src/admin.ts`
+
 ---
 
 ## File List
@@ -700,6 +767,17 @@ export function AddCreditsForm() {
 | `apps/web/src/components/admin/AddCreditsForm.tsx` | CREATE | Client Component com form + dialog de confirmação |
 | `apps/web/src/components/admin/MetricCard.tsx` | UPDATE | Ajustar para suportar variantes (destaque amber para financeiro) |
 | `apps/web/src/components/admin/UsersTable.tsx` | UPDATE | Adaptar colunas: email, saldo R$, mensagens, data |
+| `apps/web/src/app/api/admin/metrics/[metric]/route.ts` | CREATE | API route de métricas agregadas (v11.0) |
+| `apps/web/src/components/admin/charts/chart-container.tsx` | CREATE | Wrapper com período/granularidade/loading/empty (v11.0) |
+| `apps/web/src/components/admin/charts/admin-charts-section.tsx` | CREATE | Seção com grid de 7 gráficos (v11.0) |
+| `apps/web/src/components/admin/charts/users-chart.tsx` | CREATE | LineChart cadastros (v11.0) |
+| `apps/web/src/components/admin/charts/messages-chart.tsx` | CREATE | LineChart mensagens (v11.0) |
+| `apps/web/src/components/admin/charts/tokens-chart.tsx` | CREATE | AreaChart tokens (v11.0) |
+| `apps/web/src/components/admin/charts/revenue-chart.tsx` | CREATE | BarChart faturamento (v11.0) |
+| `apps/web/src/components/admin/charts/credits-chart.tsx` | CREATE | LineChart créditos (v11.0) |
+| `apps/web/src/components/admin/charts/api-cost-chart.tsx` | CREATE | LineChart custo API (v11.0) |
+| `apps/web/src/components/admin/charts/model-distribution-chart.tsx` | CREATE | BarChart modelos (v11.0) |
+| `packages/db/prisma/seed-dashboard.ts` | CREATE | Seed script para dashboards (v11.0) |
 
 ---
 
@@ -731,3 +809,17 @@ export function AddCreditsForm() {
 - [ ] Nenhuma regressão em: chat, streaming SSE, webhook, autenticação, dashboard do aluno
 - [ ] Receita calculada via `grossAmountCents` (verificar no Prisma Studio após compra de teste)
 - [ ] Custo OpenAI via raw query por transação individual (não cotação média)
+
+**Gráficos (v11.0)**
+- [ ] Índices de performance aplicados (User.createdAt, Message.createdAt+role, CreditTransaction.type+createdAt, CreditTransaction.modelUsed)
+- [ ] API route `/api/admin/metrics/[metric]` implementada com validação Zod
+- [ ] Rotas `/api/admin/metrics/*` retornam 403 sem role ADMIN
+- [ ] 7 gráficos Recharts renderizam corretamente com dados de seed
+- [ ] Gráficos exibem empty state quando sem dados
+- [ ] Seletores de período (7d/30d/60d/90d) e granularidade (dia/semana/mês) funcionam
+- [ ] Tooltips mostram valores corretos formatados (R$, USD, números)
+- [ ] Valores dos gráficos batem com métricas tabulares existentes
+- [ ] Queries de 90 dias retornam em < 500ms com seed de 10k registros
+- [ ] Métricas numéricas existentes (ACs 5-23) não afetadas
+- [ ] Responsivo: 2 colunas desktop, 1 coluna mobile
+- [ ] `pnpm typecheck` e `pnpm lint` passam

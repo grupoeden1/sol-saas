@@ -1,94 +1,66 @@
-import { encoding_for_model, type TiktokenModel } from 'tiktoken'
-
-// ─── countTokens ───────────────────────────────────────────────────────────
+// ─── Token estimation ──────────────────────────────────────────────────────
+// Replaced tiktoken with simple heuristic estimation.
+// Actual token counts come from the Anthropic API response (usage.input_tokens / output_tokens).
 
 /**
- * Conta tokens de um array de mensagens usando tiktoken.
- * Inclui overhead de formatação por mensagem (~4 tokens) e priming (~2 tokens).
+ * Estimates tokens for an array of messages.
+ * Uses ~4 chars per token heuristic + overhead per message.
+ * This is used ONLY for the pre-call credit gate estimation.
+ * Real billing uses actual usage from the API response.
  */
 export function countTokens(
   messages: Array<{ role: string; content: string }>,
-  model: string,
+  _model?: string,
 ): number {
-  let enc
-  try {
-    enc = encoding_for_model(model as TiktokenModel)
-  } catch {
-    enc = encoding_for_model('gpt-4o' as TiktokenModel)
+  let total = 0
+  for (const msg of messages) {
+    total += 4 // overhead per message (role, separators)
+    total += estimateTokens(msg.content)
   }
-
-  try {
-    let total = 0
-    for (const msg of messages) {
-      total += 4 // overhead por mensagem (role, name, separadores)
-      total += enc.encode(msg.content).length
-    }
-    total += 2 // assistant reply priming
-    return total
-  } finally {
-    enc.free()
-  }
+  total += 2 // assistant reply priming
+  return total
 }
 
-// ─── countRawTokens ──────────────────────────────────────────────────────
+/**
+ * Estimates tokens for a raw text string.
+ * Used for pre-call gate estimation only.
+ */
+export function countRawTokens(text: string, _model?: string): number {
+  return estimateTokens(text)
+}
 
 /**
- * Conta tokens de um texto puro, sem overhead de mensagem.
- * Usado para contar tokens de output isoladamente.
+ * Simple token estimation: ~4 characters per token.
+ * Conservative estimate suitable for credit gate checks.
  */
-export function countRawTokens(text: string, model: string): number {
-  let enc
-  try {
-    enc = encoding_for_model(model as TiktokenModel)
-  } catch {
-    enc = encoding_for_model('gpt-4o' as TiktokenModel)
-  }
-
-  try {
-    return enc.encode(text).length
-  } finally {
-    enc.free()
-  }
+export function estimateTokens(text: string): number {
+  return Math.ceil(text.length / 4)
 }
 
 // ─── calculateImageCost ──────────────────────────────────────────────────────
 
 /**
- * Calcula custo em tokens de uma imagem para a OpenAI Vision API.
- *
- * @see https://platform.openai.com/docs/guides/vision
+ * Estimates token cost of an image for Claude Vision API.
+ * Claude charges based on image size:
+ * - Images are resized to fit within a 1568x1568 bounding box
+ * - Cost is approximately (width * height) / 750 tokens
+ * @see https://docs.anthropic.com/en/docs/build-with-claude/vision#image-costs
  */
 export function calculateImageCost(
   width: number,
   height: number,
-  detail: 'low' | 'high' | 'auto',
+  _detail?: 'low' | 'high' | 'auto',
 ): number {
-  if (detail === 'auto') {
-    return width > 512 || height > 512
-      ? calculateImageCost(width, height, 'high')
-      : 85
-  }
-
-  if (detail === 'low') return 85
-
   let w = width
   let h = height
 
-  if (w > 2048 || h > 2048) {
-    const scale = 2048 / Math.max(w, h)
+  // Scale down to fit within 1568x1568
+  if (w > 1568 || h > 1568) {
+    const scale = 1568 / Math.max(w, h)
     w = Math.floor(w * scale)
     h = Math.floor(h * scale)
   }
 
-  const shortSide = Math.min(w, h)
-  if (shortSide > 768) {
-    const scale = 768 / shortSide
-    w = Math.floor(w * scale)
-    h = Math.floor(h * scale)
-  }
-
-  const tilesX = Math.ceil(w / 512)
-  const tilesY = Math.ceil(h / 512)
-
-  return (tilesX * tilesY * 170) + 85
+  // Claude's approximate formula
+  return Math.ceil((w * h) / 750)
 }

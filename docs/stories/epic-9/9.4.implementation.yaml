@@ -1,0 +1,185 @@
+story: "9.4"
+title: "Gerenciamento de Assinatura pelo Aluno"
+status: pending
+depends_on: ["9.3"]
+
+phases:
+  - name: Setup
+    subtasks:
+      - id: setup_1
+        description: "Create subscription management service file with functions: getCurrentSubscription(userId), cancelSubscription(userId), reactivateSubscription(userId), changePlan(userId, newPlanId). Each function encapsulates Stripe API calls and DB updates"
+        files:
+          - packages/db/src/subscription-management.ts
+        status: pending
+
+      - id: setup_2
+        description: "Export the new subscription-management module from the @sol/db barrel file"
+        files:
+          - packages/db/src/index.ts
+        status: pending
+
+  - name: Implementation
+    subtasks:
+      - id: impl_1
+        description: "Implement getCurrentSubscription(userId): queries UserSubscription with plan relation (include plan name, creditsMonthly, priceInCents). Returns null if no subscription exists. Returns subscription data with status, plan details, currentPeriodEnd, cancelAtPeriodEnd"
+        files:
+          - packages/db/src/subscription-management.ts
+        verification: "Returns full subscription info with plan details, or null for users without subscription"
+        depends_on: [setup_1]
+        status: pending
+
+      - id: impl_2
+        description: "Implement cancelSubscription(userId): finds UserSubscription (throw 404 if not found). Validates status is ACTIVE and cancelAtPeriodEnd is false (throw 400 otherwise). Calls stripe.subscriptions.update(stripeSubscriptionId, { cancel_at_period_end: true }). Updates UserSubscription.cancelAtPeriodEnd = true in DB. Returns updated subscription"
+        files:
+          - packages/db/src/subscription-management.ts
+        verification: "Stripe subscription marked for cancellation at period end, DB record updated"
+        depends_on: [setup_1]
+        status: pending
+
+      - id: impl_3
+        description: "Implement reactivateSubscription(userId): finds UserSubscription (throw 404 if not found). Validates status is ACTIVE AND cancelAtPeriodEnd is true (throw 400 otherwise — can only reactivate a pending cancellation). Calls stripe.subscriptions.update(stripeSubscriptionId, { cancel_at_period_end: false }). Updates UserSubscription.cancelAtPeriodEnd = false in DB. Returns updated subscription"
+        files:
+          - packages/db/src/subscription-management.ts
+        verification: "Pending cancellation reverted in Stripe and DB. Rejects if not pending cancellation"
+        depends_on: [setup_1]
+        status: pending
+
+      - id: impl_4
+        description: "Implement changePlan(userId, newPlanId): finds UserSubscription with plan relation (throw 404 if not found). Validates status is ACTIVE. Validates newPlanId refers to active plan with valid stripePriceId. Validates newPlanId differs from current planId (throw 400 if same). Retrieves Stripe subscription to get items[0].id. Calls stripe.subscriptions.update(stripeSubscriptionId, { items: [{ id: itemId, price: newPlan.stripePriceId }], proration_behavior: 'create_prorations' }). Updates UserSubscription.planId to newPlanId in DB. Returns updated subscription with new plan details"
+        files:
+          - packages/db/src/subscription-management.ts
+        verification: "Plan changed in Stripe with proration, DB updated. Upgrade charges prorated difference, downgrade credits prorated difference"
+        depends_on: [setup_1]
+        status: pending
+
+      - id: impl_5
+        description: "Create GET /api/subscription/current route: protected by auth. Calls getCurrentSubscription(userId). Returns subscription data with plan details, status, dates, cancelAtPeriodEnd. Returns 404 if no subscription. Also fetch all active plans (for plan change modal) and return them alongside"
+        files:
+          - apps/web/src/app/api/subscription/current/route.ts
+        verification: "Returns current subscription for authenticated user, or 404. Returns 401 for unauthenticated"
+        depends_on: [impl_1]
+        status: pending
+
+      - id: impl_6
+        description: "Create POST /api/subscription/cancel route: protected by auth. Calls cancelSubscription(userId). Returns updated subscription. Handles errors: 404 (no subscription), 400 (invalid state for cancellation), 500 (Stripe failure)"
+        files:
+          - apps/web/src/app/api/subscription/cancel/route.ts
+        verification: "Cancel sets cancel_at_period_end. Returns 404/400/500 for error cases"
+        depends_on: [impl_2]
+        status: pending
+
+      - id: impl_7
+        description: "Create POST /api/subscription/reactivate route: protected by auth. Calls reactivateSubscription(userId). Returns updated subscription. Handles errors: 404 (no subscription), 400 (not pending cancellation), 500 (Stripe failure)"
+        files:
+          - apps/web/src/app/api/subscription/reactivate/route.ts
+        verification: "Reactivate reverts pending cancellation. Returns 404/400/500 for error cases"
+        depends_on: [impl_3]
+        status: pending
+
+      - id: impl_8
+        description: "Create POST /api/subscription/change-plan route: protected by auth. Accepts { newPlanId } in body. Calls changePlan(userId, newPlanId). Returns updated subscription with new plan. Handles errors: 404 (no subscription), 400 (invalid plan, same plan, inactive plan), 500 (Stripe failure)"
+        files:
+          - apps/web/src/app/api/subscription/change-plan/route.ts
+        verification: "Plan change works with proration. Returns 404/400/500 for error cases"
+        depends_on: [impl_4]
+        status: pending
+
+      - id: impl_9
+        description: "Create SubscriptionManager client component with conditional rendering based on subscription state: (a) status ACTIVE + cancelAtPeriodEnd false: show plan info + 'Trocar Plano' button + 'Cancelar' button, (b) status ACTIVE + cancelAtPeriodEnd true: show plan info + 'Reativar' button + badge 'Cancela em DD/MM/YYYY', (c) status PAST_DUE: show inadimplencia warning + link to update payment method, (d) status CANCELED or no subscription: show 'Assinar Novo Plano' button linking to /credits/subscribe. Display current plan name, credits, price, renewal date (currentPeriodEnd)"
+        files:
+          - apps/web/src/components/subscription/SubscriptionManager.tsx
+        verification: "Correct buttons/badges shown for each subscription state. Plan info displayed accurately"
+        depends_on: [impl_5]
+        status: pending
+
+      - id: impl_10
+        description: "Create CancelSubscriptionModal client component: shows cancellation date (currentPeriodEnd formatted), warning that auto-renewal stops, 'Confirmar Cancelamento' button that calls POST /api/subscription/cancel, loading state, success/error feedback"
+        files:
+          - apps/web/src/components/subscription/CancelSubscriptionModal.tsx
+        verification: "Modal displays correct end date, cancel button calls API, shows success/error states"
+        depends_on: [impl_6]
+        status: pending
+
+      - id: impl_11
+        description: "Create ChangePlanModal client component: fetches available active plans. Shows comparison table: current plan vs selected new plan (name, credits, price). Indicates if upgrade or downgrade. Shows proration info text (pro-rata charges/credits). 'Confirmar Troca' button calls POST /api/subscription/change-plan with newPlanId, loading state, success/error feedback. On success, refreshes subscription data"
+        files:
+          - apps/web/src/components/subscription/ChangePlanModal.tsx
+        verification: "Modal shows plan comparison, upgrade/downgrade indicator, proration info. Change button calls API correctly"
+        depends_on: [impl_8]
+        status: pending
+
+  - name: Integration
+    subtasks:
+      - id: int_1
+        description: "Add SubscriptionManager component to the student dashboard or profile page. Place it in a section titled 'Minha Assinatura'. Fetch subscription data via GET /api/subscription/current on page load. Pass subscription and plans data to SubscriptionManager"
+        files:
+          - apps/web/src/app/dashboard/page.tsx
+        verification: "Dashboard shows subscription management section with correct current state"
+        depends_on: [impl_9, impl_10, impl_11]
+        status: pending
+
+      - id: int_2
+        description: "Verify webhook synchronization: changes made via the subscription management API (cancel, reactivate, change plan) trigger Stripe webhooks (customer.subscription.updated) that are already handled by Story 9.3 webhook handlers. Confirm that DB state after API call matches DB state after webhook processing (no conflicts or data races)"
+        files:
+          - apps/web/src/app/api/webhooks/stripe/route.ts
+        verification: "API updates and webhook updates are consistent. No duplicate or conflicting DB writes"
+        depends_on: [impl_6, impl_7, impl_8]
+        status: pending
+
+      - id: int_3
+        description: "Add Stripe Customer Portal link for PAST_DUE users to update payment method. Use stripe.billingPortal.sessions.create or direct link to allow users to update their card. Add GET /api/subscription/portal route that creates a portal session and returns URL"
+        files:
+          - apps/web/src/app/api/subscription/portal/route.ts
+        verification: "PAST_DUE users can access Stripe Customer Portal to update payment method"
+        depends_on: [impl_9]
+        status: pending
+
+  - name: Testing
+    subtasks:
+      - id: test_1
+        description: "Unit tests for cancelSubscription: (a) succeeds for ACTIVE subscription with cancelAtPeriodEnd=false, (b) rejects for already-canceling subscription (cancelAtPeriodEnd=true), (c) rejects for non-ACTIVE subscription, (d) returns 404 for user without subscription, (e) handles Stripe API failure gracefully"
+        files:
+          - packages/db/src/__tests__/subscription-management.test.ts
+        verification: "All cancellation scenarios covered with correct behavior"
+        depends_on: [impl_2]
+        status: pending
+
+      - id: test_2
+        description: "Unit tests for reactivateSubscription: (a) succeeds for ACTIVE + cancelAtPeriodEnd=true, (b) rejects for ACTIVE + cancelAtPeriodEnd=false, (c) rejects for non-ACTIVE subscription, (d) returns 404 for user without subscription, (e) handles Stripe API failure gracefully"
+        files:
+          - packages/db/src/__tests__/subscription-management.test.ts
+        verification: "All reactivation scenarios covered with correct behavior"
+        depends_on: [impl_3]
+        status: pending
+
+      - id: test_3
+        description: "Unit tests for changePlan: (a) succeeds for ACTIVE subscription with valid new plan, (b) rejects same plan as current, (c) rejects inactive new plan, (d) rejects plan without stripePriceId, (e) rejects for non-ACTIVE subscription, (f) correctly calls stripe.subscriptions.update with items and proration_behavior, (g) handles Stripe API failure gracefully"
+        files:
+          - packages/db/src/__tests__/subscription-management.test.ts
+        verification: "All plan change scenarios covered including proration parameter"
+        depends_on: [impl_4]
+        status: pending
+
+      - id: test_4
+        description: "Integration tests for API routes: (a) GET /api/subscription/current returns data for subscribed user and 404 for unsubscribed, (b) POST /api/subscription/cancel returns updated subscription, (c) POST /api/subscription/reactivate returns updated subscription, (d) POST /api/subscription/change-plan returns updated subscription with new plan. All routes return 401 for unauthenticated"
+        files:
+          - apps/web/src/app/api/subscription/__tests__/routes.test.ts
+        verification: "All API routes return correct responses for valid and invalid requests"
+        depends_on: [impl_5, impl_6, impl_7, impl_8]
+        status: pending
+
+      - id: test_5
+        description: "Component tests for SubscriptionManager: (a) renders correct UI for ACTIVE subscription, (b) renders cancel pending state with reactivate button and date badge, (c) renders PAST_DUE warning, (d) renders CANCELED state with new subscription link, (e) CancelSubscriptionModal shows correct date and calls API, (f) ChangePlanModal shows plan comparison and calls API"
+        files:
+          - apps/web/src/components/subscription/__tests__/SubscriptionManager.test.tsx
+        verification: "All UI states render correctly, modals function properly, API calls made on button clicks"
+        depends_on: [impl_9, impl_10, impl_11]
+        status: pending
+
+      - id: test_6
+        description: "End-to-end lifecycle test: (1) subscribe to Basico plan, (2) upgrade to Profissional (verify proration), (3) downgrade to Basico (verify credit proration), (4) cancel subscription (verify cancel_at_period_end), (5) reactivate subscription (verify cancelAtPeriodEnd reverted), (6) cancel again and let period end (verify status CANCELED)"
+        files:
+          - apps/web/src/app/api/subscription/__tests__/lifecycle.test.ts
+        verification: "Full management lifecycle works end-to-end with correct Stripe and DB state at each step"
+        depends_on: [test_4]
+        status: pending

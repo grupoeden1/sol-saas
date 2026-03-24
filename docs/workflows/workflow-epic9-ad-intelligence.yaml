@@ -1,0 +1,1597 @@
+# =============================================================================
+# WORKFLOW: Epic 9 — Ad Intelligence & Content Discovery
+# =============================================================================
+# Plataforma de descoberta e análise de referências criativas integrada ao quiz.
+# Busca de ads (Meta Ad Library API) e conteúdos orgânicos virais (TikTok
+# Research API, YouTube Data API v3, Instagram Graph API) com classificação
+# automática de formato via Claude Vision e geração de roteiro modelado.
+#
+# 3 Fases de Entrega:
+#   Fase 1: Meta Ad Library API (ads) + Análise de Link Social
+#   Fase 2: Busca de Virais Orgânicos (TikTok, YouTube, Instagram)
+#   Fase 3: Enrichment Layer (terceiros) + Análise de Concorrentes
+#
+# Princípio: APIs oficiais como alicerce. Terceiros como enrichment opcional
+# com fallback silencioso. Upload manual sempre disponível como camada 3.
+# =============================================================================
+
+id: workflow-epic9-ad-intelligence
+name: "Epic 9 — Ad Intelligence & Content Discovery"
+version: "1.0"
+createdAt: "2026-03-11"
+createdBy: "Eden Corporate"
+trigger: manual
+status: draft
+
+metadata:
+  project: SOL
+  epic: 9
+  description: >
+    Plataforma de descoberta e análise de referências criativas. O aluno
+    informa o nicho no quiz, o SOL busca referências de ads e conteúdos
+    orgânicos virais via APIs oficiais, a IA classifica formato e estrutura,
+    e gera roteiro modelado. Diferencial: ciclo completo (descobrir → analisar
+    → gerar) em um único produto. Nenhuma ferramenta no mercado brasileiro
+    faz isso integrado para infoprodutos.
+  dependencies:
+    - epic: 6
+      reason: "Quiz engine e caminhos condicionais (1A/1B + 2A/2B) — a busca de referências se integra ao quiz"
+    - epic: 7
+      reason: "Pipeline de processamento de vídeo (AssemblyAI + FFmpeg + Vision) — reutilizado para análise de referências"
+    - story: "4.1"
+      reason: "Role-based access control para configurações admin das APIs"
+  risks:
+    - id: "R1"
+      description: "Meta Ad Library API tem rate limits e pode mudar sem aviso"
+      mitigation: "Cache de resultados por 24h, retry com backoff, fallback para upload manual"
+    - id: "R2"
+      description: "TikTok Research API requer aprovação que pode demorar 2-4 semanas"
+      mitigation: "Fase 2 inicia com YouTube Data API (acesso imediato) enquanto aguarda aprovação TikTok"
+    - id: "R3"
+      description: "APIs de terceiros (enrichment) podem sair do ar"
+      mitigation: "Arquitetura de fallback silencioso — se terceiro cai, experiência funciona sem ele"
+    - id: "R4"
+      description: "Classificação automática de formato imprecisa"
+      mitigation: "Aluno pode corrigir formato manualmente após classificação da IA"
+  apiOverview:
+    official:
+      - name: "Meta Ad Library API"
+        purpose: "Busca de anúncios ativos por termo/página"
+        auth: "Meta Developer App + Access Token"
+        cost: "Gratuita"
+        rateLimit: "200 calls/hora"
+        docs: "https://www.facebook.com/ads/library/api/"
+        dataReturned: "ad copy, preview link, start date, platforms, status, advertiser info"
+        dataNotAvailable: "CTR, ROAS, CPC, impressões, gasto, segmentação"
+      - name: "YouTube Data API v3"
+        purpose: "Busca de vídeos orgânicos virais por keyword"
+        auth: "Google Cloud API Key"
+        cost: "Gratuita (10.000 units/dia)"
+        rateLimit: "10.000 quota units/dia"
+        docs: "https://developers.google.com/youtube/v3"
+        dataReturned: "views, likes, comments, duration, thumbnail, publishedAt"
+      - name: "TikTok Research API"
+        purpose: "Busca de vídeos virais por keyword/hashtag"
+        auth: "Aplicação aprovada pelo TikTok"
+        cost: "Gratuita para pesquisa"
+        rateLimit: "1000 requests/dia"
+        docs: "https://developers.tiktok.com/products/research-api/"
+        dataReturned: "views, likes, shares, comments, duration, music"
+      - name: "Instagram Graph API"
+        purpose: "Busca de posts por hashtag"
+        auth: "Meta Developer App + Instagram Business Account"
+        cost: "Gratuita"
+        rateLimit: "200 calls/hora, hashtag search limitado a 30 resultados"
+        docs: "https://developers.facebook.com/docs/instagram-api/"
+        dataReturned: "likes, comments, permalink, media URL, timestamp"
+    enrichment:
+      - name: "API de terceiros (AdSpy/BigSpy/Apify)"
+        purpose: "Banco histórico de ads e orgânicos"
+        cost: "$99-149/mês fixo"
+        risk: "Pode sair do ar a qualquer momento"
+        architecture: "Enrichment layer opcional com fallback silencioso"
+
+# =============================================================================
+# PHASES
+# =============================================================================
+
+phases:
+  # ===========================================================================
+  # PHASE 1 — PRD: EPIC 9 COMPLETO
+  # ===========================================================================
+  - id: phase-1-prd
+    name: "PRD — Epic 9 Ad Intelligence"
+    description: "Definir Epic 9 completo no PRD com FRs, stories e ACs"
+    agent: "@pm"
+
+    steps:
+      - id: "1.1"
+        action: "create-epic-9-prd"
+        description: "Adicionar Epic 9 ao PRD com todas as stories"
+        prompt: |
+          @pm — Atualizar PRD para adicionar Epic 9 — Ad Intelligence &
+          Content Discovery. Este é o epic que transforma o SOL de "gerador
+          de roteiros" para "plataforma de inteligência criativa".
+
+          ## Contexto de Produto
+
+          O aluno do Space hoje faz manualmente: abre AdSpy ($149/mês) para
+          buscar referências de ads, abre TikTok/Instagram para buscar
+          conteúdos orgânicos virais, analisa na cabeça o formato e estrutura,
+          e depois tenta escrever o roteiro. São 4 ferramentas e 3+ horas.
+          O SOL vai fazer tudo em um fluxo dentro do quiz.
+
+          ## Functional Requirements (adicionar)
+
+          - **FR35:** O sistema deve buscar anúncios ativos na Meta Ad Library
+            API por termo de busca (nicho/produto) e país (Brasil), retornando:
+            ad copy, link de preview do criativo, data de início, plataformas,
+            nome do anunciante. Resultados ordenados por longevidade (dias
+            ativo = proxy de performance). Cache de 24h por busca.
+
+          - **FR36:** O sistema deve buscar conteúdos orgânicos virais por
+            keyword/hashtag via: YouTube Data API v3 (vídeos), TikTok Research
+            API (vídeos), Instagram Graph API (posts/reels). Resultados
+            ordenados por engajamento (views, likes, shares). Cache de 12h.
+
+          - **FR37:** O sistema deve analisar qualquer link de post social
+            (TikTok, Instagram, YouTube, Facebook) colado pelo aluno:
+            extrair metadados via API oficial da plataforma, baixar/acessar
+            mídia quando disponível, classificar formato automaticamente via
+            Claude Vision.
+
+          - **FR38:** O sistema deve classificar automaticamente o formato
+            do criativo via Claude Vision: top 5, antes/depois, isso ou aquilo,
+            testemunho, tutorial, informativo, low-fi, provocação, pergunta,
+            classificação/ranking, curiosidade, transformação, bastidores,
+            unboxing, POV. Aluno pode corrigir manualmente.
+
+          - **FR39:** A busca de referências deve se integrar aos caminhos
+            do quiz: no Caminho 1A (Anúncio), busca via Meta Ad Library API;
+            no Caminho 1B (Orgânico), busca via TikTok/YouTube/Instagram APIs.
+            O aluno pode selecionar referência da busca OU fazer upload manual
+            (Caminho 2A existente). A referência selecionada alimenta o prompt
+            de geração do roteiro.
+
+          - **FR40:** Enrichment layer opcional via API de terceiros
+            (configurável pelo admin). Se disponível, enriquece resultados
+            com badge "Histórico". Se indisponível, experiência funciona
+            normalmente sem erro visível. Admin configura/desativa via
+            `/admin/integrations`.
+
+          - **FR41:** O sistema deve analisar perfis de concorrentes: aluno
+            informa @ ou URL do perfil, sistema lista últimos posts via API
+            oficial, ordena por engajamento, mostra quais conteúdos performaram
+            melhor. Disponível como feature complementar fora do quiz.
+
+          ## Epic 9: Ad Intelligence & Content Discovery
+
+          > Plataforma de descoberta e análise de referências criativas
+          > integrada ao quiz. Três fases: (1) Meta Ad Library + análise
+          > de link, (2) busca de virais orgânicos, (3) enrichment +
+          > concorrentes. Ao final, o aluno descobre, analisa e gera
+          > roteiro em um único fluxo.
+
+          ### Story 9.1 — Database Schema: References & Integrations
+
+          As a developer,
+          I want the database schema for creative references, API
+          configurations and search cache,
+          so that reference data can be stored and used for script generation.
+
+          **Acceptance Criteria:**
+
+          1. Migration Prisma cria tabela `creative_references` com: `id`,
+             `user_id` (FK), `quiz_session_id` (FK, nullable), `source`
+             (enum: `META_AD_LIBRARY` | `TIKTOK` | `YOUTUBE` | `INSTAGRAM`
+             | `MANUAL_UPLOAD` | `ENRICHMENT`), `source_url` (string, nullable),
+             `source_id` (string, nullable — ID externo da plataforma),
+             `media_type` (enum: `VIDEO` | `IMAGE`), `media_url` (string,
+             nullable — URL do preview/mídia), `ad_copy` (text, nullable),
+             `start_date` (datetime, nullable — data início do ad),
+             `days_active` (int, nullable — calculado), `engagement_metrics`
+             (JSON, nullable — views, likes, shares, comments), `platform`
+             (string — facebook, instagram, tiktok, youtube),
+             `format_classification` (string, nullable — classificado pela IA),
+             `format_corrected` (string, nullable — corrigido pelo aluno),
+             `structure_analysis` (text, nullable — análise IA de gancho,
+             CTA, cortes), `advertiser_name` (string, nullable),
+             `search_query` (string — termo usado na busca), `created_at`
+
+          2. Migration cria tabela `search_cache` com: `id`, `query_hash`
+             (string, unique — hash de query+source+country), `source`
+             (enum), `results` (JSON — resultados serializados),
+             `expires_at` (datetime), `created_at`.
+             TTL: 24h para ads, 12h para orgânico.
+
+          3. Migration cria tabela `api_configurations` com: `id`, `provider`
+             (string, unique — meta, tiktok, youtube, instagram, enrichment),
+             `enabled` (boolean, default true), `api_key_env` (string —
+             nome da env var, nunca a chave em si), `rate_limit_per_hour`
+             (int), `config` (JSON, nullable — configurações extras),
+             `updated_at`, `updated_by` (string). Seeds iniciais para
+             as 4 APIs oficiais.
+
+          4. Migration cria tabela `competitor_profiles` com: `id`,
+             `user_id` (FK), `platform` (string), `profile_handle`
+             (string), `profile_url` (string), `last_fetched_at`
+             (datetime, nullable), `top_posts` (JSON, nullable),
+             `created_at`
+
+          5. Relações: `user.creativeReferences`,
+             `quizSession.creativeReferences`, `user.competitorProfiles`
+
+          6. Índices: `(source, search_query)`, `(user_id, created_at)`,
+             `(quiz_session_id)`, `(query_hash)` na search_cache
+
+          ### Story 9.2 — Meta Ad Library API Integration
+
+          As a student doing the Ad Creative path (1A),
+          I want to search active ads in my niche directly from the quiz,
+          so that I can find proven ad references without leaving SOL.
+
+          **Acceptance Criteria:**
+
+          1. Service `AdLibraryService` em `apps/web/lib/services/ad-library.ts`
+             encapsula toda comunicação com Meta Ad Library API.
+             Configuração via `META_AD_LIBRARY_ACCESS_TOKEN` (env var)
+
+          2. `GET /api/references/ads?q={query}&country=BR&limit=20`
+             busca anúncios ativos na Meta Ad Library API. Parâmetros
+             mapeados: `search_terms`, `ad_reached_countries=BR`,
+             `ad_active_status=ACTIVE`, `media_type=ALL`
+
+          3. Resultados retornam: `ad_copy` (body text do anúncio),
+             `preview_url` (link do preview do criativo),
+             `ad_delivery_start_time` (data início),
+             `days_active` (calculado: hoje - start_time),
+             `publisher_platforms` (facebook, instagram, etc),
+             `page_name` (nome do anunciante)
+
+          4. Resultados ordenados por `days_active DESC` — anúncios mais
+             antigos primeiro (proxy de performance: mais tempo ativo =
+             provavelmente lucrativo)
+
+          5. Cache implementado via tabela `search_cache`: se existe cache
+             válido (< 24h) para mesma query+source, retorna cache.
+             Senão, busca na API e salva cache.
+
+          6. Rate limiting respeitado: máximo 200 calls/hora. Se exceder,
+             retorna cache stale com aviso ou mensagem amigável.
+
+          7. Erro da API (timeout, rate limit, indisponível) retorna
+             fallback gracioso: mensagem "Busca temporariamente
+             indisponível. Faça upload manual da referência."
+             Nunca erro técnico visível ao aluno.
+
+          8. Integração no quiz: no Caminho 1A, após pergunta Q4 (nicho),
+             seção "Referências Encontradas" aparece com resultados da
+             busca. Aluno pode selecionar referência OU ignorar e seguir
+             com upload manual (2A) ou sem referência (2B).
+
+          9. Quando aluno seleciona referência, `creative_references`
+             registrada com todos os metadados. Referência vinculada
+             ao `quiz_session_id`.
+
+          10. Preview do criativo exibido inline (imagem) ou como
+              thumbnail com link (vídeo). Sem download automático
+              de vídeos — aluno faz upload manual se quiser análise
+              profunda via pipeline do Epic 7.
+
+          ### Story 9.3 — Link Analysis: Cole Qualquer Link Social
+
+          As a student,
+          I want to paste any social media post link and have the AI
+          analyze it automatically,
+          so that I can use any reference I find online.
+
+          **Acceptance Criteria:**
+
+          1. `POST /api/references/analyze-link` aceita URL de post
+             social. Detecta plataforma automaticamente via regex:
+             - `tiktok.com` → TikTok
+             - `instagram.com/p/` ou `/reel/` → Instagram
+             - `youtube.com/watch` ou `youtu.be` ou `/shorts/` → YouTube
+             - `facebook.com` → Facebook
+
+          2. Para cada plataforma, usa API oficial para extrair metadados:
+             - YouTube: Data API v3 → title, views, likes, duration,
+               thumbnail, publishedAt
+             - Instagram: oEmbed endpoint (público, sem auth) → thumbnail,
+               title, author. Graph API se disponível → likes, comments
+             - TikTok: oEmbed endpoint → title, author, thumbnail.
+               Research API se aprovada → views, likes, shares
+             - Facebook: oEmbed endpoint → title, author, thumbnail
+
+          3. Se mídia é imagem: exibe inline + envia para Claude Vision
+             para classificação automática de formato
+
+          4. Se mídia é vídeo: exibe thumbnail + metadados. Aluno pode
+             optar por "Analisar vídeo completo" que abre upload manual
+             para pipeline do Epic 7 (AssemblyAI + FFmpeg + Vision)
+
+          5. Classificação de formato via Claude Vision (`claude-haiku-4-5-20251001`
+             para economia): analisa thumbnail/imagem e retorna formato
+             classificado (top 5, testemunho, tutorial, etc) com confiança
+             (alta/média/baixa). Se confiança baixa, sugere ao aluno
+             confirmar/corrigir.
+
+          6. Custo da classificação em créditos: deduzido do saldo do aluno
+             (mesma lógica FR5). Gate pré-chamada inclui tokens da imagem.
+
+          7. Resultado salvo em `creative_references` com `source_url`,
+             metadados extraídos, `format_classification` e
+             `structure_analysis`.
+
+          8. Componente reutilizável `<LinkAnalyzer />`: input de URL com
+             paste detection, loading state durante análise, card de
+             resultado com preview + metadados + formato classificado.
+             Usado no quiz (Caminhos 1A e 1B) e como feature standalone
+             em `/references`.
+
+          9. Erro de URL inválida ou plataforma não suportada: mensagem
+             clara ao aluno. Erro de API: fallback "Não foi possível
+             analisar este link. Tente fazer upload manual."
+
+          ### Story 9.4 — Busca de Conteúdos Orgânicos Virais
+
+          As a student doing the Organic Video path (1B),
+          I want to search viral organic content in my niche,
+          so that I can model my video after proven viral references.
+
+          **Acceptance Criteria:**
+
+          1. `GET /api/references/organic?q={query}&platforms=tiktok,youtube,instagram&limit=20`
+             busca conteúdos orgânicos virais em múltiplas plataformas.
+
+          2. **YouTube Data API v3:**
+             - Busca por keyword com filtro `type=video`,
+               `videoDuration=short` (< 4min), `order=viewCount`,
+               `regionCode=BR`, `relevanceLanguage=pt`
+             - Retorna: title, views, likes, comments, duration,
+               thumbnail URL, publishedAt, channelTitle
+             - Quota: 100 units por search (100 buscas/dia com 10k units)
+
+          3. **TikTok Research API:**
+             - Busca por keyword/hashtag com filtro de região e período
+             - Retorna: views, likes, shares, comments, duration,
+               music info, create_time
+             - Se API não aprovada ainda: feature desabilitada para
+               TikTok com mensagem "Em breve" (sem erro)
+
+          4. **Instagram Graph API:**
+             - Busca por hashtag (requer Instagram Business Account
+               conectada via Meta Developer App)
+             - Retorna: top posts da hashtag com likes, comments,
+               permalink, media_url, timestamp
+             - Limitação: 30 resultados por hashtag, últimos 7 dias
+               para top_media
+
+          5. Resultados consolidados de todas as plataformas em lista
+             unificada, ordenados por engajamento (views para vídeo,
+             likes+comments para imagens). Badge de plataforma em cada
+             resultado (ícone TikTok/YouTube/Instagram).
+
+          6. Cache por busca: 12h para orgânico (conteúdo muda mais
+             rápido que ads). Implementado via tabela `search_cache`.
+
+          7. Integração no quiz: no Caminho 1B, após pergunta Q4 (nicho),
+             seção "Conteúdos Virais" aparece com resultados. Aluno pode
+             selecionar referência viral para modelar.
+
+          8. Quando aluno seleciona referência, `creative_references`
+             registrada. Se for vídeo, aluno pode optar por upload
+             para análise profunda via Epic 7 ou seguir com metadados
+             + thumbnail apenas.
+
+          9. Filtros no frontend: plataforma (TikTok/YouTube/Instagram/
+             todos), período (7d/30d), tipo (vídeo/imagem). Filtros
+             aplicados client-side sobre resultados já buscados.
+
+          10. Cada plataforma que falhar não impede as outras de
+              retornar resultados. Fallback por plataforma independente.
+
+          ### Story 9.5 — Classificação Automática de Formato
+
+          As a developer,
+          I want the AI to automatically classify the format of any
+          creative reference,
+          so that the format feeds into the script generation prompt.
+
+          **Acceptance Criteria:**
+
+          1. Função `classifyFormat(mediaUrl | imageBuffer, adCopy?)`
+             envia mídia para Claude Vision (`claude-haiku-4-5-20251001`)
+             com prompt de classificação.
+
+          2. Formatos reconhecidos (enum `CreativeFormat`):
+             `TOP_5`, `BEFORE_AFTER`, `THIS_OR_THAT`, `TESTIMONIAL`,
+             `TUTORIAL`, `INFORMATIVE`, `LOW_FI`, `PROVOCATION`,
+             `QUESTION`, `RANKING`, `CURIOSITY`, `TRANSFORMATION`,
+             `BEHIND_SCENES`, `UNBOXING`, `POV`, `STORYTELLING`,
+             `CHALLENGE`, `OTHER`
+
+          3. Retorno tipado: `{ format: CreativeFormat, confidence:
+             'HIGH' | 'MEDIUM' | 'LOW', reasoning: string }`
+
+          4. Se confiança `LOW`: UI mostra classificação com badge
+             amarelo "Verificar" + dropdown para aluno corrigir.
+             Se `HIGH`: mostra como definitivo com opção de editar.
+
+          5. Formato classificado (ou corrigido) salvo em
+             `creative_references.format_classification` (ou
+             `format_corrected` se aluno alterou)
+
+          6. Formato alimenta diretamente a seleção de módulos
+             contextuais no prompt de geração (camada 2 do Prompt
+             Architecture) — Ex: formato `TOP_5` ativa módulo
+             "estrutura de lista com contagem regressiva"
+
+          7. Custo em créditos: classificação via Haiku é barata
+             (~0.5-1 crédito por classificação). Deduzido do saldo.
+             Gate pré-chamada funciona normalmente.
+
+          8. Batch classification: quando busca retorna 20 resultados,
+             sistema classifica apenas os 5 primeiros automaticamente
+             (economia de créditos). Demais classificados sob demanda
+             quando aluno clica.
+
+          9. Classification cache: se mesma `source_url` já foi
+             classificada, reutiliza resultado sem nova chamada IA.
+
+          ### Story 9.6 — Integração com Quiz: Reference Picker
+
+          As a student,
+          I want to pick a reference from search results directly in
+          the quiz flow,
+          so that the AI uses my chosen reference to generate the script.
+
+          **Acceptance Criteria:**
+
+          1. Componente `<ReferencePicker />` integrado ao quiz entre
+             a seção Quiz Inicial e os Caminhos 2A/2B.
+
+          2. Se Caminho 1A (Anúncio): exibe busca de ads (Story 9.2)
+             com campo de busca pré-preenchido com nicho do onboarding.
+             Se Caminho 1B (Orgânico): exibe busca de virais (Story 9.4)
+             com campo pré-preenchido.
+
+          3. Aluno pode: (a) selecionar referência da busca,
+             (b) colar link de post social (Story 9.3),
+             (c) fazer upload manual de vídeo (Caminho 2A existente),
+             (d) pular e criar do zero (Caminho 2B).
+
+          4. Ao selecionar referência da busca ou via link:
+             - `creative_references` criada e vinculada ao quiz session
+             - Formato classificado automaticamente (Story 9.5)
+             - Se vídeo e aluno quer análise profunda → redirect para
+               upload manual (pipeline Epic 7)
+             - Se imagem ou thumbnail suficiente → análise de estrutura
+               via Vision e segue no quiz
+
+          5. A referência selecionada e sua análise alimentam o prompt
+             de geração do roteiro (Story 6.5): formato classificado,
+             ad copy, estrutura analisada, metadados de engajamento.
+             Adicionados como bloco de contexto no prompt.
+
+          6. Quiz session registra `reference_source` (enum: API_SEARCH
+             | LINK_ANALYSIS | MANUAL_UPLOAD | NONE) para analytics.
+
+          7. UX: tela dividida — busca/resultados à esquerda, preview
+             da referência selecionada à direita. Mobile: tabs entre
+             busca e preview.
+
+          8. Loading states para: busca em andamento, classificação
+             de formato, análise de link. Empty state quando busca
+             não retorna resultados: "Nenhuma referência encontrada.
+             Tente outro termo ou faça upload manual."
+
+          ### Story 9.7 — Admin: API Configurations & Enrichment
+
+          As a SOL administrator,
+          I want to configure API integrations and enrichment layers
+          from the admin panel,
+          so that I can manage external services without code changes.
+
+          **Acceptance Criteria:**
+
+          1. Página `/admin/integrations` (protegida por `role: ADMIN`)
+             lista todas as APIs configuradas com status (ativa/inativa),
+             rate limit atual vs usado, e última verificação de saúde.
+
+          2. Admin pode ativar/desativar cada API individualmente.
+             API desativada: feature correspondente oculta no quiz.
+             Nunca erro — simplesmente não aparece.
+
+          3. Admin pode configurar enrichment layer: URL da API,
+             nome da env var da chave, status ativo/inativo.
+             Enrichment desativado: busca usa apenas APIs oficiais.
+
+          4. Health check: botão "Testar Conexão" para cada API.
+             Faz chamada de teste e reporta: OK (latência), erro
+             (mensagem), rate limit (restante).
+
+          5. Métricas de uso por API: total de chamadas hoje/7d/30d,
+             cache hits vs misses, erros por período. Dados da
+             tabela `search_cache` e logs.
+
+          6. Novas env vars documentadas no `.env.example`:
+             `META_AD_LIBRARY_ACCESS_TOKEN`, `YOUTUBE_API_KEY`,
+             `TIKTOK_RESEARCH_CLIENT_KEY`, `TIKTOK_RESEARCH_CLIENT_SECRET`,
+             `INSTAGRAM_ACCESS_TOKEN`, `ENRICHMENT_API_KEY` (opcional),
+             `ENRICHMENT_API_URL` (opcional)
+
+          7. Todas as rotas `/api/admin/integrations/*` verificam
+             `role: ADMIN` server-side.
+
+          ### Story 9.8 — Análise de Perfis de Concorrentes
+
+          As a student,
+          I want to analyze a competitor's social media profile,
+          so that I can see what content works for them and model mine.
+
+          **Acceptance Criteria:**
+
+          1. Página `/references/competitors` (protegida por auth)
+             permite aluno adicionar perfis de concorrentes por @ ou URL.
+
+          2. `POST /api/references/competitors` recebe handle/URL,
+             detecta plataforma, busca últimos 20 posts via API oficial.
+
+          3. Posts ordenados por engajamento. Exibe: thumbnail, caption
+             resumida, métricas (views/likes/comments), data, formato
+             classificado (batch — top 5 posts classificados auto).
+
+          4. Aluno pode "Usar como Referência" em qualquer post →
+             cria `creative_references` e pode ser selecionado no
+             próximo quiz.
+
+          5. Dados salvos em `competitor_profiles` com `top_posts`
+             (JSON dos posts mais relevantes). Refresh manual via
+             botão "Atualizar" (respeitando rate limits).
+
+          6. Limite: 5 perfis de concorrentes por aluno (MVP).
+             CRUD completo: adicionar, remover perfis.
+
+          7. Feature complementar — fora do quiz principal. Acessível
+             via sidebar "Concorrentes" no menu de navegação.
+
+          ### Story 9.9 — Enrichment Layer: Terceiros (Opcional)
+
+          As a developer,
+          I want an optional enrichment layer that adds historical data
+          from third-party APIs,
+          so that search results are richer when the service is available.
+
+          **Acceptance Criteria:**
+
+          1. Service `EnrichmentService` em
+             `apps/web/lib/services/enrichment.ts` com interface genérica:
+             `search(query, type: 'ads'|'organic'): EnrichmentResult[]`
+
+          2. Adapter pattern: `AdSpyAdapter`, `BigSpyAdapter`,
+             `ApifyAdapter` implementam mesma interface. Admin configura
+             qual adapter usar via `api_configurations`.
+
+          3. Enrichment é chamado em paralelo com APIs oficiais.
+             Timeout: 5 segundos. Se não responder a tempo, resultado
+             descartado silenciosamente.
+
+          4. Resultados do enrichment exibidos em seção separada
+             "Referências Históricas" com badge "Histórico".
+             Nunca misturados com resultados oficiais sem distinção.
+
+          5. Deduplicação: se mesmo criativo aparece na API oficial
+             e no enrichment, mantém apenas o da API oficial
+             (dados mais confiáveis).
+
+          6. Se enrichment indisponível (API fora, desativado pelo
+             admin, timeout): nenhum erro visível. Seção "Referências
+             Históricas" simplesmente não aparece. Aluno não sabe
+             que existia algo a mais.
+
+          7. Custo do enrichment ($99-149/mês) é custo operacional
+             fixo do SOL — não repassado ao aluno via créditos.
+             Chamadas ao enrichment não consomem créditos do aluno.
+
+          8. Logs de uso do enrichment para admin: chamadas, hits,
+             erros, latência. Disponível em `/admin/integrations`.
+
+        artifacts:
+          - "docs/prd.md"
+        verification:
+          type: manual
+          instructions: |
+            Verificar que:
+            - FR35-FR41 adicionados à seção Functional Requirements
+            - Epic 9 adicionado com 9 stories (9.1-9.9)
+            - Cada story tem ACs numerados e testáveis
+            - Changelog atualizado
+            - Nenhum outro Epic/Story/FR alterado
+            - Integração com quiz (Epic 6) documentada nos ACs
+            - Fallback gracioso documentado em toda interação com API
+            - Novas env vars listadas no Technical Assumptions
+
+  # ===========================================================================
+  # PHASE 2 — ARCHITECTURE
+  # ===========================================================================
+  - id: phase-2-architecture
+    name: "Arquitetura — Epic 9"
+    description: "Atualizar architecture.md com novas integrações, padrões e schema"
+    agent: "@architect"
+    dependsOn: ["phase-1-prd"]
+
+    steps:
+      - id: "2.1"
+        action: "update-architecture"
+        description: "Definir arquitetura de integrações externas com fallback"
+        prompt: |
+          @architect — PRD atualizado com Epic 9 (Ad Intelligence).
+          Atualizar `docs/architecture.md` para v4.0:
+
+          1. **Novas dependências no Tech Stack:**
+
+             | Technology | Version | Purpose | Rationale |
+             |---|---|---|---|
+             | Meta Ad Library API | v17+ | Busca de ads ativos | Oficial, gratuita, legal, zero lock-in |
+             | YouTube Data API v3 | v3 | Busca de vídeos orgânicos | Oficial Google, quota generosa, estável |
+             | TikTok Research API | v2 | Busca de vídeos virais | Oficial TikTok, requer aprovação |
+             | Instagram Graph API | v18+ | Busca por hashtag | Oficial Meta, via mesmo app |
+
+          2. **Architectural Pattern: API Gateway com Fallback Gracioso**
+
+             Novo padrão documentado:
+             ```
+             Client → API Route → APIGateway
+                                    ├→ OfficialAPI (primário, sempre)
+                                    ├→ EnrichmentAPI (opcional, timeout 5s)
+                                    └→ Cache (fallback se ambos falharem)
+             ```
+
+             - Toda chamada a API externa passa pelo APIGateway
+             - Gateway gerencia: rate limiting, cache, retry, fallback
+             - Se API oficial falha: retorna cache stale se existir
+             - Se enrichment falha: ignora silenciosamente
+             - Se tudo falha: mensagem amigável + opção upload manual
+             - Nunca propaga erro técnico ao frontend
+
+          3. **Service Layer:**
+             ```
+             apps/web/lib/services/
+             ├── api-gateway.ts          # Gateway genérico com cache + retry
+             ├── ad-library.ts           # Meta Ad Library API
+             ├── youtube-search.ts       # YouTube Data API v3
+             ├── tiktok-research.ts      # TikTok Research API
+             ├── instagram-search.ts     # Instagram Graph API
+             ├── link-analyzer.ts        # Detecção de plataforma + extração
+             ├── format-classifier.ts    # Classificação via Claude Vision
+             ├── enrichment.ts           # Adapter para terceiros
+             └── competitor-analyzer.ts  # Análise de perfis
+             ```
+
+          4. **Cache Strategy:**
+             - Tabela `search_cache` no PostgreSQL (não Redis — zero lock-in)
+             - TTL: 24h para ads, 12h para orgânico
+             - Cache key: hash(query + source + country + filters)
+             - Stale cache servido se API falhar (melhor stale que erro)
+             - Cleanup job: cron via GitHub Actions ou script npm,
+               deleta cache expirado diariamente
+
+          5. **Índices para novas tabelas:**
+             - `creative_references`: `(source, search_query)`,
+               `(user_id, created_at)`, `(quiz_session_id)`
+             - `search_cache`: `(query_hash)`, `(expires_at)`
+             - `competitor_profiles`: `(user_id, platform)`
+
+          6. **Rate Limiting Strategy:**
+             - Implementar rate limiter por API em memória (Map)
+             - Tracking: calls/hora por API
+             - Se atingir 80% do limite: throttle (delay entre calls)
+             - Se atingir 100%: retorna cache + aviso
+
+          7. **Diagrama atualizado** incluindo novas integrações:
+             ```
+             External APIs:
+               Meta Ad Library API ──┐
+               YouTube Data API ────┼── APIGateway → Cache → DB
+               TikTok Research API ──┤
+               Instagram Graph API ──┤
+               Enrichment (opcional) ┘
+             ```
+
+          8. **Segurança:**
+             - Chaves de API NUNCA no banco — apenas nome da env var
+               salvo em `api_configurations.api_key_env`
+             - Valores reais em `.env`
+             - Frontend nunca recebe chaves ou tokens de API
+
+          Validar zero lock-in: todas APIs oficiais são substituíveis.
+          Enrichment é explicitamente opcional.
+
+        artifacts:
+          - "docs/architecture.md"
+        verification:
+          type: manual
+          instructions: |
+            Verificar que:
+            - Tech stack atualizado com 4 novas APIs
+            - API Gateway pattern documentado com diagrama
+            - Service layer structure definido
+            - Cache strategy documentada (PostgreSQL, não Redis)
+            - Rate limiting strategy documentada
+            - Índices para novas tabelas definidos
+            - Segurança de chaves documentada
+            - Zero lock-in validado
+
+  # ===========================================================================
+  # PHASE 3 — STORIES
+  # ===========================================================================
+  - id: phase-3-stories
+    name: "Stories Detalhadas — Epic 9"
+    description: "Criar story files com tasks, subtasks, dev notes e DoD"
+    agent: "@sm"
+    dependsOn: ["phase-2-architecture"]
+
+    steps:
+      - id: "3.1"
+        action: "create-stories"
+        description: "Criar story files para todas as 9 stories do Epic 9"
+        prompt: |
+          @sm — PRD e Arquitetura atualizados com Epic 9.
+          Criar story files em `docs/stories/` para Stories 9.1 a 9.9.
+
+          Para CADA story, seguir o padrão existente em `docs/stories/`:
+
+          1. **Header:** título, status (draft), epic reference, dependencies
+
+          2. **Acceptance Criteria:** copiar do PRD (já definidos)
+
+          3. **Tasks e Subtasks** detalhados para implementação:
+
+             Story 9.1 (Schema):
+             - Migration Prisma com 4 tabelas novas
+             - Seeds para api_configurations
+             - Índices compostos
+             - Relações tipadas
+
+             Story 9.2 (Meta Ad Library):
+             - AdLibraryService com chamada à API
+             - Cache layer via search_cache
+             - API Route GET /api/references/ads
+             - Componente de resultados no quiz (Caminho 1A)
+             - Rate limiting
+             - Error handling com fallback
+
+             Story 9.3 (Link Analysis):
+             - LinkAnalyzer service com detecção de plataforma
+             - oEmbed endpoints para cada plataforma
+             - API Route POST /api/references/analyze-link
+             - Componente <LinkAnalyzer /> reutilizável
+             - Integração com Claude Vision para classificação
+
+             Story 9.4 (Orgânicos):
+             - YouTubeSearchService
+             - TikTokResearchService (com feature flag se não aprovado)
+             - InstagramSearchService
+             - API Route GET /api/references/organic
+             - Consolidação multi-plataforma
+             - Componente de resultados no quiz (Caminho 1B)
+
+             Story 9.5 (Classificação de Formato):
+             - FormatClassifier service
+             - Prompt de classificação para Claude Vision
+             - Enum CreativeFormat (18 formatos)
+             - Cache de classificação por source_url
+             - Batch classification (top 5 auto)
+             - UI de correção manual
+
+             Story 9.6 (Quiz Integration):
+             - Componente <ReferencePicker />
+             - Integração entre seções do quiz
+             - Vinculação reference → quiz_session
+             - Contexto da referência no prompt de geração
+
+             Story 9.7 (Admin):
+             - Página /admin/integrations
+             - CRUD de api_configurations
+             - Health check por API
+             - Métricas de uso
+
+             Story 9.8 (Concorrentes):
+             - CompetitorAnalyzer service
+             - API Route CRUD /api/references/competitors
+             - Página /references/competitors
+             - Limite 5 perfis/aluno
+
+             Story 9.9 (Enrichment):
+             - EnrichmentService com adapter pattern
+             - Timeout 5s com fallback silencioso
+             - Deduplicação com resultados oficiais
+             - Badge "Histórico" na UI
+
+          4. **Dev Notes:**
+             - API Gateway pattern: toda chamada externa via gateway
+             - Cache first: verificar cache antes de chamar API
+             - Fallback chain: API → cache stale → mensagem amigável
+             - Nunca propagar erro técnico ao frontend
+             - Chaves de API em env vars, nunca no banco
+             - Timezone: America/Sao_Paulo
+
+          5. **Definition of Done** por story incluindo:
+             - ACs atendidos
+             - Fallback testado (simular API fora)
+             - Rate limiting testado
+             - Cache funcionando
+             - Sem regressão no quiz existente
+             - TypeScript strict sem erros
+
+          6. **Ordem de implementação sugerida:**
+             9.1 (Schema) → 9.2 (Meta Ads) → 9.3 (Link Analysis)
+             → 9.5 (Classificação) → 9.6 (Quiz Integration)
+             → 9.4 (Orgânicos) → 9.7 (Admin) → 9.8 (Concorrentes)
+             → 9.9 (Enrichment)
+
+        artifacts:
+          - "docs/stories/9.1.story.md"
+          - "docs/stories/9.2.story.md"
+          - "docs/stories/9.3.story.md"
+          - "docs/stories/9.4.story.md"
+          - "docs/stories/9.5.story.md"
+          - "docs/stories/9.6.story.md"
+          - "docs/stories/9.7.story.md"
+          - "docs/stories/9.8.story.md"
+          - "docs/stories/9.9.story.md"
+        verification:
+          type: manual
+          instructions: |
+            Verificar que:
+            - 9 story files criados em docs/stories/
+            - Cada story tem ACs, Tasks, Dev Notes e DoD
+            - Dependências entre stories documentadas
+            - Ordem de implementação coerente
+
+  # ===========================================================================
+  # PHASE 4 — IMPLEMENTATION: Schema + Core Services
+  # ===========================================================================
+  - id: phase-4-schema-and-core
+    name: "Implementação — Schema e Services Core"
+    description: "Migrar schema, implementar API Gateway e services base"
+    agent: "@dev"
+    dependsOn: ["phase-3-stories"]
+
+    steps:
+      - id: "4.1"
+        action: "implement-schema"
+        description: "Story 9.1 — Schema: migrations, seeds e relações"
+        prompt: |
+          @dev — Implementar Story 9.1 (Database Schema: References &
+          Integrations).
+
+          Adicionar ao schema.prisma:
+
+          1. Enum `ReferenceSource`:
+             META_AD_LIBRARY, TIKTOK, YOUTUBE, INSTAGRAM,
+             MANUAL_UPLOAD, ENRICHMENT
+
+          2. Tabela `creative_references` com todos os campos do AC1.
+             Atenção: `engagement_metrics` é Json (tipo Prisma),
+             `format_classification` e `format_corrected` são String?.
+
+          3. Tabela `search_cache` com TTL via `expires_at`.
+             `query_hash` é String @unique.
+             `results` é Json.
+
+          4. Tabela `api_configurations` com `provider` @unique.
+             `config` é Json?.
+             Seeds: meta (enabled), youtube (enabled),
+             tiktok (enabled=false — aguardando aprovação),
+             instagram (enabled).
+
+          5. Tabela `competitor_profiles` com `top_posts` Json?.
+
+          6. Relações:
+             - User.creativeReferences → CreativeReference[]
+             - QuizSession.creativeReferences → CreativeReference[]
+             - User.competitorProfiles → CompetitorProfile[]
+
+          7. Índices:
+             - creative_references: @@index([source, searchQuery]),
+               @@index([userId, createdAt]), @@index([quizSessionId])
+             - search_cache: @@index([expiresAt])
+             - competitor_profiles: @@index([userId, platform])
+
+          Rodar `prisma migrate dev --name add-ad-intelligence-schema`.
+          Rodar `prisma generate` e verificar tipos.
+
+        files:
+          - "packages/db/prisma/schema.prisma"
+        verification:
+          type: command
+          command: "cd packages/db && npx prisma migrate dev --name add-ad-intelligence-schema && npx prisma generate"
+
+      - id: "4.2"
+        action: "implement-api-gateway"
+        description: "Implementar API Gateway com cache, retry e fallback"
+        prompt: |
+          @dev — Implementar API Gateway genérico para todas as integrações
+          externas do Epic 9.
+
+          Criar `apps/web/lib/services/api-gateway.ts`:
+
+          ```typescript
+          interface GatewayConfig {
+            provider: string
+            baseUrl: string
+            rateLimit: { maxPerHour: number }
+            cacheTtlMs: number
+            timeoutMs: number
+            retries: number
+          }
+
+          interface GatewayResult<T> {
+            data: T
+            source: 'api' | 'cache' | 'stale_cache'
+            cached: boolean
+          }
+          ```
+
+          Funcionalidades:
+          - Rate limiter em memória (Map<provider, {count, resetAt}>)
+          - Cache via tabela `search_cache` (Prisma)
+          - Retry com exponential backoff (max 3 tentativas)
+          - Fallback chain: API → cache fresh → cache stale → null
+          - Timeout configurável por provider
+          - Logging de cada chamada: provider, latency, source, error
+
+          Helper `getCacheKey(query, source, filters)`:
+          - Gera hash determinístico (SHA-256) dos parâmetros
+          - Usado como `query_hash` na tabela `search_cache`
+
+          Helper `cleanExpiredCache()`:
+          - Deleta registros com `expires_at < NOW()`
+          - Chamado periodicamente (não blocking)
+
+          NUNCA armazenar chaves de API no gateway ou no banco.
+          Chaves lidas de `process.env[config.apiKeyEnv]`.
+
+          TypeScript strict. Sem any.
+
+        files:
+          - "apps/web/lib/services/api-gateway.ts"
+        verification:
+          type: command
+          command: "npm run typecheck"
+
+      - id: "4.3"
+        action: "implement-format-classifier"
+        description: "Story 9.5 — Classificação automática de formato via Vision"
+        prompt: |
+          @dev — Implementar Story 9.5 (Classificação Automática de Formato).
+
+          Criar `apps/web/lib/services/format-classifier.ts`:
+
+          1. Enum `CreativeFormat` com 18 valores:
+             TOP_5, BEFORE_AFTER, THIS_OR_THAT, TESTIMONIAL, TUTORIAL,
+             INFORMATIVE, LOW_FI, PROVOCATION, QUESTION, RANKING,
+             CURIOSITY, TRANSFORMATION, BEHIND_SCENES, UNBOXING, POV,
+             STORYTELLING, CHALLENGE, OTHER
+
+          2. Função `classifyFormat(input: { imageUrl?: string,
+             imageBuffer?: Buffer, adCopy?: string })`:
+             - Envia para Claude Vision (`claude-haiku-4-5-20251001`)
+             - Prompt estruturado que descreve cada formato com exemplos
+             - Retorna: `{ format: CreativeFormat, confidence:
+               'HIGH'|'MEDIUM'|'LOW', reasoning: string }`
+
+          3. Cache de classificação:
+             - Se `source_url` já classificada em `creative_references`,
+               reutiliza sem nova chamada
+             - Reduz custo de créditos significativamente
+
+          4. Batch classification: função `classifyBatch(refs[], limit=5)`:
+             - Classifica apenas os primeiros `limit` resultados
+             - Demais ficam como `null` — classificados sob demanda
+
+          5. Custo em créditos: usar mesma lógica de gate do FR5.
+             Tokens da imagem incluídos no cálculo.
+             Haiku é barato: ~0.5-1 crédito por classificação.
+
+          6. Prompt de classificação deve ser preciso para o contexto
+             brasileiro de infoprodutos. Incluir exemplos específicos:
+             - TOP_5: "5 alimentos que queimam gordura"
+             - BEFORE_AFTER: "Antes e depois da dieta da selva"
+             - THIS_OR_THAT: "Pilates vs Academia: qual emagrece mais?"
+             - etc.
+
+          TypeScript strict. Sem any.
+
+        files:
+          - "apps/web/lib/services/format-classifier.ts"
+        verification:
+          type: command
+          command: "npm run typecheck"
+
+  # ===========================================================================
+  # PHASE 5 — IMPLEMENTATION: API Integrations
+  # ===========================================================================
+  - id: phase-5-api-integrations
+    name: "Implementação — Integrações de API"
+    description: "Implementar services para cada API e API routes"
+    agent: "@dev"
+    dependsOn: ["phase-4-schema-and-core"]
+
+    steps:
+      - id: "5.1"
+        action: "implement-meta-ad-library"
+        description: "Story 9.2 — Meta Ad Library API service + route"
+        prompt: |
+          @dev — Implementar Story 9.2 (Meta Ad Library API Integration).
+
+          1. Criar `apps/web/lib/services/ad-library.ts`:
+             - Usa API Gateway (gateway.ts) para chamadas
+             - Endpoint: `https://graph.facebook.com/v18.0/ads_archive`
+             - Params: `search_terms`, `ad_reached_countries=BR`,
+               `ad_active_status=ACTIVE`, `fields=ad_creative_bodies,
+               ad_delivery_start_time,page_name,publisher_platforms,
+               ad_snapshot_url`
+             - Auth: `access_token` via env var `META_AD_LIBRARY_ACCESS_TOKEN`
+             - Parse response: extrair ad_copy, preview_url, start_date,
+               calcular days_active
+             - Ordenar por days_active DESC
+
+          2. Criar `apps/web/app/api/references/ads/route.ts`:
+             - `GET /api/references/ads?q={query}&country=BR&limit=20`
+             - Validação Zod: q (string min 2), country (default BR),
+               limit (int 1-50, default 20)
+             - Auth required (session check)
+             - Chama AdLibraryService via gateway
+             - Retorna resultados formatados
+
+          3. Cache: 24h via search_cache. Gateway gerencia.
+
+          4. Error handling:
+             - API timeout → retorna cache stale ou empty com mensagem
+             - Rate limit → retorna cache + header X-Rate-Limited
+             - Auth error → log + retorna erro genérico
+             - Nunca expor detalhes técnicos ao frontend
+
+          TypeScript strict. Sem any. Sem localStorage.
+
+        files:
+          - "apps/web/lib/services/ad-library.ts"
+          - "apps/web/app/api/references/ads/route.ts"
+        verification:
+          type: command
+          command: "npm run typecheck"
+
+      - id: "5.2"
+        action: "implement-link-analyzer"
+        description: "Story 9.3 — Link Analysis service + route"
+        prompt: |
+          @dev — Implementar Story 9.3 (Link Analysis).
+
+          1. Criar `apps/web/lib/services/link-analyzer.ts`:
+             - `detectPlatform(url: string)`: regex para detectar
+               TikTok, Instagram, YouTube, Facebook
+             - `analyzeLink(url: string)`: detecta plataforma, extrai
+               metadados via oEmbed ou API oficial, retorna dados
+               normalizados
+
+          2. oEmbed endpoints (públicos, sem auth):
+             - YouTube: `https://www.youtube.com/oembed?url={url}&format=json`
+             - Instagram: `https://api.instagram.com/oembed?url={url}`
+             - TikTok: `https://www.tiktok.com/oembed?url={url}`
+             - Facebook: `https://www.facebook.com/plugins/post/oembed.json?url={url}`
+
+          3. Para YouTube, enriquecer com Data API v3 se disponível:
+             extrair videoId da URL → `GET /youtube/v3/videos?id={id}&part=statistics,snippet,contentDetails`
+             → views, likes, duration, publishedAt
+
+          4. Criar `apps/web/app/api/references/analyze-link/route.ts`:
+             - `POST /api/references/analyze-link` body: `{ url: string }`
+             - Validação Zod: url (string url format)
+             - Auth required
+             - Retorna metadados + classificação de formato (se imagem disponível)
+
+          5. Se mídia é imagem: chama FormatClassifier automaticamente
+          6. Se mídia é vídeo: retorna metadados + thumbnail, aluno
+             decide se quer análise profunda (upload)
+
+          7. Salva em `creative_references` com source='LINK_ANALYSIS'
+
+          8. Criar componente `apps/web/components/references/link-analyzer.tsx`:
+             - Client Component
+             - Input de URL com paste detection (onPaste → auto submit)
+             - Loading state durante análise
+             - Card de resultado: preview + metadados + formato
+
+          TypeScript strict. Sem any.
+
+        files:
+          - "apps/web/lib/services/link-analyzer.ts"
+          - "apps/web/app/api/references/analyze-link/route.ts"
+          - "apps/web/components/references/link-analyzer.tsx"
+        verification:
+          type: command
+          command: "npm run typecheck"
+
+      - id: "5.3"
+        action: "implement-organic-search"
+        description: "Story 9.4 — YouTube, TikTok, Instagram search services"
+        prompt: |
+          @dev — Implementar Story 9.4 (Busca de Conteúdos Orgânicos Virais).
+
+          1. Criar `apps/web/lib/services/youtube-search.ts`:
+             - Usa API Gateway
+             - Endpoint: `https://www.googleapis.com/youtube/v3/search`
+             - Params: `q={query}`, `type=video`, `videoDuration=short`,
+               `order=viewCount`, `regionCode=BR`, `relevanceLanguage=pt`,
+               `maxResults={limit}`, `key={YOUTUBE_API_KEY}`
+             - Enriquecer com `/videos?part=statistics` para views/likes
+             - Retorna formato normalizado
+
+          2. Criar `apps/web/lib/services/tiktok-research.ts`:
+             - Usa API Gateway
+             - Endpoint: TikTok Research API v2
+             - Feature flag: verifica `api_configurations` se TikTok enabled
+             - Se disabled: retorna `{ data: [], unavailable: true }`
+               (sem erro)
+             - Se enabled: busca por keyword com filtros
+
+          3. Criar `apps/web/lib/services/instagram-search.ts`:
+             - Usa API Gateway
+             - Instagram Graph API: hashtag search
+             - Requer: Instagram Business Account token
+             - Busca top_media da hashtag → retorna posts com métricas
+             - Limitação: 30 resultados, últimos 7 dias
+
+          4. Criar `apps/web/app/api/references/organic/route.ts`:
+             - `GET /api/references/organic?q={query}&platforms=youtube,
+               tiktok,instagram&limit=20`
+             - Chama services habilitados em PARALELO (Promise.allSettled)
+             - Cada plataforma que falhar não impede as outras
+             - Consolida resultados, ordena por engajamento
+             - Badge de plataforma em cada resultado
+
+          5. Cache: 12h via search_cache.
+
+          6. Formato normalizado de resultado:
+             ```typescript
+             interface OrganicResult {
+               platform: 'youtube' | 'tiktok' | 'instagram'
+               title: string
+               url: string
+               thumbnailUrl: string
+               metrics: {
+                 views?: number
+                 likes?: number
+                 comments?: number
+                 shares?: number
+               }
+               duration?: number // seconds
+               publishedAt: string
+               authorName: string
+             }
+             ```
+
+          TypeScript strict. Sem any.
+
+        files:
+          - "apps/web/lib/services/youtube-search.ts"
+          - "apps/web/lib/services/tiktok-research.ts"
+          - "apps/web/lib/services/instagram-search.ts"
+          - "apps/web/app/api/references/organic/route.ts"
+        verification:
+          type: command
+          command: "npm run typecheck"
+
+  # ===========================================================================
+  # PHASE 6 — IMPLEMENTATION: Quiz Integration + UI
+  # ===========================================================================
+  - id: phase-6-quiz-integration
+    name: "Implementação — Integração com Quiz e UI"
+    description: "Integrar busca de referências no fluxo do quiz"
+    agent: "@dev"
+    dependsOn: ["phase-5-api-integrations"]
+
+    steps:
+      - id: "6.1"
+        action: "implement-reference-picker"
+        description: "Story 9.6 — Reference Picker integrado ao quiz"
+        prompt: |
+          @dev — Implementar Story 9.6 (Quiz Integration: Reference Picker).
+
+          1. Criar `apps/web/components/quiz/reference-picker.tsx`:
+             - Client Component
+             - Props: `quizSessionId`, `path1` (AD|ORGANIC),
+               `onReferenceSelected`, `initialQuery` (do onboarding)
+
+          2. Se path1 = AD:
+             - Mostra busca de ads (chama /api/references/ads)
+             - Campo de busca pré-preenchido com nicho do onboarding
+             - Grid de resultados: preview, ad copy truncada,
+               days_active, plataforma, anunciante
+
+          3. Se path1 = ORGANIC:
+             - Mostra busca de virais (chama /api/references/organic)
+             - Campo pré-preenchido com tema
+             - Grid: thumbnail, título, métricas, plataforma, autor
+             - Filtros: plataforma, período
+
+          4. Em ambos os caminhos:
+             - Tab "Colar Link" → componente LinkAnalyzer (Story 9.3)
+             - Tab "Upload Manual" → redirect para upload (Epic 7)
+             - Tab "Criar do Zero" → pula referência, segue quiz
+
+          5. Ao selecionar referência:
+             - POST /api/references/select: cria creative_references
+               vinculada ao quiz_session_id
+             - Classifica formato automaticamente (Story 9.5)
+             - Mostra card expandido com: preview grande, metadados
+               completos, formato classificado
+
+          6. Integrar no quiz engine (Story 6.3):
+             - ReferencePicker aparece como seção entre Quiz Inicial
+               e Caminhos 2A/2B
+             - Sidebar atualizada com nova seção "Referências"
+             - Barra de progresso inclui nova seção
+
+          7. `quiz_sessions` recebe novo campo `reference_source`:
+             enum API_SEARCH | LINK_ANALYSIS | MANUAL_UPLOAD | NONE
+
+          8. Atualizar Story 6.5 (Geração de Roteiro):
+             - Prompt de geração inclui bloco de contexto da referência:
+               formato classificado, ad copy, estrutura analisada,
+               métricas de engajamento
+             - Se referência é de ad: adicionar ao módulo "Anúncio"
+             - Se referência é orgânica: adicionar ao módulo "Orgânico"
+
+          9. UX responsivo:
+             - Desktop: split view (busca esquerda, preview direita)
+             - Mobile: tabs (busca / preview)
+             - Loading states em todas as interações
+             - Empty state: "Nenhuma referência encontrada.
+               Tente outro termo, cole um link, ou faça upload."
+
+          TypeScript strict. Tailwind + Shadcn/UI. Dark/solar theme.
+
+        files:
+          - "apps/web/components/quiz/reference-picker.tsx"
+          - "apps/web/components/references/reference-card.tsx"
+          - "apps/web/components/references/reference-grid.tsx"
+          - "apps/web/app/api/references/select/route.ts"
+        verification:
+          type: browser
+          url: "http://localhost:3000/novo-roteiro"
+          actions:
+            - "Verificar ReferencePicker aparece no quiz"
+            - "Verificar busca de ads retorna resultados (com seed/mock)"
+            - "Verificar busca de orgânicos retorna resultados"
+            - "Verificar colar link funciona"
+            - "Verificar seleção de referência persiste no quiz session"
+            - "Verificar formato classificado exibido"
+
+  # ===========================================================================
+  # PHASE 7 — IMPLEMENTATION: Admin + Competitors + Enrichment
+  # ===========================================================================
+  - id: phase-7-admin-and-extras
+    name: "Implementação — Admin, Concorrentes e Enrichment"
+    description: "Features complementares: admin de integrações, análise de concorrentes, enrichment"
+    agent: "@dev"
+    dependsOn: ["phase-6-quiz-integration"]
+
+    steps:
+      - id: "7.1"
+        action: "implement-admin-integrations"
+        description: "Story 9.7 — Admin panel para configuração de APIs"
+        prompt: |
+          @dev — Implementar Story 9.7 (Admin: API Configurations).
+
+          1. Criar página `/admin/integrations`:
+             - Protegida por role: ADMIN
+             - Lista APIs da tabela api_configurations
+             - Para cada API: nome, status (ativo/inativo toggle),
+               rate limit (usado/total), última verificação
+
+          2. API Routes:
+             - GET /api/admin/integrations — lista todas as configs
+             - PUT /api/admin/integrations/[provider] — atualizar config
+             - POST /api/admin/integrations/[provider]/health — health check
+
+          3. Health check: testa conexão com chamada mínima à API
+             Retorna: { status: 'ok'|'error', latencyMs, message }
+
+          4. Métricas por API: queries na search_cache
+             - Total de chamadas (count por source)
+             - Cache hits vs misses
+             - Erros (logs)
+
+          5. Seção "Enrichment" separada:
+             - Input URL da API + env var name
+             - Toggle ativo/inativo
+             - Health check
+
+          6. Visual consistente com /admin existente (dark/solar)
+
+          Todas as rotas verificam role: ADMIN server-side.
+
+        files:
+          - "apps/web/app/(dashboard)/admin/integrations/page.tsx"
+          - "apps/web/app/api/admin/integrations/route.ts"
+          - "apps/web/app/api/admin/integrations/[provider]/route.ts"
+          - "apps/web/app/api/admin/integrations/[provider]/health/route.ts"
+        verification:
+          type: browser
+          url: "http://localhost:3000/admin/integrations"
+
+      - id: "7.2"
+        action: "implement-competitors"
+        description: "Story 9.8 — Análise de perfis de concorrentes"
+        prompt: |
+          @dev — Implementar Story 9.8 (Análise de Perfis de Concorrentes).
+
+          1. Criar `apps/web/lib/services/competitor-analyzer.ts`:
+             - `analyzeProfile(handle, platform)`: busca últimos 20 posts
+               via API oficial da plataforma
+             - Ordena por engajamento
+             - Classifica formato dos top 5 posts (batch, Story 9.5)
+
+          2. Criar página `/references/competitors`:
+             - Protegida por auth
+             - Lista perfis salvos do aluno
+             - Botão "Adicionar Concorrente": input handle/URL + plataforma
+             - Card por perfil: nome, plataforma, último fetch, top posts
+
+          3. API Routes:
+             - GET /api/references/competitors — lista perfis do aluno
+             - POST /api/references/competitors — adicionar perfil
+             - DELETE /api/references/competitors/[id] — remover
+             - POST /api/references/competitors/[id]/refresh — atualizar
+
+          4. Limite: 5 perfis por aluno. Validado server-side.
+
+          5. "Usar como Referência" em qualquer post:
+             - Cria creative_references
+             - Pode ser selecionado no próximo quiz
+
+          6. Sidebar do SOL: adicionar link "Concorrentes" na navegação
+
+        files:
+          - "apps/web/lib/services/competitor-analyzer.ts"
+          - "apps/web/app/(dashboard)/references/competitors/page.tsx"
+          - "apps/web/app/api/references/competitors/route.ts"
+        verification:
+          type: browser
+          url: "http://localhost:3000/references/competitors"
+
+      - id: "7.3"
+        action: "implement-enrichment"
+        description: "Story 9.9 — Enrichment layer com fallback silencioso"
+        prompt: |
+          @dev — Implementar Story 9.9 (Enrichment Layer).
+
+          1. Criar `apps/web/lib/services/enrichment.ts`:
+             - Interface `EnrichmentAdapter`:
+               `search(query, type): EnrichmentResult[]`
+             - Implementação genérica que chama URL configurada em
+               api_configurations (provider='enrichment')
+
+          2. Integrar no fluxo de busca:
+             - AdLibraryService e OrganicSearchService chamam
+               enrichment em PARALELO com API oficial
+             - `Promise.race` com timeout de 5 segundos
+             - Se enrichment não responder a tempo: descartado
+
+          3. Deduplicação: comparar source_url dos resultados
+             - Se duplicata: manter resultado da API oficial
+             - Se único do enrichment: adicionar com badge "Histórico"
+
+          4. Se enrichment desativado no admin OU indisponível:
+             - Nenhuma chamada feita
+             - Nenhuma seção "Histórico" exibida
+             - Nenhum erro, nenhum log de warning para o aluno
+             - Silenciosamente ausente
+
+          5. Sem custo de créditos para o aluno.
+             Custo operacional fixo do SOL.
+
+          TypeScript strict. Adapter pattern. Sem any.
+
+        files:
+          - "apps/web/lib/services/enrichment.ts"
+        verification:
+          type: command
+          command: "npm run typecheck"
+
+  # ===========================================================================
+  # PHASE 8 — QUALITY ASSURANCE
+  # ===========================================================================
+  - id: phase-8-qa
+    name: "Quality Assurance — Epic 9"
+    description: "Validação completa: fallbacks, rate limits, segurança, integração com quiz"
+    agent: "@qa"
+    dependsOn: ["phase-7-admin-and-extras"]
+
+    steps:
+      - id: "8.1"
+        action: "review-epic-9"
+        description: "Review completo do Epic 9"
+        prompt: |
+          @qa — Review completo do Epic 9 (Ad Intelligence).
+          Este epic é CRÍTICO porque integra 4+ APIs externas que podem
+          falhar a qualquer momento. Foco em resiliência.
+
+          1. **Fallback Testing (PRIORIDADE MÁXIMA):**
+             Para CADA API (Meta, YouTube, TikTok, Instagram, Enrichment):
+             - Simular API fora (timeout): verificar que fallback funciona
+             - Simular rate limit atingido: verificar cache stale ou mensagem
+             - Simular resposta malformada: verificar error handling
+             - Simular todas as APIs fora simultaneamente: verificar que
+               quiz funciona com upload manual apenas
+             - Em NENHUM cenário o aluno deve ver erro técnico
+
+          2. **Cache Validation:**
+             - Verificar TTL: ads cache expira em 24h, orgânico em 12h
+             - Verificar cache stale: se API falha, cache expirado
+               é servido (melhor stale que erro)
+             - Verificar deduplicação: mesma query não gera cache duplicado
+             - Verificar cleanup: cache expirado é deletado
+
+          3. **Rate Limiting:**
+             - Verificar que rate limiter previne excesso de chamadas
+             - Verificar que throttling funciona a 80% do limite
+             - Verificar que burst de alunos buscando mesmo nicho
+               é absorvido pelo cache
+
+          4. **Classificação de Formato:**
+             - Verificar que classificação retorna formato válido do enum
+             - Verificar que confiança LOW mostra badge de verificação
+             - Verificar que correção manual do aluno é persistida
+             - Verificar que cache de classificação funciona
+
+          5. **Integração com Quiz:**
+             - Fluxo completo: quiz → busca → seleção → classificação
+               → geração de roteiro com contexto da referência
+             - Verificar que referência selecionada aparece no prompt
+             - Verificar que quiz funciona sem referência (skip)
+             - Verificar que quiz funciona com upload manual (2A)
+
+          6. **Segurança:**
+             - Chaves de API nunca expostas no frontend (network tab)
+             - /api/admin/integrations/* retorna 403 sem role ADMIN
+             - /api/references/* requer autenticação
+             - URLs maliciosas no link analyzer não causam SSRF
+
+          7. **Performance:**
+             - Busca de ads retorna em < 3s (incluindo API call ou cache)
+             - Busca de orgânicos (3 APIs paralelo) retorna em < 5s
+             - Classificação de formato retorna em < 2s
+             - Página /admin/integrations carrega em < 2s
+
+          8. **Regressão:**
+             - Quiz existente (Epic 6) funciona sem Epic 9 ativo
+               (se todas APIs desativadas)
+             - Chat (Epic 2) não afetado
+             - Créditos (Epic 3) não afetados
+             - Upload de vídeo (Epic 7) funciona independentemente
+
+          Gerar relatório de QA em docs/qa/epic9-qa-report.md
+
+        artifacts:
+          - "docs/qa/epic9-qa-report.md"
+        verification:
+          type: manual
+          instructions: |
+            Verificar que:
+            - Relatório gerado com PASS/FAIL por item
+            - Todos os cenários de fallback testados
+            - Nenhum FAIL crítico (erro visível ao aluno)
+            - Issues documentados como backlog
+
+  # ===========================================================================
+  # PHASE 9 — FIXES & VALIDATION
+  # ===========================================================================
+  - id: phase-9-fixes
+    name: "Correções e Validação Final"
+    description: "Aplicar fixes do QA e validar DoD do Epic 9"
+    agent: "@dev"
+    dependsOn: ["phase-8-qa"]
+
+    steps:
+      - id: "9.1"
+        action: "fix-qa-issues"
+        description: "Aplicar correções do relatório de QA"
+        prompt: |
+          @dev — Aplicar correções do relatório de QA do Epic 9
+          (docs/qa/epic9-qa-report.md).
+
+          PRIORIDADE:
+          1. Qualquer cenário onde erro técnico é visível ao aluno
+          2. Fallbacks que não funcionam
+          3. Problemas de segurança (chaves expostas, SSRF)
+          4. Rate limiting não funcionando
+          5. Issues visuais ou de UX
+
+          Para cada fix: referenciar item do QA, explicar causa raiz,
+          implementar correção, verificar sem regressão.
+
+        verification:
+          type: command
+          command: "npm run typecheck && npm run lint && npm run build"
+
+      - id: "9.2"
+        action: "validate-dod"
+        description: "Validação final do Definition of Done do Epic 9"
+        prompt: |
+          @dev — Validação final do DoD do Epic 9.
+
+          Checklist:
+          - [ ] Schema: 4 tabelas criadas, relações funcionando
+          - [ ] Meta Ad Library: busca funcional, cache 24h, fallback
+          - [ ] Link Analysis: detecta 4 plataformas, classifica formato
+          - [ ] YouTube: busca funcional, resultados com métricas
+          - [ ] TikTok: feature flag funcional (disabled = sem erro)
+          - [ ] Instagram: busca por hashtag funcional
+          - [ ] Format Classifier: 18 formatos, confiança, correção manual
+          - [ ] Reference Picker: integrado no quiz, 4 opções (busca/link/upload/skip)
+          - [ ] Admin Integrations: CRUD, health check, métricas
+          - [ ] Competitors: CRUD, limite 5, "usar como referência"
+          - [ ] Enrichment: adapter pattern, timeout 5s, fallback silencioso
+          - [ ] Fallback: TODAS as APIs fora = quiz funciona via upload
+          - [ ] Segurança: chaves não expostas, SSRF prevenido, auth ok
+          - [ ] Regressão: quiz, chat, créditos, video — tudo funciona
+          - [ ] TypeScript strict sem erros
+          - [ ] Build passa
+
+        verification:
+          type: manual
+          instructions: "Todos os itens do checklist marcados"
+
+# =============================================================================
+# SUMMARY
+# =============================================================================
+summary:
+  totalPhases: 9
+  totalStories: 9
+  agents:
+    - agent: "@pm"
+      phases: ["phase-1-prd"]
+      role: "Define Epic 9 no PRD com FR35-FR41 e Stories 9.1-9.9"
+    - agent: "@architect"
+      phases: ["phase-2-architecture"]
+      role: "Define API Gateway pattern, service layer, cache strategy, índices"
+    - agent: "@sm"
+      phases: ["phase-3-stories"]
+      role: "Cria 9 story files com tasks, dev notes e DoD"
+    - agent: "@dev"
+      phases:
+        [
+          "phase-4-schema-and-core",
+          "phase-5-api-integrations",
+          "phase-6-quiz-integration",
+          "phase-7-admin-and-extras",
+          "phase-9-fixes",
+        ]
+      role: "Implementa schema, gateway, services, UI, integrações, fixes"
+    - agent: "@qa"
+      phases: ["phase-8-qa"]
+      role: "Valida fallbacks, rate limits, segurança, integração, regressão"
+  criticalPath: "Schema → Gateway → Services → Quiz Integration → QA → Fixes"
+  estimatedEffort: "8-12 days"
+  implementationOrder:
+    - "9.1 Schema (pré-requisito para tudo)"
+    - "9.2 Meta Ad Library (primeira API, valida gateway)"
+    - "9.3 Link Analysis (componente reutilizável)"
+    - "9.5 Format Classifier (usado por todas as buscas)"
+    - "9.6 Quiz Integration (core — conecta tudo ao produto)"
+    - "9.4 Organic Search (3 APIs em paralelo)"
+    - "9.7 Admin (configuração e monitoramento)"
+    - "9.8 Competitors (feature complementar)"
+    - "9.9 Enrichment (opcional, última prioridade)"
+  keyRisks:
+    - risk: "APIs externas são imprevisíveis"
+      mitigation: "Fallback em cada camada: API → cache → stale → manual"
+    - risk: "TikTok Research API pode não ser aprovada a tempo"
+      mitigation: "Feature flag — desativada sem erro, habilitada quando aprovada"
+    - risk: "Classificação de formato imprecisa gera roteiro desalinhado"
+      mitigation: "Aluno pode corrigir formato + batch classification (só top 5)"

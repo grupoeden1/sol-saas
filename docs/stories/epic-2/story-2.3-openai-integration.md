@@ -1,4 +1,4 @@
-# Story 2.3 — OpenAI Integration com Streaming
+# Story 2.3 — Claude API Integration com Streaming
 
 **Epic:** 2 — Chat Core com IA
 **Story ID:** 2.3
@@ -18,7 +18,7 @@
 
 ## Context
 
-Esta story implementa o coração do SOL: a integração com a OpenAI para gerar ofertas e scripts de criativos via chat. A resposta deve chegar via streaming (Server-Sent Events) para dar sensação de resposta ao vivo, token por token. A API deve selecionar automaticamente o modelo correto (GPT-4o-mini para iterações, GPT-4o para outputs finais), persistir todas as mensagens no banco de dados, e tratar erros da OpenAI de forma amigável.
+Esta story implementa o coração do SOL: a integração com a Anthropic Claude API para gerar ofertas e scripts de criativos via chat. A resposta deve chegar via streaming (Server-Sent Events) para dar sensação de resposta ao vivo, token por token. A API deve selecionar automaticamente o modelo correto (claude-haiku-4-5-20251001 para iterações, claude-sonnet-4-5-20250929 para outputs finais), persistir todas as mensagens no banco de dados, e tratar erros da Claude API de forma amigável.
 
 ---
 
@@ -37,22 +37,22 @@ Esta story implementa o coração do SOL: a integração com a OpenAI para gerar
 
 ---
 
-### AC2: Seleção de Modelo OpenAI
+### AC2: Seleção de Modelo Claude
 
 - [ ] Lógica implementada para selecionar modelo:
-  - **GPT-4o-mini** para mensagens exploratórias/iterativas (padrão)
-  - **GPT-4o** quando usuário solicita output final (detectar palavras-chave: "final", "completo", "pronto para usar")
+  - **claude-haiku-4-5-20251001** para mensagens exploratórias/iterativas (padrão)
+  - **claude-sonnet-4-5-20250929** quando usuário solicita output final (detectar palavras-chave: "final", "completo", "pronto para usar")
 - [ ] Lógica documentada em comentário no código
-- [ ] Modelo configurável via variável de ambiente `OPENAI_MODEL_DEFAULT` e `OPENAI_MODEL_FINAL`
+- [ ] Modelo configurável via variável de ambiente `ANTHROPIC_MODEL_DEFAULT` e `ANTHROPIC_MODEL_FINAL`
 
-**Test:** Enviar "me ajude a criar uma oferta" → usa GPT-4o-mini. Enviar "gere a versão final" → usa GPT-4o.
+**Test:** Enviar "me ajude a criar uma oferta" → usa Haiku. Enviar "gere a versão final" → usa Sonnet.
 
 ---
 
 ### AC3: Server-Sent Events (SSE) Streaming
 
 - [ ] Resposta retornada como `text/event-stream`
-- [ ] Tokens da OpenAI enviados ao cliente em tempo real: `data: {token}\n\n`
+- [ ] Tokens da Claude API enviados ao cliente em tempo real: `data: {token}\n\n`
 - [ ] Último evento: `data: [DONE]\n\n` sinaliza fim do stream
 - [ ] Frontend consome stream e monta mensagem progressivamente
 - [ ] Stream fecha automaticamente ao finalizar ou em caso de erro
@@ -81,7 +81,7 @@ Esta story implementa o coração do SOL: a integração com a OpenAI para gerar
 
 ### AC5: Persistência no Banco de Dados
 
-- [ ] Mensagem do usuário salva no banco **antes** de chamar OpenAI
+- [ ] Mensagem do usuário salva no banco **antes** de chamar Claude API
 - [ ] Resposta completa da IA salva no banco **após** stream finalizar
 - [ ] Ambas as mensagens vinculadas ao `conversationId`
 - [ ] Timestamp `createdAt` registrado corretamente
@@ -93,7 +93,7 @@ Esta story implementa o coração do SOL: a integração com a OpenAI para gerar
 
 ### AC6: Tratamento de Erros
 
-- [ ] Erros da OpenAI (rate limit, timeout, invalid API key) retornam resposta amigável no chat:
+- [ ] Erros da Claude API (rate limit, timeout, invalid API key) retornam resposta amigável no chat:
   - Rate limit: "Estamos com muitas solicitações no momento. Tente novamente em alguns segundos."
   - Timeout: "A resposta demorou mais do que o esperado. Por favor, tente novamente."
   - Erro genérico: "Ocorreu um erro ao processar sua mensagem. Nossa equipe foi notificada."
@@ -101,7 +101,7 @@ Esta story implementa o coração do SOL: a integração com a OpenAI para gerar
 - [ ] Stream fecha corretamente mesmo em caso de erro
 - [ ] Frontend exibe mensagem de erro inline no chat (não quebra a interface)
 
-**Test:** Simular erro da OpenAI (API key inválida) → mensagem amigável exibida no chat.
+**Test:** Simular erro da Claude API (API key inválida) → mensagem amigável exibida no chat.
 
 ---
 
@@ -113,7 +113,7 @@ Esta story implementa o coração do SOL: a integração com a OpenAI para gerar
 // apps/web/src/app/api/chat/route.ts
 import { auth } from '@/lib/auth';
 import { prisma } from '@sol/db';
-import OpenAI from 'openai';
+import Anthropic from '@anthropic-ai/sdk';
 
 export async function POST(req: Request) {
   const session = await auth();
@@ -125,25 +125,25 @@ export async function POST(req: Request) {
 
   // Validação, criação de conversa, seleção de modelo...
 
-  const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
-  const stream = await openai.chat.completions.create({
-    model: 'gpt-4o-mini',
+  const stream = anthropic.messages.stream({
+    model: 'claude-haiku-4-5-20251001',
+    max_tokens: 4096,
+    system: SYSTEM_PROMPT,
     messages: [
-      { role: 'system', content: SYSTEM_PROMPT },
       ...previousMessages,
       { role: 'user', content: message },
     ],
-    stream: true,
   });
 
   const encoder = new TextEncoder();
   const readable = new ReadableStream({
     async start(controller) {
       try {
-        for await (const chunk of stream) {
-          const token = chunk.choices[0]?.delta?.content || '';
-          if (token) {
+        for await (const event of stream) {
+          if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
+            const token = event.delta.text;
             controller.enqueue(encoder.encode(`data: ${token}\n\n`));
           }
         }
@@ -211,7 +211,7 @@ const handleSendMessage = async (content: string) => {
 
 - **Blocked by:** Story 2.2 (UI deve estar pronta)
 - **Blocks:** Story 2.4 (Créditos Insuficientes precisa da API funcionando)
-- **External:** OpenAI API key configurada em `.env`
+- **External:** Anthropic API key configurada em `.env` (`ANTHROPIC_API_KEY`)
 
 ---
 
@@ -221,8 +221,8 @@ const handleSendMessage = async (content: string) => {
 - [ ] Streaming funciona e tokens aparecem progressivamente
 - [ ] Mensagens persistidas corretamente no banco
 - [ ] System prompt aplicado nas respostas
-- [ ] Seleção de modelo (mini vs full) funciona
-- [ ] Erros da OpenAI tratados com mensagens amigáveis
+- [ ] Seleção de modelo (Haiku vs Sonnet) funciona
+- [ ] Erros da Claude API tratados com mensagens amigáveis
 - [ ] `pnpm run typecheck` passa sem erros
 - [ ] Testar com conversas longas (> 10 mensagens)
 
@@ -238,16 +238,16 @@ const handleSendMessage = async (content: string) => {
 - [ ] Tratamento de erros implementado
 - [ ] Code review aprovado
 - [ ] Nenhum erro de TypeScript (strict mode)
-- [ ] Testado com OpenAI API real
+- [ ] Testado com Claude API real
 
 ---
 
 ## Environment Variables Required
 
 ```env
-OPENAI_API_KEY=sk-...
-OPENAI_MODEL_DEFAULT=gpt-4o-mini
-OPENAI_MODEL_FINAL=gpt-4o
+ANTHROPIC_API_KEY=sk-ant-...
+ANTHROPIC_MODEL_DEFAULT=claude-haiku-4-5-20251001
+ANTHROPIC_MODEL_FINAL=claude-sonnet-4-5-20250929
 ```
 
 ---
@@ -255,7 +255,7 @@ OPENAI_MODEL_FINAL=gpt-4o
 ## References
 
 - **PRD:** [docs/prd.md](../../prd.md) — Story 2.3, Epic 2
-- **OpenAI Docs:** https://platform.openai.com/docs/api-reference/streaming
+- **Anthropic Docs:** https://docs.anthropic.com/en/api/messages-streaming
 - **Next.js Streaming:** https://nextjs.org/docs/app/building-your-application/routing/router-handlers#streaming
 
 ---
@@ -264,11 +264,11 @@ OPENAI_MODEL_FINAL=gpt-4o
 
 **Performance:**
 - O streaming SSE é crítico para a UX — não carregue todas as mensagens da conversa no context se histórico > 20 mensagens (use apenas as últimas 20)
-- Use `gpt-4o-mini` como padrão para reduzir custos — GPT-4o só quando realmente necessário
+- Use `claude-haiku-4-5-20251001` como padrão para reduzir custos — Sonnet só quando realmente necessário
 
 **Security:**
 - Validar sempre que `conversationId` pertence ao usuário autenticado
-- NUNCA expor API key da OpenAI no frontend
+- NUNCA expor API key da Anthropic no frontend
 - Rate limiting será implementado no Epic 4 (opcional no MVP)
 
 **Próxima Story:** 2.4 — Estado Inline de Créditos Insuficientes
